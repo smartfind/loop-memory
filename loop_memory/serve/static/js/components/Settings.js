@@ -208,14 +208,30 @@ export const Settings = defineComponent({
       });
     }
 
+    const WEEKDAY_NAMES_ZH = ['一','二','三','四','五','六','日'];
+    const WEEKDAY_NAMES_EN = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
     function nextRunText() {
+      if (!cfg.schedule.enabled || (cfg.schedule.mode || 'off') === 'off') {
+        return t('settings.schedule.statusOff');
+      }
       if (!nextRun.value) return '';
       const ts = nextRun.value;
       const d = new Date(ts * 1000);
       if (Number.isNaN(d.getTime())) return '';
       const when = fmtTime(ts);
       const mode = t('settings.schedule.' + (cfg.schedule.mode || 'off'));
-      return t('settings.nextRun', { when, mode });
+      return t('settings.schedule.statusOn', { when, mode });
+    }
+    function scheduleModeHint() {
+      const m = cfg.schedule.mode || 'off';
+      const isZh = (store.lang || 'zh') === 'zh';
+      const wdName = (isZh ? WEEKDAY_NAMES_ZH : WEEKDAY_NAMES_EN)[cfg.schedule.weekday || 0];
+      if (m === 'realtime') return t('settings.schedule.realtimeHint', { sec: cfg.schedule.after_ingest_idle_sec || 30 });
+      if (m === 'weekly')   return t('settings.schedule.weeklyHint',   { weekday: wdName, hour: cfg.schedule.hour, minute: String(cfg.schedule.minute).padStart(2,'0') });
+      if (m === 'daily')    return t('settings.schedule.dailyHint',    { hour: cfg.schedule.hour, minute: String(cfg.schedule.minute).padStart(2,'0') });
+      if (m === 'hourly')   return t('settings.schedule.hourlyHint');
+      if (m === 'interval') return t('settings.schedule.intervalHint', { n: cfg.schedule.interval_minutes });
+      return '';
     }
 
     function onClose() { emit('close'); }
@@ -223,7 +239,7 @@ export const Settings = defineComponent({
     return { cfg, providers, selectedProvider, onProviderChange,
              testing, testResult, onTest,
              saving, savedHint, onSave, onClearKey, onReset, onRunNow, onPreview,
-             runs, runsLoading, refreshRuns, nextRun, nextRunText,
+             runs, runsLoading, refreshRuns, nextRun, nextRunText, scheduleModeHint,
              previewItems, previewLoading, previewOpen,
              statusKey, triggerKey, statLine,
              WEEKDAYS, store, t, onClose };
@@ -232,7 +248,10 @@ export const Settings = defineComponent({
 <aside v-show="open" class="drawer" role="dialog" aria-label="Settings" @click.self="onClose">
   <div class="drawer-body">
     <header class="drawer-head">
-      <h2>{{ t('settings.title') }}</h2>
+      <div class="drawer-head-text">
+        <h2>{{ t('settings.title') }}</h2>
+        <p class="drawer-subtitle">{{ t('settings.subtitle') }}</p>
+      </div>
       <button class="icon-btn" @click="onClose" type="button" aria-label="Close">
         <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5">
           <path d="M3 3l10 10M13 3L3 13"/>
@@ -240,9 +259,10 @@ export const Settings = defineComponent({
       </button>
     </header>
 
-    <!-- Provider -->
-    <section>
-      <h3>{{ t('settings.section.provider') }}</h3>
+    <!-- Connection (LLM info — global, used by every LLM feature) -->
+    <section class="sec-connection">
+      <h3>{{ t('settings.section.connection') }}</h3>
+      <p class="sec-scope">{{ t('settings.connection.usedBy') }}</p>
       <label>
         <span>{{ t('settings.provider') }}</span>
         <select v-model="cfg.provider" @change="onProviderChange">
@@ -290,12 +310,13 @@ export const Settings = defineComponent({
       </div>
     </section>
 
-    <!-- Schedule -->
-    <section>
+    <!-- Schedule — when the consolidation job auto-runs (LLM info above is global) -->
+    <section class="sec-schedule">
       <h3>{{ t('settings.section.schedule') }}</h3>
-      <label class="row-inline">
+      <p class="sec-scope">{{ t('settings.section.consolidationScope') }}</p>
+      <label class="row-inline" :title="t('settings.schedule.enabledHint')">
         <input type="checkbox" v-model="cfg.schedule.enabled" />
-        <span>{{ t('settings.schedule.mode') }}</span>
+        <span>{{ t('settings.schedule.enabled') }}</span>
       </label>
       <label>
         <span>{{ t('settings.schedule.mode') }}</span>
@@ -332,14 +353,17 @@ export const Settings = defineComponent({
         <span>{{ t('settings.schedule.realtimeIdle') }}</span>
         <input type="number" v-model.number="cfg.schedule.after_ingest_idle_sec" min="5" max="600" />
       </label>
-      <div v-if="nextRunText()" class="status-line" style="margin-top:8px;font-size:11.5px;color:var(--text-faint);">
-        {{ t('settings.nextRun') }}: {{ nextRunText() }}
+      <div class="sched-status" :class="{ on: cfg.schedule.enabled && (cfg.schedule.mode || 'off') !== 'off', off: !cfg.schedule.enabled || (cfg.schedule.mode || 'off') === 'off' }">
+        <span class="dot"></span>
+        <span class="text">{{ nextRunText() }}</span>
       </div>
+      <div v-if="scheduleModeHint()" class="sched-hint">{{ scheduleModeHint() }}</div>
     </section>
 
-    <!-- Behaviour (legacy parity) -->
-    <section>
+    <!-- Behaviour — consolidation-job-only knobs -->
+    <section class="sec-behaviour">
       <h3>{{ t('settings.section.behaviour') }}</h3>
+      <p class="sec-scope">{{ t('settings.behaviour.scope') }}</p>
       <div class="row-2">
         <label>
           <span>{{ t('settings.batchSize') }}</span>
