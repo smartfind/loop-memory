@@ -1,15 +1,25 @@
 /**
  * Settings — the right-side drawer that holds LLM config + scheduler.
  *
- * The legacy `openSettings` function was 250 lines of imperative DOM
- * mutation: read form, write form, schedule visibility toggles, API key
- * state machine, test-connection result rendering, etc. Here it's a
- * single Vue component driven by a reactive `cfg` object. Saving triggers
- * one POST. The component never touches the DOM directly.
+ * Faithful to the legacy vanilla-JS settings drawer (pre-Vue 8498eca):
+ * - 5 sections: Provider, Schedule, Behaviour, Actions, Recent runs.
+ * - Behaviour section lets the user tune batch size / temperature /
+ *   max output / min importance / filter / score / summarise / dry-run.
+ * - Recent runs section shows the latest 20 LLM runs with status pill,
+ *   trigger, timestamp and stats summary.
+ * - Drawer foot has Reset / Cancel / Save buttons (legacy parity).
+ * - Schedule includes weekday selector (visible when mode=weekly).
  */
 import { defineComponent, ref, computed, onMounted, watch, reactive } from 'https://unpkg.com/vue@3.4.38/dist/vue.esm-browser.prod.js';
-import { store, t, toast } from '../store.js';
+import { store, t, toast, fmtTime } from '../store.js';
 import { api, ApiError } from '../api.js';
+
+const WEEKDAYS = [
+  { v: 0, k: 'weekday.mon' }, { v: 1, k: 'weekday.tue' },
+  { v: 2, k: 'weekday.wed' }, { v: 3, k: 'weekday.thu' },
+  { v: 4, k: 'weekday.fri' }, { v: 5, k: 'weekday.sat' },
+  { v: 6, k: 'weekday.sun' },
+];
 
 export const Settings = defineComponent({
   name: 'Settings',
@@ -39,6 +49,14 @@ export const Settings = defineComponent({
     const saving = ref(false);
     const savedHint = ref(false);
 
+    // Recent runs + next-run + preview state (legacy parity)
+    const runs = ref([]);
+    const runsLoading = ref(false);
+    const nextRun = ref(null);
+    const previewItems = ref([]);
+    const previewLoading = ref(false);
+    const previewOpen = ref(false);
+
     async function load() {
       try {
         const [p, c] = await Promise.all([api.llmProviders(), api.llmConfig()]);
@@ -53,7 +71,21 @@ export const Settings = defineComponent({
           provider: status.provider, model: status.model || 'rules',
           api_key_set: !!status.api_key_set, key_len: status.key_len || 0,
         };
+        nextRun.value = status?.next_run || null;
       } catch (e) { /* ignore */ }
+      await refreshRuns();
+    }
+
+    async function refreshRuns() {
+      runsLoading.value = true;
+      try {
+        const data = await api.llmRuns({ limit: 20 });
+        runs.value = Array.isArray(data) ? data : (data.runs || []);
+      } catch (e) {
+        runs.value = [];
+      } finally {
+        runsLoading.value = false;
+      }
     }
 
     onMounted(load);
@@ -93,7 +125,6 @@ export const Settings = defineComponent({
     async function onSave() {
       saving.value = true;
       try {
-        // api_key is only sent if the user typed something new
         const payload = {
           provider: cfg.provider, model: cfg.model, base_url: cfg.base_url,
           schedule: cfg.schedule, behaviour: cfg.behaviour,
@@ -121,116 +152,287 @@ export const Settings = defineComponent({
       } catch (e) { /* ignore */ }
     }
 
+    async function onReset() {
+      try {
+        await fetch('/api/admin/llm/config', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            provider: 'echo', model: 'rules',
+            schedule: { enabled: false, mode: 'off' },
+          }),
+        });
+        await load();
+        toast(t('settings.saved'));
+      } catch (e) {
+        toast(t('toast.fail', { msg: e.message }), 4000);
+      }
+    }
+
+    async function onRunNow() {
+      try {
+        await api.llmRun({});
+        toast(t('action.runNowQueued') || t('action.llmRunQueued') || t('action.runNow'), 2000);
+        setTimeout(refreshRuns, 1500);
+      } catch (e) {
+        toast(t('toast.fail', { msg: e.message }), 4000);
+      }
+    }
+
+    async function onPreview() {
+      previewOpen.value = true;
+      previewLoading.value = true;
+      previewItems.value = [];
+      try {
+        const r = await fetch('/api/admin/llm/run?dry_run=true&limit=20', { method: 'POST' });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const data = await r.json();
+        previewItems.value = data.preview || [];
+      } catch (e) {
+        previewItems.value = [];
+        toast(t('toast.fail', { msg: e.message }), 4000);
+      } finally {
+        previewLoading.value = false;
+      }
+    }
+
+    function statusKey(s) { return 'settings.run.status.' + (s || ''); }
+    function triggerKey(s) { return 'settings.run.trigger.' + (s || ''); }
+    function statLine(stats) {
+      if (!stats) return '';
+      return t('settings.run.stats', {
+        kept: stats.kept || 0,
+        dropped: stats.dropped || 0,
+        rescored: stats.importance_updated || 0,
+        merged: stats.resummarized || 0,
+      });
+    }
+
+    function nextRunText() {
+      if (!nextRun.value) return '';
+      const ts = nextRun.value;
+      const d = new Date(ts * 1000);
+      if (Number.isNaN(d.getTime())) return '';
+      const when = fmtTime(ts);
+      const mode = t('settings.schedule.' + (cfg.schedule.mode || 'off'));
+      return t('settings.nextRun', { when, mode });
+    }
+
     function onClose() { emit('close'); }
 
     return { cfg, providers, selectedProvider, onProviderChange,
              testing, testResult, onTest,
-             saving, savedHint, onSave, onClearKey,
-             store, t, onClose };
+             saving, savedHint, onSave, onClearKey, onReset, onRunNow, onPreview,
+             runs, runsLoading, refreshRuns, nextRun, nextRunText,
+             previewItems, previewLoading, previewOpen,
+             statusKey, triggerKey, statLine,
+             WEEKDAYS, store, t, onClose };
   },
   template: /* html */ `
 <aside v-show="open" class="drawer" role="dialog" aria-label="Settings" @click.self="onClose">
-    <div class="drawer-body">
-      <header class="drawer-head">
-        <h2>{{ t('settings.title') }}</h2>
-        <button class="x" @click="onClose">×</button>
-      </header>
+  <div class="drawer-body">
+    <header class="drawer-head">
+      <h2>{{ t('settings.title') }}</h2>
+      <button class="icon-btn" @click="onClose" type="button" aria-label="Close">
+        <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M3 3l10 10M13 3L3 13"/>
+        </svg>
+      </button>
+    </header>
 
-      <section>
-        <h3>{{ t('settings.section.provider') }}</h3>
-        <label>
-          <span>{{ t('settings.provider') }}</span>
-          <select v-model="cfg.provider" @change="onProviderChange">
-            <option v-for="p in providers" :key="p.id" :value="p.id">{{ p.label }}</option>
-          </select>
-        </label>
-        <p v-if="selectedProvider.description" class="hint">{{ selectedProvider.description }}</p>
-        <label>
-          <span>{{ t('settings.model') }}</span>
-          <input v-model="cfg.model" :placeholder="selectedProvider.default_model || 'gpt-4o-mini'" />
-        </label>
-        <label v-if="selectedProvider.needs_base_url !== false">
-          <span>{{ t('settings.baseUrl') }}</span>
-          <input v-model="cfg.base_url" :placeholder="selectedProvider.default_base_url || ''" />
-        </label>
-        <label v-if="selectedProvider.needs_api_key !== false">
-          <span>
-            {{ t('settings.apiKey') }}
-            <span v-if="cfg.api_key_set" class="key-status saved">
-              <span class="key-dot"></span>{{ t('settings.apiKey.configured') }}
-              <span v-if="cfg.api_key_fingerprint" class="key-fp">{{ cfg.api_key_fingerprint }}</span>
-            </span>
-            <span v-else class="key-status missing">
-              <span class="key-dot"></span>{{ t('settings.apiKey.missing') }}
-            </span>
+    <!-- Provider -->
+    <section>
+      <h3>{{ t('settings.section.provider') }}</h3>
+      <label>
+        <span>{{ t('settings.provider') }}</span>
+        <select v-model="cfg.provider" @change="onProviderChange">
+          <option v-for="p in providers" :key="p.id" :value="p.id">{{ p.label }}</option>
+        </select>
+      </label>
+      <p v-if="selectedProvider.description" class="hint">{{ selectedProvider.description }}</p>
+      <label>
+        <span>{{ t('settings.model') }}</span>
+        <input v-model="cfg.model" :placeholder="selectedProvider.default_model || 'gpt-4o-mini'" />
+      </label>
+      <label v-if="selectedProvider.needs_base_url !== false">
+        <span>{{ t('settings.baseUrl') }}</span>
+        <input v-model="cfg.base_url" :placeholder="selectedProvider.default_base_url || ''" />
+      </label>
+      <label v-if="selectedProvider.needs_api_key !== false">
+        <span>
+          {{ t('settings.apiKey') }}
+          <span v-if="cfg.api_key_set" class="key-status saved">
+            <span class="key-dot"></span>{{ t('settings.apiKey.configured') }}
+            <span v-if="cfg.api_key_fingerprint" class="key-fp">{{ cfg.api_key_fingerprint }}</span>
           </span>
-          <div class="api-key-row">
-            <input type="password" v-model="cfg.api_key"
-                   :placeholder="cfg.api_key_set ? t('settings.apiKey.edit') : t('settings.apiKey.placeholder')" />
-            <button class="btn small ghost" v-if="cfg.api_key_set" @click="onClearKey" type="button">
-              {{ t('settings.apiKey.clear') }}
-            </button>
+          <span v-else class="key-status missing">
+            <span class="key-dot"></span>{{ t('settings.apiKey.missing') }}
+          </span>
+        </span>
+        <div class="api-key-row">
+          <input type="password" v-model="cfg.api_key"
+                 :placeholder="cfg.api_key_set ? t('settings.apiKey.edit') : t('settings.apiKey.placeholder')"
+                 autocomplete="off" />
+          <button class="btn small ghost" v-if="cfg.api_key_set" @click="onClearKey" type="button">
+            {{ t('settings.apiKey.clear') }}
+          </button>
+        </div>
+        <p class="hint">{{ t('settings.apiKey.hint') }}</p>
+      </label>
+
+      <div class="test-row">
+        <button class="btn small primary" :disabled="testing" @click="onTest">
+          {{ testing ? t('common.testing') : t('settings.test') }}
+        </button>
+        <span v-if="testResult" class="test-result" :class="{ ok: testResult.ok, fail: !testResult.ok }">
+          {{ testResult.ok ? t('settings.test.ok', { ms: testResult.elapsed_ms || 0 }) : (testResult.error?.provider_message || testResult.error?.hint || 'failed') }}
+        </span>
+      </div>
+    </section>
+
+    <!-- Schedule -->
+    <section>
+      <h3>{{ t('settings.section.schedule') }}</h3>
+      <label class="row-inline">
+        <input type="checkbox" v-model="cfg.schedule.enabled" />
+        <span>{{ t('settings.schedule.mode') }}</span>
+      </label>
+      <label>
+        <span>{{ t('settings.schedule.mode') }}</span>
+        <select v-model="cfg.schedule.mode">
+          <option value="off">{{ t('settings.schedule.off') }}</option>
+          <option value="realtime">{{ t('settings.schedule.realtime') }}</option>
+          <option value="hourly">{{ t('settings.schedule.hourly') }}</option>
+          <option value="daily">{{ t('settings.schedule.daily') }}</option>
+          <option value="weekly">{{ t('settings.schedule.weekly') }}</option>
+          <option value="interval">{{ t('settings.schedule.everyN') }}</option>
+        </select>
+      </label>
+      <label v-if="cfg.schedule.mode === 'interval'">
+        <span>{{ t('settings.schedule.interval') }}</span>
+        <input type="number" v-model.number="cfg.schedule.interval_minutes" min="1" max="1440" />
+      </label>
+      <div v-if="cfg.schedule.mode === 'daily' || cfg.schedule.mode === 'weekly'" class="row-2">
+        <label>
+          <span>{{ t('settings.schedule.hour') }}</span>
+          <input type="number" v-model.number="cfg.schedule.hour" min="0" max="23" />
+        </label>
+        <label>
+          <span>{{ t('settings.schedule.minute') }}</span>
+          <input type="number" v-model.number="cfg.schedule.minute" min="0" max="59" />
+        </label>
+      </div>
+      <label v-if="cfg.schedule.mode === 'weekly'">
+        <span>{{ t('settings.schedule.weekday') }}</span>
+        <select v-model.number="cfg.schedule.weekday">
+          <option v-for="w in WEEKDAYS" :key="w.v" :value="w.v">{{ t(w.k) }}</option>
+        </select>
+      </label>
+      <label v-if="cfg.schedule.mode === 'realtime'">
+        <span>{{ t('settings.schedule.realtimeIdle') }}</span>
+        <input type="number" v-model.number="cfg.schedule.after_ingest_idle_sec" min="5" max="600" />
+      </label>
+      <div v-if="nextRunText()" class="status-line" style="margin-top:8px;font-size:11.5px;color:var(--text-faint);">
+        {{ t('settings.nextRun') }}: {{ nextRunText() }}
+      </div>
+    </section>
+
+    <!-- Behaviour (legacy parity) -->
+    <section>
+      <h3>{{ t('settings.section.behaviour') }}</h3>
+      <div class="row-2">
+        <label>
+          <span>{{ t('settings.batchSize') }}</span>
+          <input type="number" v-model.number="cfg.behaviour.batch_size" min="1" max="500" />
+        </label>
+        <label>
+          <span>{{ t('settings.temperature') }}</span>
+          <input type="number" v-model.number="cfg.behaviour.temperature" step="0.1" min="0" max="2" />
+        </label>
+      </div>
+      <div class="row-2">
+        <label>
+          <span>{{ t('settings.maxOutput') }}</span>
+          <input type="number" v-model.number="cfg.behaviour.max_output_tokens" min="64" max="4096" />
+        </label>
+        <label>
+          <span>{{ t('settings.minImp') }}</span>
+          <input type="number" v-model.number="cfg.behaviour.min_importance" step="0.05" min="0" max="1" />
+        </label>
+      </div>
+      <div class="behaviour-switches">
+        <label class="switch">
+          <input type="checkbox" v-model="cfg.behaviour.enable_filter" />
+          <span>{{ t('settings.filter') }}</span>
+        </label>
+        <label class="switch">
+          <input type="checkbox" v-model="cfg.behaviour.enable_score" />
+          <span>{{ t('settings.score') }}</span>
+        </label>
+        <label class="switch">
+          <input type="checkbox" v-model="cfg.behaviour.enable_summarize" />
+          <span>{{ t('settings.summary') }}</span>
+        </label>
+        <label class="switch">
+          <input type="checkbox" v-model="cfg.behaviour.dry_run" />
+          <span>{{ t('settings.dryRun') }}</span>
+        </label>
+      </div>
+    </section>
+
+    <!-- Actions (Run now / Preview) -->
+    <section>
+      <h3>{{ t('settings.section.actions') }}</h3>
+      <div class="action-row" style="gap:8px;flex-wrap:wrap;">
+        <button class="btn primary" type="button" @click="onRunNow">{{ t('settings.runNow') }}</button>
+        <button class="btn ghost" type="button" @click="onPreview">{{ t('settings.preview') }}</button>
+      </div>
+      <div v-if="previewOpen" style="margin-top:8px;">
+        <div class="preview-list">
+          <div v-if="previewLoading" class="preview-row" style="color:var(--text-faint);justify-content:center;">
+            {{ t('common.loading') }}
           </div>
-          <p class="hint">{{ t('settings.apiKey.hint') }}</p>
-        </label>
-
-        <div class="test-row">
-          <button class="btn small primary" :disabled="testing" @click="onTest">
-            {{ testing ? t('common.testing') : t('settings.test') }}
-          </button>
-          <span v-if="testResult" class="test-result" :class="{ ok: testResult.ok, fail: !testResult.ok }">
-            {{ testResult.ok ? t('settings.test.ok', { ms: testResult.elapsed_ms || 0 }) : (testResult.error?.provider_message || testResult.error?.hint || 'failed') }}
-          </span>
+          <div v-else-if="!previewItems.length" class="preview-row" style="color:var(--text-faint);justify-content:center;">
+            {{ t('settings.preview.empty') }}
+          </div>
+          <div v-for="p in previewItems" v-else :key="p.id" class="preview-row">
+            <span class="badge" :class="p.would_drop ? 'drop' : 'keep'">
+              {{ p.would_drop ? t('settings.drop') : t('settings.keep') }}
+            </span>
+            <span class="text" :title="p.text">{{ p.text }}</span>
+            <span class="meta" style="color:var(--text-faint);">{{ Math.round((p.importance || 0) * 100) }}%</span>
+          </div>
         </div>
-      </section>
+      </div>
+    </section>
 
-      <section>
-        <h3>{{ t('settings.section.schedule') }}</h3>
-        <label class="row-inline">
-          <input type="checkbox" v-model="cfg.schedule.enabled" />
-          <span>{{ t('settings.schedule.mode') }}</span>
-        </label>
-        <label>
-          <span>{{ t('settings.schedule.mode') }}</span>
-          <select v-model="cfg.schedule.mode">
-            <option value="off">{{ t('settings.schedule.off') }}</option>
-            <option value="realtime">{{ t('settings.schedule.realtime') }}</option>
-            <option value="hourly">{{ t('settings.schedule.hourly') }}</option>
-            <option value="daily">{{ t('settings.schedule.daily') }}</option>
-            <option value="weekly">{{ t('settings.schedule.weekly') }}</option>
-            <option value="interval">{{ t('settings.schedule.everyN') }}</option>
-          </select>
-        </label>
-        <label v-if="cfg.schedule.mode === 'interval'">
-          <span>{{ t('settings.schedule.interval') }}</span>
-          <input type="number" v-model.number="cfg.schedule.interval_minutes" min="5" />
-        </label>
-        <div v-if="cfg.schedule.mode === 'daily' || cfg.schedule.mode === 'weekly'" class="row-2">
-          <label>
-            <span>{{ t('settings.schedule.hour') }}</span>
-            <input type="number" v-model.number="cfg.schedule.hour" min="0" max="23" />
-          </label>
-          <label>
-            <span>{{ t('settings.schedule.minute') }}</span>
-            <input type="number" v-model.number="cfg.schedule.minute" min="0" max="59" />
-          </label>
+    <!-- Recent runs -->
+    <section>
+      <h3>{{ t('settings.section.runs') }}</h3>
+      <div v-if="runsLoading" class="status-line" style="font-size:11.5px;color:var(--text-faint);">
+        {{ t('common.loading') }}
+      </div>
+      <div v-else-if="!runs.length" class="run-row" style="color:var(--text-faint);justify-content:center;">
+        {{ t('settings.noRuns') }}
+      </div>
+      <div v-else class="run-list">
+        <div v-for="r in runs" :key="r.id" class="run-row">
+          <span class="pill" :class="r.status">{{ t(statusKey(r.status)) }}</span>
+          <span class="meta">{{ t(triggerKey(r.trigger)) }} · {{ r.started_at ? new Date(r.started_at * 1000).toLocaleString() : '—' }}</span>
+          <span class="stats">{{ statLine(r.stats) }}</span>
         </div>
-        <label v-if="cfg.schedule.mode === 'realtime'">
-          <span>{{ t('settings.schedule.realtimeIdle') }}</span>
-          <input type="number" v-model.number="cfg.schedule.after_ingest_idle_sec" min="5" />
-        </label>
-      </section>
+      </div>
+    </section>
+  </div>
 
-      <section>
-        <h3>{{ t('settings.section.actions') }}</h3>
-        <div class="action-row">
-          <button class="btn primary" :disabled="saving" @click="onSave">
-            {{ saving ? t('common.saving') : t('action.save') }}
-          </button>
-          <span v-if="savedHint" class="saved-hint">✓ {{ t('settings.apiKey.saved') }}</span>
-        </div>
-      </section>
-    </div>
-  </aside>
+  <div class="drawer-foot">
+    <button class="btn ghost" type="button" @click="onReset">{{ t('action.reset') }}</button>
+    <div style="flex:1"></div>
+    <button class="btn ghost" type="button" @click="onClose">{{ t('action.cancel') }}</button>
+    <button class="btn primary" type="button" :disabled="saving" @click="onSave">
+      {{ saving ? t('common.saving') : t('action.save') }}
+    </button>
+  </div>
+</aside>
   `,
 });

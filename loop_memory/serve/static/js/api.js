@@ -122,4 +122,8 @@ export const api = {
   // Other
   contradiction:  (params) => fetchJSON('/api/contradiction', { params }),
   exportData:     (format) => fetchJSON('/api/export', { params: { format } }),
+
+  // Graph entity memories (memories that mention this entity).
+  graphEntityMemories: (name, limit = 10) =>
+    fetchJSON(`/api/graph/entity/${encodeURIComponent(name)}/memories`, { params: { limit } }),
 };
