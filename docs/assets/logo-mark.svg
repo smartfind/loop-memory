@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Loop Memory mark">
+  <title>Loop Memory mark</title>
+  <defs>
+    <!-- Card -->
+    <linearGradient id="lm-card" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1e1b4b"/>
+      <stop offset="100%" stop-color="#0b1120"/>
+    </linearGradient>
+    <!-- Active layer (cyan) -->
+    <linearGradient id="lm-arc-active" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#67e8f9"/>
+      <stop offset="100%" stop-color="#818cf8"/>
+    </linearGradient>
+    <!-- Decay layer (pink → amber) -->
+    <linearGradient id="lm-arc-decay" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#fb7185"/>
+      <stop offset="100%" stop-color="#fde047"/>
+    </linearGradient>
+    <!-- Core glow -->
+    <radialGradient id="lm-core" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="1"/>
+      <stop offset="50%" stop-color="#c4b5fd" stop-opacity="0.85"/>
+      <stop offset="100%" stop-color="#7c3aed" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="lm-halo" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#818cf8" stop-opacity="0.45"/>
+      <stop offset="100%" stop-color="#818cf8" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Card body -->
+  <rect width="64" height="64" rx="16" fill="url(#lm-card)"/>
+  <rect x="0.5" y="0.5" width="63" height="63" rx="15.5" fill="none" stroke="rgba(255,255,255,0.13)"/>
+
+  <!-- Outer halo -->
+  <circle cx="32" cy="32" r="26" fill="url(#lm-halo)"/>
+
+  <!-- Memory layers as overlapping arcs (not full circles — visual "loop") -->
+  <g transform="translate(32 32)" fill="none" stroke-linecap="round">
+    <!-- Outer arc (active, cool) -->
+    <path d="M -20,-3 A 20,20 0 1 1 20,-3" stroke="url(#lm-arc-active)" stroke-width="3" opacity="0.95"/>
+    <!-- Middle arc (decay, warm) — offset 180° so the layers "interlock" -->
+    <path d="M 20,3 A 20,20 0 1 1 -20,3" stroke="url(#lm-arc-decay)" stroke-width="3" opacity="0.95"/>
+    <!-- Inner arc (active again, slightly smaller, completes the loop) -->
+    <circle cx="0" cy="0" r="13" stroke="rgba(167,139,250,0.45)" stroke-width="1.4" stroke-dasharray="2 2.5"/>
+  </g>
+
+  <!-- Core node with radial glow -->
+  <circle cx="32" cy="32" r="11" fill="url(#lm-core)"/>
+  <circle cx="32" cy="32" r="4" fill="#ffffff"/>
+  <circle cx="32" cy="32" r="2.2" fill="#7c3aed"/>
+
+  <!-- Two loop-intersection beads (the "events" on the loop) -->
+  <circle cx="12" cy="29" r="2.4" fill="#67e8f9"/>
+  <circle cx="52" cy="35" r="2.4" fill="#fde047"/>
+</svg>

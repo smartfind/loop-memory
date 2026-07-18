@@ -90,22 +90,23 @@
     display: flex; align-items: center; gap: 11px;
     margin-right: 4px;
   }
-  .logo {
-    width: 32px; height: 32px; border-radius: 10px;
-    display: grid; place-items: center;
-    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 55%, #ec4899 100%);
-    color: #fff; font-weight: 700; font-size: 12px;
-    box-shadow: 0 2px 10px rgba(139,92,246,.35), inset 0 1px 0 rgba(255,255,255,.2);
-    letter-spacing: -0.02em;
-    position: relative;
+  /* Logo mark sits in the topbar's leading slot. Two pre-mounted <img>
+   * tags cover dark/light themes; CSS swaps visibility using the
+   * html[data-theme] attribute already set by store.theme.
+   */
+  .logo-mark {
+    width: 34px; height: 34px; flex: 0 0 34px;
+    border-radius: 10px;
+    box-shadow: 0 2px 12px rgba(139,92,246,.22);
+    transition: transform .25s ease, box-shadow .25s ease;
+    display: block;
   }
-  .logo::after {
-    content: "";
-    position: absolute; inset: -1px;
-    border-radius: 11px;
-    background: linear-gradient(135deg, rgba(255,255,255,.35), rgba(255,255,255,0) 40%);
-    pointer-events: none;
-    mix-blend-mode: overlay;
+  .logo-mark-light { display: none; }
+  html[data-theme="light"] .logo-mark-dark { display: none; }
+  html[data-theme="light"] .logo-mark-light { display: block; box-shadow: 0 2px 12px rgba(99,102,241,.16); }
+  .topbar-brand:hover .logo-mark {
+    transform: rotate(-6deg) scale(1.04);
+    box-shadow: 0 4px 18px rgba(139,92,246,.32);
   }
   .brand {
     display: flex; flex-direction: column; line-height: 1.18;

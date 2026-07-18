@@ -699,65 +699,109 @@ section > h3 { font-size: 12px; text-transform: uppercase; color: var(--text-fai
 .ins-lc-val { margin-top: 5px; font-size: 17px; line-height: 1; font-weight: 750; color: var(--text); font-variant-numeric: tabular-nums; }
 .ins-lc-label { font-size: 11px; color: var(--text-mute); font-weight: 650; }
 .ins-lc-pct { font-size: 10.5px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+/* Rollers: three coloured beads per gap, each travels from the
+ * source stage icon to the destination icon, growing ~1.6x along the
+ * way. The bead starts in --from-tone and shades toward --to-tone
+ * during the journey, ending bigger and in --to-tone so it visibly
+ * pops as it lands at the destination.
+ *
+ * `--from-tone` and `--to-tone` are set inline per gap from the
+ * template (Dashboard.js -> lifecycleSegments -> ins-lc-flow style).
+ */
 .ins-lc-flow {
   position: absolute;
   z-index: 1;
-  top: 26px;
+  top: 28px;
   left: calc(50% + 22px);
   width: calc(100% - 44px);
-  height: 12px;
+  height: 14px;
   pointer-events: none;
 }
-/* Marching-ants dashed connector between stages. We use a linear-gradient
- * pattern of dot/dash segments and animate background-position so the line
- * appears to flow continuously toward the next stage. */
+/* Static rail so the path is always visible even between balls. */
 .ins-lc-flow::before {
   content: "";
   position: absolute;
-  top: 5px;
+  top: 6px;
   left: 0;
   right: 0;
   height: 2px;
   border-radius: 999px;
-  background-image: linear-gradient(
+  background: linear-gradient(
     to right,
-    color-mix(in srgb, var(--stage-color) 50%, transparent) 0,
-    color-mix(in srgb, var(--stage-color) 50%, transparent) 6px,
-    transparent 6px,
-    transparent 12px
+    color-mix(in srgb, var(--from-tone) 38%, transparent) 0%,
+    color-mix(in srgb, var(--from-tone) 38%, var(--to-tone) 50%) 50%,
+    color-mix(in srgb, var(--to-tone) 38%, transparent) 100%
   );
-  background-size: 12px 100%;
-  background-repeat: repeat-x;
-  background-position: 0 0;
-  opacity: .85;
-  animation: lc-flow-dash 1.4s linear infinite;
+  opacity: .55;
 }
-.ins-lc-particle {
+/* Lifecycle beads: three colored balls per gap, two small ones
+ * rolling on the line and one clearly larger destination pop.
+ *
+ * Translation is done via the `left` property (referring to PARENT
+ * width) rather than `translateX(%)`, which would reference the
+ * ball's own width and effectively never move. */
+.ins-lc-ball {
+  --ball-size: 6px;
   position: absolute;
-  top: 3px;
+  top: 50%;
   left: 0;
-  width: 8px;
-  height: 8px;
+  width: var(--ball-size);
+  height: var(--ball-size);
+  margin-top: calc(var(--ball-size) / -2);
   border-radius: 50%;
-  background: var(--stage-color);
-  box-shadow:
-    0 0 6px color-mix(in srgb, var(--stage-color) 80%, transparent),
-    0 0 14px color-mix(in srgb, var(--stage-color) 50%, transparent);
+  background: var(--from-tone);
   opacity: 0;
-  animation: lc-particle-flow 3.4s linear infinite;
-  will-change: transform, opacity;
+  will-change: left, transform, opacity, background-color, box-shadow;
+  outline: 1px solid rgba(255,255,255,.35);
+  outline-offset: -1px;
 }
-.ins-lc-particle.p2 { animation-delay: 1.13s; }
-.ins-lc-particle.p3 { animation-delay: 2.27s; }
-@keyframes lc-particle-flow {
-  0%   { transform: translateX(0) scale(.65); opacity: 0; }
-  10%  { opacity: 1; }
-  85%  { opacity: 1; }
-  100% { transform: translateX(calc(100% - 8px)) scale(1); opacity: 0; }
-}
-@keyframes lc-flow-dash {
-  0%   { background-position: 0 0; }
-  100% { background-position: -24px 0; }
+/* Two on-line rolling beads + one clearly larger destination bead.
+ * The destination bead (p3) is intentionally ~1 size larger than
+ * the on-line beads so it visibly "lands" at the next stage. */
+.ins-lc-ball.p1 { --ball-size: 6px;  animation: lc-ball-roll 2.6s linear infinite;   }  /* on-line */
+.ins-lc-ball.p2 { --ball-size: 5px;  animation: lc-ball-roll 2.6s linear 0.85s infinite; } /* on-line */
+.ins-lc-ball.p3 { --ball-size: 12px; animation: lc-ball-roll 2.6s linear 1.7s infinite; }  /* destination pop ~1 size larger */
+
+/* Each bead leaves from the source icon, glides left → right, grows
+ * visibly, shifts color from --from-tone to --to-tone, and pops at
+ * the destination. Using `left` (parent-relative) instead of
+ * `translateX` (self-relative) so the bead actually moves across
+ * the rail instead of staying pinned at scale-only motion. */
+@keyframes lc-ball-roll {
+  0% {
+    left: 0;
+    transform: scale(0.6);
+    background: var(--from-tone);
+    box-shadow: 0 0 0 color-mix(in srgb, var(--from-tone) 65%, transparent);
+    opacity: 0;
+  }
+  12% {
+    left: calc(12% - var(--ball-size) * 0.12);
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    left: calc(50% - var(--ball-size) / 2);
+    transform: scale(1.1);
+    background: color-mix(in srgb, var(--from-tone) 50%, var(--to-tone) 50%);
+    box-shadow:
+      0 0 8px color-mix(in srgb, var(--from-tone) 50%, var(--to-tone) 50%),
+      0 0 14px color-mix(in srgb, var(--from-tone) 40%, transparent);
+  }
+  88% {
+    left: calc(100% - var(--ball-size));
+    transform: scale(1.6);
+    background: var(--to-tone);
+    box-shadow:
+      0 0 14px var(--to-tone),
+      0 0 26px color-mix(in srgb, var(--to-tone) 55%, transparent);
+    opacity: 1;
+  }
+  100% {
+    left: calc(100% - var(--ball-size));
+    transform: scale(1.6);
+    opacity: 0;
+  }
 }
 @keyframes lc-node-breathe {
   0%, 100% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--stage-color) 7%, transparent); }

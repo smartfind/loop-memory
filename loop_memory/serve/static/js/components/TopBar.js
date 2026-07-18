@@ -69,7 +69,12 @@ export const TopBar = defineComponent({
   template: /* html */ `
 <header class="topbar">
   <div class="topbar-brand">
-    <div class="logo">LM</div>
+    <img src="static/img/logo-mark.svg"
+         alt="Loop Memory"
+         class="logo-mark logo-mark-dark" />
+    <img src="static/img/logo-light.svg"
+         alt="Loop Memory"
+         class="logo-mark logo-mark-light" />
     <div class="brand">
       <span class="brand-name">{{ t('app.title') }}</span>
       <span class="brand-tag">{{ t('app.tagline') }}</span>
