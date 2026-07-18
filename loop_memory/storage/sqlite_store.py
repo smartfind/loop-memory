@@ -1363,6 +1363,95 @@ class MemoryStore:
             cur = c.execute("DELETE FROM memories WHERE id=?", (mid,))
             return cur.rowcount
 
+    def merge_memories(self, a_id: str, b_id: str) -> dict:
+        """True memory-pair merge.
+
+        Behaviour:
+          - The higher-scored memory wins (ties go to ``a_id``).
+          - The loser's text is appended to the winner's text (de-duplicated
+            if the loser's text is already a substring of the winner's).
+          - The winner's ``importance`` and ``score`` are bumped to the max
+            of the two so the fused memory keeps the strongest signal.
+          - The loser is deleted in the same transaction.
+          - The pair is recorded in ``contradiction_ignored`` so the pulse
+            does not surface it again.
+
+        Returns a small dict describing what changed so the API layer can
+        report it back to the UI (UI then shows a 'merged' toast).
+        """
+        a_id = str(a_id or "")
+        b_id = str(b_id or "")
+        if not a_id or not b_id or a_id == b_id:
+            raise ValueError("merge_memories needs two distinct ids")
+        now = time.time()
+        with self._conn() as c:
+            a_row = c.execute(
+                "SELECT id, text, importance, score FROM memories WHERE id=?",
+                (a_id,),
+            ).fetchone()
+            b_row = c.execute(
+                "SELECT id, text, importance, score FROM memories WHERE id=?",
+                (b_id,),
+            ).fetchone()
+            if a_row is None and b_row is None:
+                return {"merged": False, "reason": "neither_exists"}
+            if a_row is None:
+                # Only B exists — silently delete the missing A and keep B.
+                c.execute("DELETE FROM memories WHERE id=?", (a_id,))
+                return {"merged": False, "kept": b_id, "lost": a_id, "reason": "a_missing"}
+            if b_row is None:
+                c.execute("DELETE FROM memories WHERE id=?", (b_id,))
+                return {"merged": False, "kept": a_id, "lost": b_id, "reason": "b_missing"}
+
+            # Pick winner = higher score; ties go to a_id.
+            a_score = a_row["score"] or 0.0
+            b_score = b_row["score"] or 0.0
+            winner_is_a = a_score >= b_score
+            winner_id = a_id if winner_is_a else b_id
+            loser_id = b_id if winner_is_a else a_id
+            winner_text = (a_row["text"] if winner_is_a else b_row["text"]) or ""
+            loser_text = (b_row["text"] if winner_is_a else a_row["text"]) or ""
+            importance_max = max(a_row["importance"] or 0.0, b_row["importance"] or 0.0)
+            score_max = max(a_score, b_score)
+
+            # Decide whether the loser's content needs to be appended. If
+            # the winner already contains it (string containment is fine for
+            # the plain-text payloads we have here), skip the append.
+            needs_append = bool(loser_text.strip()) and loser_text.strip() not in winner_text
+            if needs_append:
+                # Triple-dash rule marks the boundary between the two
+                # original sources of a merged memory.
+                sep = "\n\n---\n\n"
+                merged_text = winner_text.rstrip() + sep + loser_text.strip()
+            else:
+                merged_text = winner_text
+
+            c.execute(
+                "UPDATE memories "
+                "SET text=?, importance=?, score=?, updated_at=? "
+                "WHERE id=?",
+                (merged_text, importance_max, score_max, now, winner_id),
+            )
+            c.execute("DELETE FROM memories WHERE id=?", (loser_id,))
+
+            # Suppress the pair so the pulse does not resurface it.
+            lo, hi = sorted([a_id, b_id])
+            key = f"{lo}|{hi}"
+            c.execute(
+                "INSERT INTO contradiction_ignored(pair_key, ignored_at) VALUES(?, ?) "
+                "ON CONFLICT(pair_key) DO NOTHING",
+                (key, now),
+            )
+
+            return {
+                "merged": True,
+                "kept": winner_id,
+                "lost": loser_id,
+                "appended": needs_append,
+                "winner_was_a": winner_is_a,
+                "new_length": len(merged_text),
+            }
+
     def delete_session(self, session_id: str) -> int:
         with self._conn() as c:
             cur = c.execute("DELETE FROM memories WHERE session_id=?", (session_id,))
