@@ -264,7 +264,7 @@ export const KnowledgeGraph = defineComponent({
 
     function stepRotation(ts) {
       const frameScale = lastFrame ? Math.min(2.4, Math.max(0.25, (ts - lastFrame) / 16.67)) : 1;
-      const paused = !(rotationEnabled.value) || (mouseInCanvas && hoveredName) || graphLayout.dragging;
+      const paused = !(rotationEnabled.value) || (mouseInCanvas && hoveredName) || graphLayout.dragging || !!graphSelected;
       const rot = paused ? 0 : params.baseOmega * frameScale;
       for (const n of Object.values(graphNodes)) {
         if (n.lat0 == null) continue;
@@ -671,11 +671,12 @@ export const KnowledgeGraph = defineComponent({
       const c = canvasRef.value;
       if (!c) return;
       const dpr = window.devicePixelRatio || 1;
-      const rect = c.getBoundingClientRect();
-      c.width = Math.max(1, rect.width * dpr);
-      c.height = Math.max(1, rect.height * dpr);
-      c.style.width = rect.width + 'px';
-      c.style.height = rect.height + 'px';
+      const target = wrapRef.value || c;
+      const rect = target.getBoundingClientRect();
+      c.width = Math.max(1, Math.round(rect.width * dpr));
+      c.height = Math.max(1, Math.round(rect.height * dpr));
+      c.style.width = '100%';
+      c.style.height = '100%';
     }
 
     let resizeObserver = null;
@@ -687,6 +688,13 @@ export const KnowledgeGraph = defineComponent({
 
     watch(() => store.lang, () => drawCanvas());
     watch(() => store.theme, () => drawCanvas());
+    watch(() => store.activeTab, async (tab) => {
+      if (tab !== 'graph') return;
+      await nextTick();
+      resizeCanvas();
+      fitToCanvas();
+      drawCanvas();
+    });
 
     function onExternalRebuild() { rebuildGraph(); }
     onMounted(async () => {
