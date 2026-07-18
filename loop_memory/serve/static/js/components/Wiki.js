@@ -63,6 +63,80 @@ export const Wiki = defineComponent({
 
     function onNew() { editing.value = 'new'; }
 
+    const importing = ref(false);
+    const exporting = ref(false);
+
+    async function onExport() {
+      exporting.value = true;
+      try {
+        const res = await fetch('/api/wiki/export?format=json&limit=2000');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+        a.href = url;
+        a.download = `loop-memory-wiki-${ts}.json`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      } catch (e) {
+        toast(t('wiki.exportFail', { msg: e.message }), 4000);
+      } finally {
+        exporting.value = false;
+      }
+    }
+
+    function onImportClick() {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.json,.md,.markdown,application/json,text/markdown,text/plain';
+      input.addEventListener('change', async () => {
+        const file = input.files && input.files[0];
+        if (!file) return;
+        importing.value = true;
+        try {
+          const text = await file.text();
+          let body;
+          if (/\.md(?:arkdown)?$/i.test(file.name) || text.trim().startsWith('#')) {
+            body = { format: 'markdown', markdown: text };
+          } else {
+            try {
+              const parsed = JSON.parse(text);
+              const pages = Array.isArray(parsed) ? parsed : (parsed.pages || []);
+              body = { format: 'json', pages };
+            } catch (e) {
+              throw new Error('not a valid JSON file: ' + e.message);
+            }
+          }
+          const r = await fetch('/api/wiki/import', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          if (!r.ok) {
+            const txt = await r.text();
+            throw new Error(`HTTP ${r.status} — ${txt.slice(0, 200)}`);
+          }
+          const out = await r.json();
+          if (out.total === 0) {
+            toast(t('wiki.importEmpty'), 3000);
+          } else {
+            toast(t('wiki.importSuccess', {
+              created: out.created, updated: out.updated, skipped: out.skipped,
+            }), 3500);
+            await refresh();
+          }
+        } catch (e) {
+          toast(t('wiki.importError', { msg: e.message }), 4000);
+        } finally {
+          importing.value = false;
+        }
+      });
+      input.click();
+    }
+
     async function saveEdit(payload) {
       try {
         if (editing.value === 'new') {
@@ -120,7 +194,7 @@ export const Wiki = defineComponent({
 
     return {
       store, t, pages, q, sort, loading, visible, expanded, editing, bulletsOf,
-      refresh, expand, edit, onNew, saveEdit, removePage, bodyPreview, fmtTime,
+      refresh, expand, edit, onNew, onExport, onImportClick, importing, exporting, saveEdit, removePage, bodyPreview, fmtTime,
     };
   },
   template: /* html */ `
@@ -134,6 +208,14 @@ export const Wiki = defineComponent({
         <option value="title_asc">{{ t('wiki.sort.title') }}</option>
       </select>
       <span class="spacer"></span>
+      <button class="tb-action ghost" :title="t('wiki.exportTip')" :disabled="exporting" @click="onExport">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="14" height="14"><path d="M8 1v9M4.5 6.5L8 10l3.5-3.5M2 12v2.5h12V12"/></svg>
+        <span>{{ exporting ? '…' : t('wiki.export') }}</span>
+      </button>
+      <button class="tb-action ghost" :title="t('wiki.importTip')" :disabled="importing" @click="onImportClick">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="14" height="14"><path d="M8 15V6M4.5 9.5L8 6l3.5 3.5M2 2.5V0h12v2.5"/></svg>
+        <span>{{ importing ? '…' : t('wiki.import') }}</span>
+      </button>
       <button class="tb-action primary" @click="onNew">
         <svg viewBox="0 0 16 16" fill="currentColor" width="14" height="14"><path d="M8 1v14M1 8h14" stroke="currentColor" stroke-width="2"/></svg>
         <span>{{ t('wiki.new') }}</span>

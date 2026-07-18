@@ -17,7 +17,7 @@ import { api, ApiError } from '../api.js';
 export const TopBar = defineComponent({
   name: 'TopBar',
   components: { IngestPopover },
-  emits: ['ingest', 'rescore', 'llm-run', 'run-now', 'open-settings', 'open-stats', 'open-diag', 'rebuild-graph', 'consolidate'],
+  emits: ['ingest', 'rescore', 'llm-run', 'open-settings', 'open-stats', 'open-diag', 'rebuild-graph', 'consolidate'],
   setup(props, { emit }) {
     const statsOpen = ref(false);
     const toolsOpen = ref(false);
@@ -70,7 +70,6 @@ export const TopBar = defineComponent({
       onIngest:      () => { closeAll(); toggleIngest(); },
       onRescore:     () => { closeAll(); emit('rescore'); },
       onLlmRun:      () => { closeAll(); emit('llm-run'); },
-      onRunNow:      () => { closeAll(); emit('run-now'); },
       onOpenSettings:() => { closeAll(); emit('open-settings'); },
       onOpenStats:   () => emit('open-stats'),
       onOpenDiag:    () => { closeAll(); emit('open-diag'); },
@@ -165,13 +164,9 @@ export const TopBar = defineComponent({
         </button>
         <IngestPopover v-show="ingestOpen" @close="ingestOpen=false" />
       </div>
-      <button class="tb-action primary" :title="t('action.llmRunTip')" @click="onLlmRun">
+      <button class="tb-action primary" :title="t('action.consolidateNowTip')" @click="onLlmRun">
         <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1l2.2 4.6L15 6.3l-3.5 3.4.8 4.8L8 12.4 3.7 14.5l.8-4.8L1 6.3l4.8-.7L8 1z"/></svg>
-        <span>{{ t('action.llmRun') }}</span>
-      </button>
-      <button class="tb-action accent" :title="t('action.runNowTip')" @click="onRunNow">
-        <svg viewBox="0 0 16 16" fill="currentColor"><path d="M9 1L3 9h4l-1 6 6-8H8l1-6z"/></svg>
-        <span>{{ t('action.runNow') }}</span>
+        <span>{{ t('action.consolidateNow') }}</span>
       </button>
     </div>
 
