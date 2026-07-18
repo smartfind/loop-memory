@@ -10,9 +10,11 @@
 import { defineComponent, ref, computed, onMounted, watch } from 'https://unpkg.com/vue@3.4.38/dist/vue.esm-browser.prod.js';
 import { store, t, escapeHtml, fmtTime } from '../store.js';
 import { api } from '../api.js';
+import { WikiEditor } from './WikiEditor.js';
 
 export const Wiki = defineComponent({
   name: 'Wiki',
+  components: { WikiEditor },
   setup() {
     const pages = ref([]);
     const q = ref('');
