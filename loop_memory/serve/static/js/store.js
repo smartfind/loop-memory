@@ -62,7 +62,11 @@ watch(() => [store.lang, store.theme, store.showZh], () => {
 });
 
 // ---- i18n ----
-let _i18n = { en: {}, zh: {} };
+// _i18n is a reactive proxy so any component template / computed that calls
+// `t()` automatically re-renders when the dictionaries finish loading. Without
+// this, the first render flashes raw keys like `tab.wiki` until something else
+// forces a re-render (see commit a34de38 → a plain object's keys aren't tracked).
+const _i18n = reactive({ en: {}, zh: {} });
 let _i18nLoaded = false;
 
 export async function loadI18n() {
@@ -73,7 +77,9 @@ export async function loadI18n() {
     fetch('static/i18n/en.json').then(r => r.ok ? r.json() : {}).catch(() => ({})),
     fetch('static/i18n/zh.json').then(r => r.ok ? r.json() : {}).catch(() => ({})),
   ]);
-  _i18n = { en, zh };
+  // Assign into the reactive so subscribers re-render.
+  Object.assign(_i18n.en, en);
+  Object.assign(_i18n.zh, zh);
   _i18nLoaded = true;
   return _i18n;
 }
@@ -86,6 +92,7 @@ export function t(key, vars) {
   }
   return s;
 }
+
 
 export function tOrKey(key) {
   return t(key, undefined);
