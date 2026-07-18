@@ -207,7 +207,6 @@ export const Dashboard = defineComponent({
         }
       } catch (e) { live.value = false; }
       finally { loading.value = false; }
-      await loadWeekly(weeklyDays.value);
     }
 
     async function loadWeekly(days = 7) {
@@ -253,6 +252,10 @@ export const Dashboard = defineComponent({
     onMounted(() => {
       refresh();
       pollHandle = setInterval(refresh, 6000);
+      // Weekly report is intentionally NOT refreshed in the polling loop
+      // (it is heavy and flickers the markdown content). Fetch only on
+      // explicit user action or when the user navigates back to the tab.
+      loadWeekly(weeklyDays.value);
     });
     onUnmounted(() => { if (pollHandle) clearInterval(pollHandle); });
 
@@ -291,37 +294,74 @@ export const Dashboard = defineComponent({
       return { line, area, ticks, max };
     }
 
-    function ingestBars(rows, w = 360, h = 96) {
+    function ingestBars(rows, w = 360, h = 118) {
+      // 24 buckets. Layout: 24 bars in w, but with breathing room. We expose
+      // x/y/width/height plus an `axis` position and a `tier` flag so the
+      // template can render the small hour ticks on every 4-hour mark.
       const items = safeArr(rows);
-      const max = Math.max(...items.map(r => r.count), 1);
-      const bw = w / Math.max(1, items.length);
-      return items.map((r, i) => ({
-        x: i * bw + 1, w: Math.max(2, bw - 2),
-        y: h - (r.count / max) * (h - 6),
-        h: (r.count / max) * (h - 6),
-        hour: r.hour, count: r.count,
-      }));
-    }
-
-    function barsFor(items, w = 360, h = 214) {
-      const list = safeArr(items);
-      const max = Math.max(...list.map(r => r.count || 0), 1);
-      const plot = { left: 18, right: 8, top: 28, bottom: 38 };
+      const max = Math.max(...items.map(r => r.count || 0), 1);
+      const peak = Math.max(...items.map(r => r.count || 0), 0);
+      const plot = { left: 4, right: 4, top: 8, bottom: 18 };
       const innerW = w - plot.left - plot.right;
       const innerH = h - plot.top - plot.bottom;
       const baseline = plot.top + innerH;
+      const bw = innerW / Math.max(1, items.length);
+      return items.map((r, i) => {
+        const hourNum = Number((r.hour || '0').split(':')[0]) || 0;
+        const barH = Math.max(2, ((r.count || 0) / max) * innerH);
+        return {
+          x: plot.left + i * bw + Math.max(0.5, (bw - Math.max(2, bw - 2)) / 2),
+          w: Math.max(2, bw - 2),
+          y: baseline - barH,
+          h: barH,
+          baseline,
+          tickY: baseline + 4,
+          lblY: baseline + 14,
+          tick: hourNum % 4 === 0,           // major tick every 4h
+          label: hourNum % 4 === 0 ? String(hourNum).padStart(2, '0') : '',
+          isPeak: r.count === peak && peak > 0,
+          active: r.count > 0,
+          hour: r.hour,
+          count: r.count,
+        };
+      });
+    }
+
+    function barsFor(items, w = 360, h = 230) {
+      // 10 score bands. We give 3 layout regions inside the SVG height:
+      //   y[top:28 .. baseline:182] : bars
+      //   y[tickY:182 .. labelY:198] : axis tick + short label
+      //   y[metaY:214]               : optional per-bar full range (rare)
+      const list = safeArr(items);
+      const max = Math.max(...list.map(r => r.count || 0), 1);
+      const plot = { left: 14, right: 6, top: 28, bottom: 56 };
+      const innerW = w - plot.left - plot.right;
+      const innerH = h - plot.top - plot.bottom;
+      const baseline = plot.top + innerH; // 174
       const bw = innerW / Math.max(1, list.length);
-      return list.map((r, i) => ({
-        x: plot.left + i * bw + 5,
-        w: Math.max(8, bw - 10),
-        y: baseline - Math.max(2, ((r.count || 0) / max) * innerH),
-        h: Math.max(2, ((r.count || 0) / max) * innerH),
-        baseline,
-        countY: baseline - Math.max(2, ((r.count || 0) / max) * innerH) - 7,
-        labelY: baseline + 20,
-        label: r.range ? `${r.range[0].toFixed(1)}–${r.range[1].toFixed(1)}` : '',
-        count: r.count,
-      }));
+      const fmtShort = (v) => (v >= 1 ? '1' : v === 0 ? '0' : `.${Math.round(v * 10)}`);
+      return list.map((r, i) => {
+        const upper = r.range ? r.range[1] : null;
+        const lower = r.range ? r.range[0] : null;
+        return {
+          x: plot.left + i * bw + (bw > 18 ? 4 : 1),
+          w: Math.max(6, bw - (bw > 18 ? 8 : 2)),
+          y: baseline - Math.max(2, ((r.count || 0) / max) * innerH),
+          h: Math.max(2, ((r.count || 0) / max) * innerH),
+          baseline,
+          countY: baseline - Math.max(2, ((r.count || 0) / max) * innerH) - 7,
+          tickY: baseline + 8,
+          labelY: baseline + 22,
+          // short label: just the upper boundary, displayed for every other
+          // bucket to keep the axis readable at narrow widths.
+          shortLabel: upper != null ? fmtShort(upper) : '',
+          // full range label kept for the (rare) tooltip/full view use
+          label: (lower != null && upper != null) ? `${lower.toFixed(1)}–${upper.toFixed(1)}` : '',
+          showShortLabel: i % 2 === 1, // 0, 2, 4... hide; 1, 3, 5... show
+          peak: r.count > 0 && r.count === max,
+          count: r.count,
+        };
+      });
     }
 
     function scoreDistributionTotal(items) {
@@ -348,6 +388,15 @@ export const Dashboard = defineComponent({
       const items = safeArr(rows);
       const max = Math.max(...items.map(r => r.avg_ms || 0), 1);
       return items.map(r => ({ ...r, pct: ((r.avg_ms || 0) / max) * 100 }));
+    }
+
+    function ingestPeakHour(rows) {
+      const items = safeArr(rows);
+      if (!items.length) return null;
+      const peak = items.reduce((best, r) => (r.count || 0) > (best.count || 0) ? r : best, items[0]);
+      if (!peak || !(peak.count > 0)) return null;
+      const total = items.reduce((a, b) => a + (b.count || 0), 0) || 1;
+      return `${peak.hour} · ${peak.count} (${Math.round(((peak.count || 0) / total) * 100)}%)`;
     }
 
     function lifecycleSegments(stages) {
@@ -396,7 +445,7 @@ export const Dashboard = defineComponent({
       KIND_TONE, STATUS_TONE, SOURCE_COLORS, STAGE_DEFS, SVGNS, ARCH,
       fmtNum, truncate, timeAgo, sparkPath, fmtDuration, shortenPath,
       guardUptime, hist,
-      ring, donutArcPaths, trendPoints, ingestBars, barsFor,
+      ring, donutArcPaths, trendPoints, ingestBars, ingestPeakHour, barsFor,
       scoreDistributionTotal, peakScoreRange,
       sourceBars, pipelineBars, lifecycleSegments,
       onRefresh: refresh,
@@ -611,18 +660,22 @@ export const Dashboard = defineComponent({
             <span>{{ t('dash.pulse.total') }} {{ fmtNum(scoreDistributionTotal(insights.pulse.score_distribution)) }} {{ t('dash.pulse.records') }}</span>
             <span>{{ t('dash.pulse.peak') }} <b>{{ peakScoreRange(insights.pulse.score_distribution) }}</b></span>
           </div>
-          <svg class="ins-decay-svg" viewBox="0 0 360 214" preserveAspectRatio="xMidYMid meet" v-if="(insights.pulse.score_distribution || []).length">
+          <svg class="ins-decay-svg" viewBox="0 0 360 230" preserveAspectRatio="xMidYMid meet" v-if="(insights.pulse.score_distribution || []).length">
             <defs>
               <linearGradient id="decay-bar-grad" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stop-color="var(--accent)" stop-opacity="0.95"></stop>
                 <stop offset="100%" stop-color="var(--accent)" stop-opacity="0.5"></stop>
               </linearGradient>
             </defs>
-            <line v-for="y in [65,102,139,176]" :key="y" x1="18" :y1="y" x2="352" :y2="y" class="ins-decay-grid"></line>
+            <line v-for="y in [60,93,128,165]" :key="y" x1="14" :y1="y" x2="354" :y2="y" class="ins-decay-grid"></line>
+            <line x1="14" :y1="174" x2="354" y2="174" class="ins-decay-axis" />
             <g v-for="(b, i) in barsFor(insights.pulse.score_distribution)" :key="i">
-              <rect :x="b.x" :y="b.y" :width="b.w" :height="b.h" class="ins-decay-bar" :data-empty="!b.count" rx="5"></rect>
+              <rect :x="b.x - 0.5" :y="b.tickY" width="1" height="4" class="ins-decay-tick" />
+              <rect :x="b.x" :y="b.y" :width="b.w" :height="b.h" class="ins-decay-bar" :class="{ peak: b.peak }" :data-empty="!b.count" rx="4">
+                <title v-if="b.label">{{ b.label }} · {{ b.count }}</title>
+              </rect>
               <text v-if="b.count" :x="b.x + b.w / 2" :y="b.countY" class="ins-decay-value">{{ b.count }}</text>
-              <text :x="b.x + b.w / 2" :y="b.labelY" class="ins-decay-label">{{ b.label }}</text>
+              <text v-if="b.showShortLabel" :x="b.x + b.w / 2" :y="b.labelY" class="ins-decay-label">{{ b.shortLabel }}</text>
             </g>
           </svg>
           <div v-else class="ins-pulse-empty">—</div>
@@ -830,19 +883,22 @@ export const Dashboard = defineComponent({
           </div>
         </div>
         <div class="ins-src-card">
-          <div class="ins-src-title">📥 {{ t('dash.src.ingest') }}</div>
-          <svg class="ins-ingest-svg" viewBox="0 0 360 100" preserveAspectRatio="none">
+          <div class="ins-src-title">📥 {{ t('dash.src.ingest') }}<span class="ins-src-peak" v-if="ingestPeakHour(insights.ingest_rate)">★ {{ ingestPeakHour(insights.ingest_rate) }}</span></div>
+          <svg class="ins-ingest-svg" viewBox="0 0 360 118" preserveAspectRatio="xMidYMid meet">
             <defs>
               <linearGradient id="ins-ingest-grad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stop-color="var(--accent)" stop-opacity="0.7"></stop>
-                <stop offset="100%" stop-color="var(--accent)" stop-opacity="0.05"></stop>
+                <stop offset="0%" stop-color="var(--accent)" stop-opacity="0.85"></stop>
+                <stop offset="100%" stop-color="var(--accent)" stop-opacity="0.18"></stop>
               </linearGradient>
             </defs>
+            <line v-for="y in [40, 70]" :key="y" x1="4" :y1="y" x2="356" y2="y" class="ins-ingest-grid"></line>
+            <line x1="4" y1="100" x2="356" y2="100" class="ins-ingest-axis" />
             <g v-for="(b, i) in ingestBars(insights.ingest_rate)" :key="i">
-              <rect :x="b.x" :y="b.y" :width="b.w" :height="b.h" :fill="i === 22 ? 'var(--accent)' : 'url(#ins-ingest-grad)'" rx="1"></rect>
-            </g>
-            <g v-for="(_, i) in 6" :key="'lbl-' + i">
-              <text :x="(360 / 24) * (i * 4 + 2)" y="98" text-anchor="middle" font-size="8" fill="var(--text-faint)">{{ String(i * 4).padStart(2, '0') }}</text>
+              <rect v-if="b.tick" :x="b.x + b.w / 2 - 0.5" :y="b.tickY" width="1" height="3" class="ins-ingest-tick"></rect>
+              <rect :x="b.x" :y="b.y" :width="b.w" :height="b.h" :class="['ins-ingest-bar', { peak: b.isPeak, idle: !b.active }]" rx="2">
+                <title v-if="b.count">{{ b.hour }} · {{ b.count }}</title>
+              </rect>
+              <text v-if="b.label" :x="b.x + b.w / 2" :y="b.lblY" text-anchor="middle" class="ins-ingest-lbl">{{ b.label }}</text>
             </g>
           </svg>
           <div class="ins-ingest-total">
