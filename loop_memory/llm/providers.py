@@ -50,7 +50,7 @@ PROVIDERS: dict[str, ProviderSpec] = {
         default_model="MiniMax-M2.7",
         needs_api_key=True,
         needs_base_url=True,
-        default_base_url="https://api.minimaxi.chat/v1",
+        default_base_url="https://api.minimaxi.com/v1",
         description="MiniMax (https://platform.minimaxi.com) — recommended default",
     ),
     "openai": ProviderSpec(
@@ -357,7 +357,7 @@ def build_provider(config: dict[str, Any]) -> LLMClient:
         return OpenAICompatProvider(
             model=model,
             api_key=api_key,
-            base_url=base_url or "https://api.minimaxi.chat/v1",
+            base_url=base_url or "https://api.minimaxi.com/v1",
         )
     if ptype in ("openai", "openai_compat", "openai-compat"):
         return OpenAICompatProvider(model=model, api_key=api_key, base_url=base_url or "https://api.openai.com/v1")
