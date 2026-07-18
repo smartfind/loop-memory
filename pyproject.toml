@@ -25,12 +25,12 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-openai   = ["openai~=1.30"]
+openai   = ["openai>=1.30,<3.0"]
 chroma   = ["chromadb~=0.4"]
 sentence = ["sentence-transformers~=2.6"]
 serve    = ["fastapi~=0.110", "uvicorn~=0.27"]
 dev      = ["pytest~=8.0", "coverage~=7.0", "ruff~=0.5"]
-all      = ["openai~=1.30", "chromadb~=0.4", "sentence-transformers~=2.6", "fastapi~=0.110", "uvicorn~=0.27"]
+all      = ["openai>=1.30,<3.0", "chromadb~=0.4", "sentence-transformers~=2.6", "fastapi~=0.110", "uvicorn~=0.27"]
 
 [project.urls]
 Homepage       = "https://github.com/smartfind/loop-memory"
