@@ -19,11 +19,10 @@ export const Tabs = defineComponent({
     ]));
 
     function setTab(id) {
+      // App.js owns the URL sync via a watcher on store.activeTab,
+      // so all writers (this component, Sidebar session picks,
+      // Open-wiki from graph) reach the URL through the same path.
       store.activeTab = id;
-      // Persist to URL so the view is bookmarkable
-      const url = new URL(window.location.href);
-      url.searchParams.set('tab', id);
-      window.history.replaceState({}, '', url.toString());
     }
 
     return { tabs, store, setTab };

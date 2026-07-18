@@ -78,6 +78,21 @@ export const App = defineComponent({
       } catch (e) { /* ignore */ }
     }
 
+    /* Keep the URL bar in sync with whatever tab is active — both
+     * user-driven (Tabs clicks) and externally-driven (Sidebar session
+     * picks, Open-wiki from graph, deep-link boot) write to the URL
+     * through this single path. */
+    watch(() => store.activeTab, (tab) => {
+      if (!tab) return;
+      try {
+        const url = new URL(window.location.href);
+        if (url.searchParams.get('tab') !== tab) {
+          url.searchParams.set('tab', tab);
+          window.history.replaceState({}, '', url.toString());
+        }
+      } catch (e) { /* ignore */ }
+    });
+
     onMounted(async () => {
       applyTheme();
       applyLang();

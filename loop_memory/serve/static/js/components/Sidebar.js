@@ -119,7 +119,12 @@ export const Sidebar = defineComponent({
     }
 
     function onClickSession(s) {
+      // Clicking a session in the list should ALWAYS drop the user
+      // into the timeline tab — no matter what tab is currently shown
+      // on the right — so the conversation fragments for that session
+      // are immediately visible.
       store.activeSession = store.activeSession === s.id ? '' : s.id;
+      store.activeTab = 'timeline';
     }
 
     onMounted(() => {
