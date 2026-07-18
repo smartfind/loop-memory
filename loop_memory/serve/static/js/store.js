@@ -23,10 +23,24 @@ function savePrefs(p) {
 
 const initial = loadPrefs();
 
+function _detectInitialLang(stored) {
+  if (stored) return stored;            // explicit user choice — respect it
+  if (typeof navigator !== 'undefined') {
+    const nav = (navigator.language || (navigator.languages && navigator.languages[0]) || '').toLowerCase();
+    if (nav.startsWith('zh')) return 'zh';
+    // Anything else (en, ja, fr, etc.) defaults to zh only as a last resort.
+    // The user can always switch via the kebab menu — their selection will stick.
+    if (nav) return nav.startsWith('en') ? 'en' : 'zh';
+  }
+  return 'zh';
+}
+
 // Reactive global state. The shape is documented in applyDefaults().
 export const store = reactive({
   // ---- user preferences (persisted) ----
-  lang:           initial.lang || 'zh',         // 'zh' | 'en'
+  // Default picks Chinese for zh-* browser locales, English for en-* locales,
+  // and Chinese as the final fallback. Stored value (explicit user choice) wins.
+  lang:           _detectInitialLang(initial.lang),
   theme:          initial.theme || 'auto',      // 'auto' | 'light' | 'dark'
   showZh:         initial.showZh ?? true,       // mixed-lang UI helper
 
