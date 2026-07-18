@@ -18,7 +18,7 @@ export const Diagnostic = defineComponent({
 
     async function check() {
       loading.value = true;
-      try { data.value = await api.health(); }
+      try { data.value = await fetch('/api/diag').then(r => r.ok ? r.json() : {ok: false}); }
       catch (e) { data.value = { ok: false, error: e.message }; }
       finally { loading.value = false; }
     }
