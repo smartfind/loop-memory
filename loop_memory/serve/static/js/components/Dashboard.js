@@ -16,7 +16,7 @@
  * - WriteGuard header shows uptime (time since first audit record).
  */
 import { defineComponent, ref, computed, onMounted, onUnmounted } from 'https://unpkg.com/vue@3.4.38/dist/vue.esm-browser.prod.js';
-import { store, t, timeAgo } from '../store.js';
+import { store, t, timeAgo, toast } from '../store.js';
 import { api } from '../api.js';
 
 const SVGNS = 'http://www.w3.org/2000/svg';
@@ -131,6 +131,12 @@ export const Dashboard = defineComponent({
     };
 
     let pollHandle = null;
+    const resolvedPairs = new Set();
+
+    function contradictionKey(pair) {
+      const ids = [pair?.a?.id || '', pair?.b?.id || ''].sort();
+      return `${ids[0]}|${ids[1]}`;
+    }
 
     function pushHistory(arr, v) {
       arr.push(v);
@@ -176,6 +182,10 @@ export const Dashboard = defineComponent({
             dbPath: stats.path,
           };
         }
+        if (insightsData?.pulse?.contradictions) {
+          insightsData.pulse.contradictions = insightsData.pulse.contradictions
+            .filter(pair => !resolvedPairs.has(contradictionKey(pair)));
+        }
         insights.value = insightsData;
         live.value = !!insightsData;
         sourceHealth.value = health;
@@ -215,14 +225,22 @@ export const Dashboard = defineComponent({
     async function resolvePair(pair, action) {
       const aId = pair?.a?.id, bId = pair?.b?.id;
       if (!aId || !bId) return;
-      const key = `${aId}|${bId}|${action}`;
+      const key = `${contradictionKey(pair)}|${action}`;
       resolvingId.value = key;
       try {
         const url = `/api/contradictions/resolve?a=${encodeURIComponent(aId)}&b=${encodeURIComponent(bId)}&action=${encodeURIComponent(action)}`;
         const res = await fetch(url, { method: 'POST' });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        await refresh();
-      } catch (e) { weeklyError.value = e?.message || 'resolve failed'; }
+        resolvedPairs.add(contradictionKey(pair));
+        if (insights.value?.pulse?.contradictions) {
+          insights.value.pulse.contradictions = insights.value.pulse.contradictions
+            .filter(item => contradictionKey(item) !== contradictionKey(pair));
+        }
+        toast(action === 'ignore' ? t('dash.pulse.resolvedIgnore') : t('dash.pulse.resolvedDel'), 2400);
+        void refresh();
+      } catch (e) {
+        toast(t('dash.pulse.resolvedErr') + (e?.message || 'resolve failed'), 3200);
+      }
       finally { resolvingId.value = ''; }
     }
 
@@ -285,17 +303,36 @@ export const Dashboard = defineComponent({
       }));
     }
 
-    function barsFor(items, w = 300, h = 140) {
+    function barsFor(items, w = 360, h = 214) {
       const list = safeArr(items);
       const max = Math.max(...list.map(r => r.count || 0), 1);
-      const bw = w / Math.max(1, list.length);
+      const plot = { left: 18, right: 8, top: 28, bottom: 38 };
+      const innerW = w - plot.left - plot.right;
+      const innerH = h - plot.top - plot.bottom;
+      const baseline = plot.top + innerH;
+      const bw = innerW / Math.max(1, list.length);
       return list.map((r, i) => ({
-        x: i * bw + 4, w: Math.max(6, bw - 8),
-        y: h - ((r.count || 0) / max) * (h - 18),
-        h: ((r.count || 0) / max) * (h - 18),
-        label: r.range ? r.range[0].toFixed(1) : '',
+        x: plot.left + i * bw + 5,
+        w: Math.max(8, bw - 10),
+        y: baseline - Math.max(2, ((r.count || 0) / max) * innerH),
+        h: Math.max(2, ((r.count || 0) / max) * innerH),
+        baseline,
+        countY: baseline - Math.max(2, ((r.count || 0) / max) * innerH) - 7,
+        labelY: baseline + 20,
+        label: r.range ? `${r.range[0].toFixed(1)}–${r.range[1].toFixed(1)}` : '',
         count: r.count,
       }));
+    }
+
+    function scoreDistributionTotal(items) {
+      return safeArr(items).reduce((sum, item) => sum + (item.count || 0), 0);
+    }
+
+    function peakScoreRange(items) {
+      const list = safeArr(items);
+      if (!list.length) return '—';
+      const peak = list.reduce((best, item) => (item.count || 0) > (best.count || 0) ? item : best, list[0]);
+      return peak.range ? `${peak.range[0].toFixed(1)}–${peak.range[1].toFixed(1)}` : '—';
     }
 
     function sourceBars(sources) {
@@ -316,33 +353,27 @@ export const Dashboard = defineComponent({
     function lifecycleSegments(stages) {
       const stg = stages || {};
       const labels = {
-        extracted: '已提取', active: '活跃', decayed: '已衰减',
-        merged: '已合并', archived: '已归档', forgotten: '已遗忘',
+        extracted: t('dash.lc.extracted'), active: t('dash.lc.active'), decayed: t('dash.lc.decayed'),
+        merged: t('dash.lc.merged'), archived: t('dash.lc.archived'), forgotten: t('dash.lc.forgotten'),
       };
       const tones = {
         extracted: 'blue', active: 'green', decayed: 'amber',
         merged: 'purple', archived: 'slate', forgotten: 'rose',
+      };
+      const icons = {
+        extracted: '📥', active: '⚡', decayed: '📉',
+        merged: '⊕', archived: '🗄', forgotten: '🗑',
       };
       const order = ['extracted', 'active', 'decayed', 'merged', 'archived', 'forgotten'];
       const total = order.reduce((a, k) => a + (stg[k] || 0), 0) || 1;
       let acc = 0;
       return order.map(k => {
         const pct = ((stg[k] || 0) / total) * 100;
-        const seg = { key: k, label: labels[k], tone: tones[k], count: stg[k] || 0, pct, x: acc };
+        const seg = { key: k, label: labels[k], tone: tones[k], icon: icons[k], count: stg[k] || 0, pct, x: acc };
         acc += pct;
         return seg;
       });
     }
-
-    const lifecycleStyle = computed(() => {
-      if (!insights.value) return '';
-      const segs = lifecycleSegments(insights.value.stages);
-      if (!segs.length) return '';
-      return 'background: linear-gradient(90deg, ' + segs.map(s =>
-        'var(--tone-' + s.tone + ', #6366f1) ' + s.x + '%, ' +
-        'var(--tone-' + s.tone + ', #6366f1) ' + (s.x + s.pct) + '%'
-      ).join(', ') + ');';
-    });
 
     // Uptime derived from the oldest LLM audit record (matches the
     // legacy behaviour of "server has been recording for N").
@@ -361,11 +392,12 @@ export const Dashboard = defineComponent({
       store, t, insights, loading, live, lastRefresh,
       weeklyReport, weeklyLoading, weeklyError, weeklyDays, loadWeekly, copyWeekly,
       llmAudit, writeGuard, sourceHealth,
-      resolvingId, resolvePair,
-      KIND_TONE, STATUS_TONE, SOURCE_COLORS, STAGE_DEFS, SVGNS, ARCH, lifecycleStyle,
+      resolvingId, resolvePair, contradictionKey,
+      KIND_TONE, STATUS_TONE, SOURCE_COLORS, STAGE_DEFS, SVGNS, ARCH,
       fmtNum, truncate, timeAgo, sparkPath, fmtDuration, shortenPath,
       guardUptime, hist,
       ring, donutArcPaths, trendPoints, ingestBars, barsFor,
+      scoreDistributionTotal, peakScoreRange,
       sourceBars, pipelineBars, lifecycleSegments,
       onRefresh: refresh,
       onRunEvolution: () => window.dispatchEvent(new CustomEvent('loop:llm-run')),
@@ -401,71 +433,68 @@ export const Dashboard = defineComponent({
       </div>
 
       <div class="ins-kpi-11">
-        <div class="ins-kpi" data-tone="blue">
-          <div class="ik-label">{{ t('dash.kpi.total') }}</div>
-          <div class="ik-val">{{ fmtNum(insights.overview && insights.overview.total) }}</div>
-          <div class="ik-sub">{{ t('dash.kpi.totalSub2') }}{{ (insights.sources || []).length }} {{ t('dash.kpi.sourceCountUnit') }}</div>
-          <svg class="ik-spark" viewBox="0 0 100 18" preserveAspectRatio="none"><path :d="sparkPath(hist.total)"></path></svg>
+        <div class="ins-kpi-primary">
+          <div class="ins-kpi primary-metric" data-tone="blue">
+            <div class="ik-label">{{ t('dash.kpi.total') }}</div>
+            <div class="ik-val">{{ fmtNum(insights.overview && insights.overview.total) }}</div>
+            <div class="ik-sub">{{ t('dash.kpi.totalSub2') }}{{ (insights.sources || []).length }} {{ t('dash.kpi.sourceCountUnit') }}</div>
+            <svg class="ik-spark" viewBox="0 0 100 18" preserveAspectRatio="none"><path :d="sparkPath(hist.total)"></path></svg>
+          </div>
+          <div class="ins-kpi primary-metric" data-tone="green">
+            <div class="ik-label">{{ t('dash.kpi.today') }}</div>
+            <div class="ik-val">{{ fmtNum(insights.overview && insights.overview.today) }}</div>
+            <div class="ik-sub">{{ t('dash.kpi.todaySub') }}</div>
+            <svg class="ik-spark" viewBox="0 0 100 18" preserveAspectRatio="none"><path :d="sparkPath(hist.today)"></path></svg>
+          </div>
+          <div class="ins-kpi primary-metric" data-tone="amber">
+            <div class="ik-label">{{ t('dash.kpi.active') }}</div>
+            <div class="ik-val">{{ fmtNum(insights.overview && insights.overview.active) }}</div>
+            <div class="ik-sub">{{ fmtNum(insights.overview && insights.overview.active) }}/{{ fmtNum(insights.overview && insights.overview.total) }} {{ t('dash.kpi.ofTotal') }}</div>
+            <svg class="ik-spark" viewBox="0 0 100 18" preserveAspectRatio="none"><path :d="sparkPath(hist.active)"></path></svg>
+          </div>
+          <div class="ins-kpi primary-metric" data-tone="purple">
+            <div class="ik-label">{{ t('dash.kpi.avg') }}</div>
+            <div class="ik-val">{{ ((insights.overview && insights.overview.avg_score || 0) * 100).toFixed(0) }}%</div>
+            <div class="ik-sub">{{ t('dash.kpi.avgSub') }}</div>
+            <svg class="ik-spark" viewBox="0 0 100 18" preserveAspectRatio="none"><path :d="sparkPath(hist.avg)"></path></svg>
+          </div>
         </div>
-        <div class="ins-kpi" data-tone="green">
-          <div class="ik-label">{{ t('dash.kpi.today') }}</div>
-          <div class="ik-val">{{ fmtNum(insights.overview && insights.overview.today) }}</div>
-          <div class="ik-sub">{{ t('dash.kpi.todaySub') }}</div>
-          <svg class="ik-spark" viewBox="0 0 100 18" preserveAspectRatio="none"><path :d="sparkPath(hist.today)"></path></svg>
-        </div>
-        <div class="ins-kpi" data-tone="amber">
-          <div class="ik-label">{{ t('dash.kpi.active') }}</div>
-          <div class="ik-val">{{ fmtNum(insights.overview && insights.overview.active) }}</div>
-          <div class="ik-sub">{{ fmtNum(insights.overview && insights.overview.active) }}/{{ fmtNum(insights.overview && insights.overview.total) }} {{ t('dash.kpi.ofTotal') }}</div>
-          <svg class="ik-spark" viewBox="0 0 100 18" preserveAspectRatio="none"><path :d="sparkPath(hist.active)"></path></svg>
-        </div>
-        <div class="ins-kpi" data-tone="purple">
-          <div class="ik-label">{{ t('dash.kpi.links') }}</div>
-          <div class="ik-val">{{ fmtNum(insights.overview && insights.overview.links) }}</div>
-          <div class="ik-sub">{{ t('dash.kpi.linksSub') }}</div>
-          <svg class="ik-spark" viewBox="0 0 100 18" preserveAspectRatio="none"><path :d="sparkPath(hist.links)"></path></svg>
-        </div>
-        <div class="ins-kpi" data-tone="cyan">
-          <div class="ik-label">{{ t('dash.kpi.clusters') }}</div>
-          <div class="ik-val">{{ fmtNum(insights.overview && insights.overview.clusters) }}</div>
-          <div class="ik-sub">{{ fmtNum(insights.overview && insights.overview.clusters) }} {{ t('dash.kpi.groups') }}</div>
-          <svg class="ik-spark" viewBox="0 0 100 18" preserveAspectRatio="none"><path :d="sparkPath(hist.clusters)"></path></svg>
-        </div>
-        <div class="ins-kpi" data-tone="green">
-          <div class="ik-label">{{ t('dash.kpi.avg') }}</div>
-          <div class="ik-val">{{ ((insights.overview && insights.overview.avg_score || 0) * 100).toFixed(0) }}%</div>
-          <div class="ik-sub">{{ t('dash.kpi.avgSub') }}</div>
-          <svg class="ik-spark" viewBox="0 0 100 18" preserveAspectRatio="none"><path :d="sparkPath(hist.avg)"></path></svg>
-        </div>
-        <div class="ins-kpi" data-tone="rose">
-          <div class="ik-label">{{ t('dash.kpi.decay') }}</div>
-          <div class="ik-val">{{ ((insights.overview && insights.overview.decay_pct) || 0).toFixed(0) }}%</div>
-          <div class="ik-sub">{{ t('dash.kpi.decaySub') }}</div>
-          <svg class="ik-spark" viewBox="0 0 100 18" preserveAspectRatio="none"><path :d="sparkPath(hist.decay)"></path></svg>
-        </div>
-        <div class="ins-kpi" data-tone="purple">
-          <div class="ik-label">{{ t('dash.kpi.entities') }}</div>
-          <div class="ik-val">{{ fmtNum(insights.overview && insights.overview.entities) }}</div>
-          <div class="ik-sub">{{ t('dash.kpi.entitiesSub') }}</div>
-          <svg class="ik-spark" viewBox="0 0 100 18" preserveAspectRatio="none"><path :d="sparkPath(hist.entities)"></path></svg>
-        </div>
-        <div class="ins-kpi" data-tone="cyan">
-          <div class="ik-label">{{ t('dash.kpi.sources') }}</div>
-          <div class="ik-val">{{ fmtNum((insights.sources || []).reduce((a, b) => a + (b.count || 0), 0)) }}</div>
-          <div class="ik-sub">{{ (insights.sources || []).length }} {{ t('dash.kpi.distinct') }}</div>
-          <svg class="ik-spark" viewBox="0 0 100 18" preserveAspectRatio="none"></svg>
-        </div>
-        <div class="ins-kpi" data-tone="amber">
-          <div class="ik-label">{{ t('dash.kpi.wikiHealth') }}</div>
-          <div class="ik-val">{{ fmtNum(insights.wiki_health && insights.wiki_health.pages) }}</div>
-          <div class="ik-sub">{{ fmtNum(insights.wiki_health && insights.wiki_health.pages) }} {{ t('dash.kpi.pages') }} · {{ t('dash.src.wikiImp') }} {{ insights.wiki_health && insights.wiki_health.avg_importance ? Math.round(insights.wiki_health.avg_importance * 100) + '%' : '—' }}</div>
-          <svg class="ik-spark" viewBox="0 0 100 18" preserveAspectRatio="none"></svg>
-        </div>
-        <div class="ins-kpi" data-tone="rose">
-          <div class="ik-label">{{ t('dash.kpi.recall24h') }}</div>
-          <div class="ik-val">{{ fmtNum(insights.recall_24h && insights.recall_24h.total) }}</div>
-          <div class="ik-sub">{{ fmtNum(insights.recall_24h && insights.recall_24h.unique_memories) }} {{ t('dash.kpi.uniqueMems') }}</div>
-          <svg class="ik-spark" viewBox="0 0 100 18" preserveAspectRatio="none"></svg>
+        <div class="ins-kpi-secondary">
+          <div class="ins-kpi compact-metric" data-tone="purple">
+            <div class="ik-label">{{ t('dash.kpi.links') }}</div>
+            <div class="ik-val">{{ fmtNum(insights.overview && insights.overview.links) }}</div>
+            <div class="ik-sub">{{ t('dash.kpi.linksSub') }}</div>
+          </div>
+          <div class="ins-kpi compact-metric" data-tone="cyan">
+            <div class="ik-label">{{ t('dash.kpi.clusters') }}</div>
+            <div class="ik-val">{{ fmtNum(insights.overview && insights.overview.clusters) }}</div>
+            <div class="ik-sub">{{ fmtNum(insights.overview && insights.overview.clusters) }} {{ t('dash.kpi.groups') }}</div>
+          </div>
+          <div class="ins-kpi compact-metric" data-tone="rose">
+            <div class="ik-label">{{ t('dash.kpi.decay') }}</div>
+            <div class="ik-val">{{ ((insights.overview && insights.overview.decay_pct) || 0).toFixed(0) }}%</div>
+            <div class="ik-sub">{{ t('dash.kpi.decaySub') }}</div>
+          </div>
+          <div class="ins-kpi compact-metric" data-tone="purple">
+            <div class="ik-label">{{ t('dash.kpi.entities') }}</div>
+            <div class="ik-val">{{ fmtNum(insights.overview && insights.overview.entities) }}</div>
+            <div class="ik-sub">{{ t('dash.kpi.entitiesSub') }}</div>
+          </div>
+          <div class="ins-kpi compact-metric" data-tone="cyan">
+            <div class="ik-label">{{ t('dash.kpi.sources') }}</div>
+            <div class="ik-val">{{ fmtNum((insights.sources || []).reduce((a, b) => a + (b.count || 0), 0)) }}</div>
+            <div class="ik-sub">{{ (insights.sources || []).length }} {{ t('dash.kpi.distinct') }}</div>
+          </div>
+          <div class="ins-kpi compact-metric" data-tone="amber">
+            <div class="ik-label">{{ t('dash.kpi.wikiHealth') }}</div>
+            <div class="ik-val">{{ fmtNum(insights.wiki_health && insights.wiki_health.pages) }}</div>
+            <div class="ik-sub">{{ fmtNum(insights.wiki_health && insights.wiki_health.pages) }} {{ t('dash.kpi.pages') }} · {{ t('dash.src.wikiImp') }} {{ insights.wiki_health && insights.wiki_health.avg_importance ? Math.round(insights.wiki_health.avg_importance * 100) + '%' : '—' }}</div>
+          </div>
+          <div class="ins-kpi compact-metric" data-tone="rose">
+            <div class="ik-label">{{ t('dash.kpi.recall24h') }}</div>
+            <div class="ik-val">{{ fmtNum(insights.recall_24h && insights.recall_24h.total) }}</div>
+            <div class="ik-sub">{{ fmtNum(insights.recall_24h && insights.recall_24h.unique_memories) }} {{ t('dash.kpi.uniqueMems') }}</div>
+          </div>
         </div>
       </div>
 
@@ -523,11 +552,18 @@ export const Dashboard = defineComponent({
         <span class="bar"></span>
         <span class="right">{{ t('dash.lc.totalLabel') }} {{ fmtNum(Object.values(insights.stages || {}).reduce((a,b)=>a+(b||0),0)) }}</span>
       </div>
-      <div class="ins-lifecycle" :style="lifecycleStyle">
-        <div v-for="seg in lifecycleSegments(insights.stages)" :key="seg.key" class="ins-lc-stage" :data-tone="seg.tone">
-          <div class="ins-lc-icon" :data-tone="seg.tone">{{ seg.count }}</div>
+      <div class="ins-lifecycle">
+        <div v-for="(seg, index) in lifecycleSegments(insights.stages)" :key="seg.key"
+             class="ins-lc-stage" :class="{ active: seg.count > 0 }" :data-tone="seg.tone">
+          <div class="ins-lc-icon" :data-tone="seg.tone">{{ seg.icon }}</div>
+          <div class="ins-lc-val">{{ fmtNum(seg.count) }}</div>
           <div class="ins-lc-label">{{ seg.label }}</div>
           <div class="ins-lc-pct">{{ seg.pct.toFixed(0) }}%</div>
+          <div v-if="index < 5" class="ins-lc-flow" aria-hidden="true">
+            <span class="ins-lc-particle p1"></span>
+            <span class="ins-lc-particle p2"></span>
+            <span class="ins-lc-particle p3"></span>
+          </div>
         </div>
       </div>
     </div>
@@ -543,36 +579,50 @@ export const Dashboard = defineComponent({
       <div class="ins-pulse">
         <div class="ins-pulse-card">
           <div class="ins-pulse-head">
-            <span class="ins-pulse-title">⚠ {{ t('dash.pulse.contradict') }}</span>
+            <span class="ins-pulse-title"><span class="label-icon">⚠</span>{{ t('dash.pulse.contradict') }}</span>
             <span class="ins-pulse-count">{{ (insights.pulse.contradictions || []).length }} {{ t('dash.pulse.pairs') }}</span>
           </div>
           <div v-if="!(insights.pulse.contradictions || []).length" class="ins-pulse-empty">
             {{ t('dash.pulse.noConflicts') }}
           </div>
           <div v-else class="ins-citem-list">
-            <div v-for="pair in (insights.pulse.contradictions || []).slice(0, 4)" :key="(pair.a && pair.a.id || '') + '|' + (pair.b && pair.b.id || '')" class="ins-citem">
+            <div v-for="pair in (insights.pulse.contradictions || []).slice(0, 4)"
+                 :key="(pair.a && pair.a.id || '') + '|' + (pair.b && pair.b.id || '')"
+                 class="ins-citem" :class="{ resolving: resolvingId.startsWith(contradictionKey(pair) + '|') }">
               <div class="ins-citem-a"><b>A</b> · {{ truncate(pair.a && pair.a.text, 50) }}</div>
               <div class="ins-citem-b"><b>B</b> · {{ truncate(pair.b && pair.b.text, 50) }}</div>
               <div class="ins-citem-meta">
                 <span class="ins-citem-sim">sim {{ ((pair.similarity || 0) * 100).toFixed(0) }}%</span>
                 <div class="ins-citem-actions">
-                  <button class="btn xs" @click="resolvePair(pair, 'merge')" :disabled="resolvingId === ((pair.a && pair.a.id)+'|'+(pair.b && pair.b.id)+'|merge')">{{ t('dash.pulse.merge') }}</button>
-                  <button class="btn xs ghost" @click="resolvePair(pair, 'keepA')">{{ t('dash.pulse.keepA') }}</button>
-                  <button class="btn xs ghost" @click="resolvePair(pair, 'keepB')">{{ t('dash.pulse.keepB') }}</button>
-                  <button class="btn xs ghost" @click="resolvePair(pair, 'ignore')">{{ t('dash.pulse.ignore') }}</button>
+                  <button class="btn xs" @click="resolvePair(pair, 'merge')" :disabled="resolvingId.startsWith(contradictionKey(pair) + '|')">{{ t('dash.pulse.merge') }}</button>
+                  <button class="btn xs ghost" @click="resolvePair(pair, 'keepA')" :disabled="resolvingId.startsWith(contradictionKey(pair) + '|')">{{ t('dash.pulse.keepA') }}</button>
+                  <button class="btn xs ghost" @click="resolvePair(pair, 'keepB')" :disabled="resolvingId.startsWith(contradictionKey(pair) + '|')">{{ t('dash.pulse.keepB') }}</button>
+                  <button class="btn xs ghost" @click="resolvePair(pair, 'ignore')" :disabled="resolvingId.startsWith(contradictionKey(pair) + '|')">{{ t('dash.pulse.ignore') }}</button>
                 </div>
               </div>
             </div>
           </div>
         </div>
-        <div class="ins-pulse-card">
+        <div class="ins-pulse-card decay-card">
           <div class="ins-pulse-head">
-            <span class="ins-pulse-title">📊 {{ t('dash.pulse.decayDist') }}</span>
+            <span class="ins-pulse-title"><span class="label-icon">▥</span>{{ t('dash.pulse.decayDist') }}</span>
           </div>
-          <svg class="ins-decay-svg" viewBox="0 0 320 140" preserveAspectRatio="none" v-if="(insights.pulse.score_distribution || []).length">
+          <div class="ins-decay-meta" v-if="(insights.pulse.score_distribution || []).length">
+            <span>{{ t('dash.pulse.total') }} {{ fmtNum(scoreDistributionTotal(insights.pulse.score_distribution)) }} {{ t('dash.pulse.records') }}</span>
+            <span>{{ t('dash.pulse.peak') }} <b>{{ peakScoreRange(insights.pulse.score_distribution) }}</b></span>
+          </div>
+          <svg class="ins-decay-svg" viewBox="0 0 360 214" preserveAspectRatio="xMidYMid meet" v-if="(insights.pulse.score_distribution || []).length">
+            <defs>
+              <linearGradient id="decay-bar-grad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="var(--accent)" stop-opacity="0.95"></stop>
+                <stop offset="100%" stop-color="var(--accent)" stop-opacity="0.5"></stop>
+              </linearGradient>
+            </defs>
+            <line v-for="y in [65,102,139,176]" :key="y" x1="18" :y1="y" x2="352" :y2="y" class="ins-decay-grid"></line>
             <g v-for="(b, i) in barsFor(insights.pulse.score_distribution)" :key="i">
-              <rect :x="b.x" :y="b.y" :width="b.w" :height="b.h" class="ins-decay-bar" rx="2"></rect>
-              <text :x="b.x + b.w / 2" y="138" class="ins-decay-label">{{ b.label }}</text>
+              <rect :x="b.x" :y="b.y" :width="b.w" :height="b.h" class="ins-decay-bar" :data-empty="!b.count" rx="5"></rect>
+              <text v-if="b.count" :x="b.x + b.w / 2" :y="b.countY" class="ins-decay-value">{{ b.count }}</text>
+              <text :x="b.x + b.w / 2" :y="b.labelY" class="ins-decay-label">{{ b.label }}</text>
             </g>
           </svg>
           <div v-else class="ins-pulse-empty">—</div>
@@ -590,7 +640,7 @@ export const Dashboard = defineComponent({
       </div>
       <div class="ins-grid-2">
         <div class="ins-compression">
-          <div class="ins-pulse-title" style="margin-bottom:8px;">{{ t('dash.cmp.memComp') }}</div>
+          <div class="ins-pulse-title" style="margin-bottom:8px;"><span class="label-icon">🗜</span>{{ t('dash.cmp.memComp') }}</div>
           <div v-if="insights.compression" class="ins-cmp-stat-row">
             <div class="ins-cmp-stat">
               <div class="ins-cmp-stat-val">{{ fmtNum(insights.compression.compressible_count) }}</div>
@@ -619,7 +669,7 @@ export const Dashboard = defineComponent({
         </div>
 
         <div class="ins-gran" v-if="insights.granularity">
-          <div class="ins-pulse-title" style="margin-bottom:8px;">{{ t('dash.gran.title') }}</div>
+          <div class="ins-pulse-title" style="margin-bottom:8px;"><span class="label-icon">🔬</span>{{ t('dash.gran.title') }}</div>
           <div class="ins-gran-cols">
             <div class="ins-gran-col" data-tone="rose">
               <div class="ins-gran-col-head">
