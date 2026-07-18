@@ -55,11 +55,34 @@ export const App = defineComponent({
       try {
         const r = await api.llmStatus();
         store.runStatus = r || store.runStatus;
+        // Compute reachability from (api_key_set, last_test_ok, last_test_at).
+        //  - unset  : no key configured
+        //  - ok     : key set AND last_test_ok=true within the last 24h
+        //  - stale  : key set AND last_test_ok was true but >24h ago (or never)
+        //  - fail   : key set AND last_test_ok=false
+        const apiKeySet = !!r?.api_key_set;
+        const lastOk = r?.last_test_ok;
+        const lastAt = r?.last_test_at;
+        let reach = 'unset';
+        if (apiKeySet) {
+          if (lastOk === true) {
+            const ageMs = lastAt ? (Date.now() / 1000 - lastAt) * 1000 : Infinity;
+            reach = ageMs <= 24 * 3600 * 1000 ? 'ok' : 'stale';
+          } else if (lastOk === false) {
+            reach = 'fail';
+          } else {
+            reach = 'stale';
+          }
+        }
         store.modelInfo = {
           provider: r?.provider || 'rules',
           model: r?.model || 'rules',
-          api_key_set: !!r?.api_key_set,
+          api_key_set: apiKeySet,
           key_len: r?.key_len || 0,
+          reachability: reach,
+          last_test_ok: lastOk ?? null,
+          last_test_at: lastAt ?? null,
+          last_test_message: r?.last_test_message || '',
         };
         if (r?.last_run && r.last_run !== store.lastRunId) {
           store.lastRunId = r.last_run;

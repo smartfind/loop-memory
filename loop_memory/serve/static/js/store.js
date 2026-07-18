@@ -51,7 +51,13 @@ export const store = reactive({
   toastTimer:     null,
   runStatus:      { is_running: false, progress: { current: 0, total: 0, message: '' } },
   stats:          { memories: 0, sessions: 0, wiki_pages: 0, avg_score: 0, graph: '0/0', dbPath: '' },
-  modelInfo:      { provider: 'rules', model: 'rules', api_key_set: false, key_len: 0 },
+  modelInfo:      { provider: 'rules', model: 'rules', api_key_set: false, key_len: 0,
+                    // Reachability: 'unset' | 'ok' | 'stale' | 'fail'
+                    //   unset  — no key configured
+                    //   ok     — key set AND last test (or live run) succeeded recently
+                    //   stale  — key set, no recent test (treat as 'configured but unverified')
+                    //   fail   — key set, last test/error was a provider failure
+                    reachability: 'unset', last_test_ok: null, last_test_at: null, last_test_message: '' },
   stripDismissed: false,
   lastRunId:      null,
 });

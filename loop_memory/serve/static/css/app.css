@@ -180,12 +180,12 @@
      transparent;` which made the chip dissolve into the topbar; the
      user couldn't find the configure-model entry at all. */
   .model-chip {
-    display: inline-flex; align-items: center; gap: 10px;
-    padding: 0 12px 0 10px;
-    height: 38px;
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 0 10px 0 8px;
+    height: 34px;
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 10px;
+    border-radius: 9px;
     font-size: 12px;
     color: var(--text);
     cursor: pointer;
@@ -193,6 +193,11 @@
     transition: background .15s ease, border-color .15s ease, transform .15s ease;
     box-shadow: 0 1px 0 rgba(15,23,42,.04);
   }
+  /* Border tinted by reachability so the chip reads at-a-glance. */
+  .model-chip[data-reach="ok"]    { border-color: color-mix(in srgb, #10b981 45%, var(--border)); }
+  .model-chip[data-reach="stale"] { border-color: color-mix(in srgb, #10b981 28%, var(--border)); }
+  .model-chip[data-reach="fail"]  { border-color: color-mix(in srgb, #f59e0b 55%, var(--border)); }
+  .model-chip[data-reach="unset"] { border-color: color-mix(in srgb, #ef4444 45%, var(--border)); }
   [data-theme="dark"] .model-chip {
     background: color-mix(in srgb, var(--surface) 85%, #000);
     box-shadow: 0 1px 0 rgba(255,255,255,.03);
@@ -215,49 +220,64 @@
   }
   .model-chip .m-icon svg { width: 16px; height: 16px; display: block; }
   .model-chip .m-info {
-    display: flex; flex-direction: column;
-    line-height: 1.15;
-    min-width: 0;
-  }
-  .model-chip .m-label {
-    font-size: 10.5px;
-    color: var(--text-faint);
-    letter-spacing: .2px;
-    text-transform: uppercase;
-    font-weight: 600;
-  }
-  .model-chip .m-line {
-    display: flex; align-items: center; gap: 8px;
-    margin-top: 2px;
+    display: inline-flex; align-items: center; gap: 6px;
+    line-height: 1; min-width: 0;
   }
   .model-chip .m-name {
-    font-weight: 700; color: var(--text);
-    max-width: 130px;
+    font-weight: 600; color: var(--text);
+    max-width: 110px;
     overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
-    font-size: 13px;
+    font-size: 12.5px;
+    font-variant-numeric: tabular-nums;
   }
-  .model-chip .m-status {
-    display: inline-flex; align-items: center; gap: 4px;
-    padding: 1.5px 6px;
-    border-radius: 999px;
-    font-size: 10.5px; font-weight: 600;
-    line-height: 1;
+  /* Tiny status dot — the only on-screen indicator of reachability.
+     The full status text lives in the :title tooltip, keeping the
+     topbar narrow. */
+  .model-chip .m-dot {
+    position: relative;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    display: inline-grid; place-items: center;
+    flex-shrink: 0;
   }
-  .model-chip .m-status-icon { width: 11px; height: 11px; }
-  .model-chip[data-state="ok"] .m-status {
-    color: #10b981;
-    background: color-mix(in srgb, #10b981 14%, transparent);
-    border: 1px solid color-mix(in srgb, #10b981 30%, transparent);
+  .model-chip .m-dot-inner {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: currentColor;
+    box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 22%, transparent);
   }
-  .model-chip[data-state="warn"] .m-status {
-    color: #b45309;
-    background: color-mix(in srgb, #f59e0b 18%, transparent);
-    border: 1px solid color-mix(in srgb, #f59e0b 35%, transparent);
+  .model-chip[data-reach="ok"]    .m-dot { color: #10b981; }
+  .model-chip[data-reach="stale"] .m-dot { color: #10b981; }
+  .model-chip[data-reach="fail"]  .m-dot { color: #f59e0b; }
+  .model-chip[data-reach="unset"] .m-dot { color: #ef4444; }
+  /* Pulsing animation for the verified-reachable state. */
+  .model-chip[data-reach="ok"] .m-dot-inner {
+    animation: m-dot-pulse 2.2s ease-in-out infinite;
   }
-  [data-theme="dark"] .model-chip[data-state="warn"] .m-status {
-    color: #fbbf24;
+  /* Soft halo for unset (red) so the chip draws attention without
+     being noisy. */
+  .model-chip[data-reach="unset"] .m-dot-inner {
+    box-shadow: 0 0 0 2px color-mix(in srgb, #ef4444 18%, transparent),
+                0 0 0 4px color-mix(in srgb, #ef4444 8%, transparent);
   }
-  .model-chip .m-status-text { white-space: nowrap; }
+  .model-chip[data-reach="fail"] .m-dot-inner {
+    box-shadow: 0 0 0 2px color-mix(in srgb, #f59e0b 22%, transparent);
+  }
+  @keyframes m-dot-pulse {
+    0%, 100% {
+      box-shadow: 0 0 0 2px color-mix(in srgb, #10b981 22%, transparent),
+                  0 0 0 0   color-mix(in srgb, #10b981 0%, transparent);
+      transform: scale(1);
+    }
+    50% {
+      box-shadow: 0 0 0 2px color-mix(in srgb, #10b981 22%, transparent),
+                  0 0 0 5px color-mix(in srgb, #10b981 0%, transparent);
+      transform: scale(1.15);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .model-chip[data-reach="ok"] .m-dot-inner { animation: none; }
+  }
 
   /* Legacy hooks kept for backwards-compat (older DOM nodes); harmless. */
   .model-chip .dot, .model-chip .lock { display: none; }
