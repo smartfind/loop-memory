@@ -377,12 +377,72 @@ def account_for(provider: str, key: str = "api_key") -> str:
     return _account_for(provider, key)
 
 
+# Backends considered for *fallback* lookups (read-only). When the
+# chosen backend doesn't have an account, we ask the others in order
+# and on hit *migrate* the value into the chosen backend so subsequent
+# reads are fast and the canonical store stays simple (one file, 0600).
+_FALLBACK_BACKENDS: list = []
+
+def _candidate_backends():
+    """Return [active, *fallbacks] — active first, the rest in priority order.
+
+    The active backend is what ``_pick_backend()`` returned; it's also
+    where ``set_secret`` writes. Fallbacks are tried only on read miss
+    and migrated on hit, so the active store stays canonical.
+    """
+    active = _pick_backend()
+    out = [active]
+    sysname = platform.system()
+    fallback_classes = []
+    if sysname == "Darwin":
+        fallback_classes.append(MacOSKeychainStore)
+    elif sysname == "Linux":
+        fallback_classes.append(LinuxSecretServiceStore)
+    elif sysname == "Windows":
+        fallback_classes.append(WindowsCredentialStore)
+    for cls in fallback_classes:
+        if cls is type(active):
+            continue
+        try:
+            b = cls()
+        except Exception:
+            continue
+        out.append(b)
+    return out
+
+
 def get_secret(account: str) -> str | None:
+    """Look up a secret. Falls back across backends and migrates on hit.
+
+    On read miss in the active backend, we try each OS-native backend
+    in turn. If any of them has the value, we copy it into the active
+    backend (so future reads are local-file fast) and return it. This
+    keeps the canonical store simple while never losing a key that was
+    saved when a different backend was active.
+    """
+    active = _pick_backend()
     try:
-        return _pick_backend().get(account)
+        v = active.get(account)
+        if v:
+            return v
     except Exception as e:
-        log.warning("secret get failed for %s: %s", account, e)
+        log.warning("secret get failed for %s in active: %s", account, e)
         return None
+    # Active backend missed. Try the others and migrate on hit.
+    for b in _candidate_backends()[1:]:
+        try:
+            v = b.get(account)
+        except Exception as e:
+            log.debug("fallback get failed for %s in %s: %s", account, b.name, e)
+            continue
+        if v:
+            try:
+                active.set(account, v)
+                log.info("migrated secret %s from %s → %s", account, b.name, active.name)
+            except Exception as e:
+                log.warning("migration of %s to %s failed: %s", account, active.name, e)
+            return v
+    return None
 
 
 def set_secret(account: str, value: str) -> None:
