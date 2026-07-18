@@ -32,6 +32,18 @@ export const TopBar = defineComponent({
       return t('topbar.run.idle');
     });
 
+    // Model-chip tooltip — picks one of four i18n keys based on
+    // reachability. The chip itself is a small pill (icon + model
+    // name + tiny dot); the tooltip carries the full status text so
+    // the topbar stays narrow.
+    const modelChipTip = computed(() => {
+      const r = store.modelInfo.reachability || 'unset';
+      const provider = store.modelInfo.provider || 'rules';
+      const model = store.modelInfo.model || 'rules';
+      const ctx = { provider, model, msg: store.modelInfo.last_test_message || '' };
+      return t('model.tip.' + r, ctx);
+    });
+
     const runState = computed(() => store.runStatus && store.runStatus.is_running ? 'running' : 'idle');
 
     function toggleStats() { statsOpen.value = !statsOpen.value; toolsOpen.value = false; ingestOpen.value = false; }
@@ -51,7 +63,7 @@ export const TopBar = defineComponent({
     onUnmounted(() => document.removeEventListener('click', onDocClick));
 
     return {
-      store, t, runLabel, runState,
+      store, t, runLabel, runState, modelChipTip,
       statsOpen, toolsOpen, ingestOpen,
       toggleStats, toggleTools, toggleIngest, closeAll,
       setLang, setTheme,
@@ -124,9 +136,9 @@ export const TopBar = defineComponent({
       made the entry visually disappear into the topbar.
     -->
     <button class="model-chip" id="model-chip"
-            :data-state="store.modelInfo.api_key_set ? 'ok' : 'warn'"
+            :data-reach="store.modelInfo.reachability"
             role="button" type="button"
-            :title="store.modelInfo.api_key_set ? t('model.savedTip', { provider: store.modelInfo.provider, model: store.modelInfo.model }) : t('model.missingTip', { provider: store.modelInfo.provider, model: store.modelInfo.model })"
+            :title="modelChipTip"
             @click="onOpenSettings">
       <span class="m-icon">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
@@ -136,19 +148,9 @@ export const TopBar = defineComponent({
         </svg>
       </span>
       <span class="m-info">
-        <span class="m-label">{{ t('model.label') }}</span>
-        <span class="m-line">
-          <span class="m-name">{{ store.modelInfo.model || 'rules' }}</span>
-          <span class="m-status">
-            <svg v-if="store.modelInfo.api_key_set" class="m-status-icon ok" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-              <path d="M3 8.5l3.2 3 6.8-7.5" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-            <svg v-else class="m-status-icon warn" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
-              <path d="M8 2L15 14H1z" stroke-linejoin="round"/>
-              <path d="M8 6v4" stroke-linecap="round"/><circle cx="8" cy="12" r="0.7" fill="currentColor"/>
-            </svg>
-            <span class="m-status-text">{{ store.modelInfo.api_key_set ? t('model.keyOk') : t('model.keyWarn') }}</span>
-          </span>
+        <span class="m-name">{{ store.modelInfo.model || 'rules' }}</span>
+        <span class="m-dot" :data-reach="store.modelInfo.reachability" :aria-label="t('model.dot.' + store.modelInfo.reachability)">
+          <span class="m-dot-inner"></span>
         </span>
       </span>
     </button>
@@ -212,8 +214,12 @@ export const TopBar = defineComponent({
         <button :class="{ active: store.theme === 'light' }" :title="t('topbar.themeLight')" @click="setTheme('light')">☀</button>
         <button :class="{ active: store.theme === 'dark' }" :title="t('topbar.themeDark')" @click="setTheme('dark')">☾</button>
       </div>
-      <button class="icon-btn-circle settings-shortcut" :title="t('action.settings')" @click="onOpenSettings">
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="2.4"/><path d="M8 1.8v1.5M8 12.7v1.5M1.8 8h1.5M12.7 8h1.5M3.6 3.6l1 1M11.4 11.4l1 1M3.6 12.4l1-1M11.4 4.6l1-1"/></svg>
+      <button class="icon-btn-circle settings-shortcut" :title="t('topbar.settingsTip')" :aria-label="t('action.settings')" @click="onOpenSettings">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <!-- cog/gear — distinct from the sun icon used for theme toggle -->
+          <path d="M8 1.6l.6 1.4 1.4-.2.4 1.3 1.3.5-.2 1.4 1 .9-.7 1.2.6 1.2-1.2.6-.2 1.4-1.4.2-.5 1.3-1.3-.2-.9 1-1.2-.7-1.2.6-.6-1.2L2 11.7l-.2-1.4-1.3-.5.2-1.4-1-.9.7-1.2-.6-1.2 1.2-.6.2-1.4 1.4-.2.5-1.3 1.3.2.9-1z"/>
+          <circle cx="8" cy="8" r="2.4"/>
+        </svg>
       </button>
     </div>
   </div>

@@ -23,7 +23,7 @@
   "action.runNowQueued": "立即运行已加入队列",
   "action.runNowTip": "立即使用已配置模型执行整理任务",
   "action.save": "保存",
-  "action.settings": "设置",
+  "action.settings": "配置",
   "app.tagline": "本地版",
   "app.title": "循环记忆",
   "common.characters": "字符",
@@ -565,5 +565,14 @@
   "settings.schedule.hourlyHint": "每小时整点整理一次",
   "settings.schedule.intervalHint": "每 {n} 分钟整理一次",
   "settings.section.consolidationScope": "本板块以下设置只对「整理任务」生效，不影响知识图谱和周报",
-  "settings.behaviour.scope": "（仅作用于「整理任务」—— 其它 LLM 功能使用各自的默认参数）"
+  "settings.behaviour.scope": "（仅作用于「整理任务」—— 其它 LLM 功能使用各自的默认参数）",
+  "model.tip.ok": "大模型已配置并连通\n{provider} · {model}\n点击进入配置页",
+  "model.tip.stale": "大模型已配置，最近未连通验证\n{provider} · {model}\n点击进入配置页测试连通性",
+  "model.tip.fail": "大模型已配置但连通性失败\n{provider} · {model}\n{msg}\n点击进入配置页",
+  "model.tip.unset": "尚未配置大模型\n当前使用规则整理\n点击进入配置页",
+  "model.dot.ok": "已连通",
+  "model.dot.stale": "已配置",
+  "model.dot.fail": "连通失败",
+  "model.dot.unset": "未配置",
+  "topbar.settingsTip": "配置大模型、整理任务、知识图谱等"
 }

@@ -67,6 +67,12 @@ class _State:
     progress_started_at: float = 0.0
     progress_run_id: str | None = None
     progress_message: str = ""
+    # Connectivity probe state — updated by /api/admin/llm/test and by
+    # every successful real LLM call. Drives the top-bar model chip
+    # dot color (green pulsing vs static vs amber vs red).
+    last_test_ok: bool | None = None   # None = never tested
+    last_test_at: float = 0.0          # epoch seconds
+    last_test_message: str = ""
 
 
 class ConsolidatorScheduler:
@@ -102,6 +108,16 @@ class ConsolidatorScheduler:
     def status(self) -> dict[str, Any]:
         with self._lock:
             s = self._state
+            cfg = self._cfg or {}
+            # Check the secret backend for a stored API key. We do
+            # this here so the top-bar chip can show the right state
+            # without the frontend having to round-trip the keychain.
+            try:
+                from ..security import account_for, has_secret
+                account = cfg.get("api_key_account") or account_for(cfg.get("provider") or "echo")
+                key_set = has_secret(account)
+            except Exception:
+                key_set = False
             return {
                 "is_running": s.is_running,
                 "next_run": s.next_run if s.next_run > 0 else None,
@@ -109,10 +125,15 @@ class ConsolidatorScheduler:
                 "last_stats": s.last_stats,
                 "last_error": s.last_error,
                 "last_run_id": s.last_run_id,
-                "schedule": (self._cfg.get("schedule") or {}),
-                "behaviour": (self._cfg.get("behaviour") or {}),
-                "provider": self._cfg.get("provider"),
-                "model": self._cfg.get("model"),
+                "schedule": (cfg.get("schedule") or {}),
+                "behaviour": (cfg.get("behaviour") or {}),
+                "provider": cfg.get("provider"),
+                "model": cfg.get("model"),
+                "api_key_set": bool(key_set),
+                "api_key_fingerprint": cfg.get("api_key_fingerprint", "") or "",
+                "last_test_ok": s.last_test_ok,
+                "last_test_at": s.last_test_at if s.last_test_at > 0 else None,
+                "last_test_message": s.last_test_message,
                 "progress": {
                     "current": s.progress_current,
                     "total": s.progress_total,
@@ -121,6 +142,18 @@ class ConsolidatorScheduler:
                     "message": s.progress_message,
                 },
             }
+
+    def record_test_result(self, ok: bool, message: str = "") -> None:
+        """Stash the result of a connectivity probe.
+
+        Called by /api/admin/llm/test and any successful real LLM
+        call (so the top-bar dot stays in sync without forcing the
+        user to open the Settings drawer and click Test).
+        """
+        with self._lock:
+            self._state.last_test_ok = bool(ok)
+            self._state.last_test_at = time.time()
+            self._state.last_test_message = (message or "")[:200]
 
     def notify_ingest(self) -> None:
         """Mark 'something was just ingested' so realtime mode can fire."""
@@ -298,9 +331,22 @@ class ConsolidatorScheduler:
                 self._state.last_error = str(e)
                 self._state.last_run_id = run_id
                 self._state.last_run = time.time()
+                # If the run blew up while talking to the provider,
+                # remember it so the top-bar dot goes amber on the
+                # next page load.
+                if any(s in str(e).lower() for s in ("llm", "provider", "api", "http")):
+                    self._state.last_test_ok = False
+                    self._state.last_test_at = time.time()
+                    self._state.last_test_message = str(e)[:200]
             return {"run_id": run_id, "status": "error", "error": str(e)}
         d = stats.to_dict()
         self.store.finish_consolidation_run(run_id, "done", stats=d)
+        # The run successfully talked to the provider — promote the
+        # top-bar dot from "set but stale" to "verified reachable".
+        with self._lock:
+            self._state.last_test_ok = True
+            self._state.last_test_at = time.time()
+            self._state.last_test_message = "live run succeeded"
         # If the run produced or updated any wiki pages, refresh the
         # knowledge graph from the new distilled knowledge so the
         # graph tab stays in sync with the wiki.

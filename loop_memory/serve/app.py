@@ -1458,8 +1458,15 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
     @app.post("/api/admin/llm/test")
     async def llm_test_route(body: dict | None = None):
         """Smoke-test the LLM provider without writing to the store.
-        See handlers.llm_test for the body contract."""
-        return llm_test(store, body or {})
+        See handlers.llm_test for the body contract.
+
+        The result is also recorded on the scheduler so the top-bar
+        model chip can switch between green-pulsing (verified) and
+        amber (last test failed) without the user re-opening the
+        drawer.
+        """
+        sched = getattr(app.state, "scheduler", None)
+        return llm_test(store, body or {}, scheduler=sched)
 
     @app.get("/api/admin/llm/status")
     def llm_status():

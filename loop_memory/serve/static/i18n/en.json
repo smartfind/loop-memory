@@ -565,5 +565,14 @@
   "settings.schedule.hourlyHint": "On every hour boundary",
   "settings.schedule.intervalHint": "Every {n} minutes",
   "settings.section.consolidationScope": "The settings below only apply to the consolidation job — knowledge-graph and weekly report features use their own defaults",
-  "settings.behaviour.scope": "(only affects the consolidation job — other LLM features use their own defaults)"
+  "settings.behaviour.scope": "(only affects the consolidation job — other LLM features use their own defaults)",
+  "model.tip.ok": "LLM configured and reachable\n{provider} · {model}\nClick to open configuration",
+  "model.tip.stale": "LLM configured, not recently verified\n{provider} · {model}\nClick to test connectivity",
+  "model.tip.fail": "LLM configured but unreachable\n{provider} · {model}\n{msg}\nClick to open configuration",
+  "model.tip.unset": "LLM not configured\nUsing rule-based consolidator\nClick to configure",
+  "model.dot.ok": "Reachable",
+  "model.dot.stale": "Configured",
+  "model.dot.fail": "Unreachable",
+  "model.dot.unset": "Unset",
+  "topbar.settingsTip": "Configure LLM, consolidation schedule, knowledge graph, and more"
 }

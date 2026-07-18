@@ -101,7 +101,7 @@ def pipeline_stage_items(store, stage: str, limit: int = 50) -> dict:
     }
 
 
-def llm_test(store, body: dict) -> dict:
+def llm_test(store, body: dict, scheduler=None) -> dict:
     """Smoke-test the LLM provider without writing to the store.
 
     Accepts ``api_key`` in the body for one-off testing. The key is
@@ -109,6 +109,10 @@ def llm_test(store, body: dict) -> dict:
     the test finishes. The structured response lets the UI show *why*
     a key failed (status, provider_code, hint) instead of a wall of
     raw JSON.
+
+    If ``scheduler`` is passed, the test result is recorded on the
+    scheduler so the top-bar model chip dot can reflect connectivity
+    state in real time.
     """
     from ..llm.providers import (
         build_provider, default_config, validate_config, LLMHttpError,
@@ -175,6 +179,11 @@ def llm_test(store, body: dict) -> dict:
             max_tokens=10,
         )
         ok = bool((reply or "").strip())
+        if scheduler is not None:
+            try:
+                scheduler.record_test_result(ok, "ok" if ok else "empty reply")
+            except Exception:
+                pass
         return {
             **base_info,
             "ok": ok,
@@ -188,6 +197,11 @@ def llm_test(store, body: dict) -> dict:
             e.provider_code or "",
             e.provider_message or "",
         )
+        if scheduler is not None:
+            try:
+                scheduler.record_test_result(False, e.provider_message or hint)
+            except Exception:
+                pass
         return {
             **base_info,
             "ok": False,
@@ -200,6 +214,11 @@ def llm_test(store, body: dict) -> dict:
             },
         }
     except Exception as e:
+        if scheduler is not None:
+            try:
+                scheduler.record_test_result(False, str(e)[:200])
+            except Exception:
+                pass
         return {
             **base_info,
             "ok": False,
