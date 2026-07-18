@@ -1,10 +1,19 @@
 /**
  * Dashboard — Insights tab.
  *
- * Renders 10 KPI tiles + 3 ring meters + lifecycle + pulse + compression +
- * granularity + distribution + sources + pipeline latency + health/weekly
- * + LLM audit + write-guard + architecture loop. Every section defends
- * against missing fields so a partial /api/insights payload still renders.
+ * Renders 11 KPI tiles (with sparklines) + 3 ring meters + lifecycle +
+ * pulse + compression + granularity + distribution + sources + pipeline
+ * latency + health/weekly + LLM audit + write-guard + architecture loop.
+ * Every section defends against missing fields so a partial /api/insights
+ * payload still renders.
+ *
+ * Faithful to the legacy vanilla-JS dashboard (pre-Vue commit 8498eca):
+ * - 11 KPIs each with an `ik-spark` SVG fed by a rolling 60-sample history.
+ * - Sub-labels include live numbers (`from N sources`, `N/M of total`, …).
+ * - Each ring card has both the SVG centre value AND an `irc-val` below.
+ * - Architecture diagram has a title + subtitle above the ring, emoji
+ *   icons inside each node, and a file-anchor strip below.
+ * - WriteGuard header shows uptime (time since first audit record).
  */
 import { defineComponent, ref, computed, onMounted, onUnmounted } from 'https://unpkg.com/vue@3.4.38/dist/vue.esm-browser.prod.js';
 import { store, t, timeAgo } from '../store.js';
@@ -19,35 +28,62 @@ const STATUS_TONE = {
   active: 'green', decayed: 'amber', forgotten: 'rose', archived: 'slate',
 };
 const SOURCE_COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ec4899', '#06b6d4', '#a855f7', '#f43f5e'];
+
+// 7 stages with both an `icon` (emoji) and a `file` anchor used in the
+// bottom strip of the architecture diagram.
 const STAGE_DEFS = [
-  { key: 'capture',  tone: 'blue',   file: 'cli/main.py hook' },
-  { key: 'reflect',  tone: 'green',  file: 'engine/reflect.py' },
-  { key: 'score',    tone: 'amber',  file: 'jobs/consolidate.py' },
-  { key: 'store',    tone: 'purple', file: 'storage/sqlite_store.py' },
-  { key: 'recall',   tone: 'cyan',   file: 'serve/app.py /api/recall' },
-  { key: 'surface',  tone: 'rose',   file: 'mcp/ + graph/' },
-  { key: 'loopback', tone: 'amber',  file: 'cli/main.py install-hooks' },
+  { key: 'capture',  tone: 'blue',   icon: '📥', file: 'cli/main.py hook' },
+  { key: 'reflect',  tone: 'green',  icon: '🪞', file: 'engine/reflect.py' },
+  { key: 'score',    tone: 'amber',  icon: '⚖', file: 'jobs/consolidate.py' },
+  { key: 'store',    tone: 'purple', icon: '🗄', file: 'storage/sqlite_store.py' },
+  { key: 'recall',   tone: 'cyan',   icon: '🔍', file: 'serve/app.py /api/recall' },
+  { key: 'surface',  tone: 'rose',   icon: '📖', file: 'mcp/ + graph/' },
+  { key: 'loopback', tone: 'amber',  icon: '🔁', file: 'cli/main.py install-hooks' },
 ];
 
+// Pre-computed geometry for the architecture ring. R = ring radius, RR =
+// arc radius (slightly outside the ring so the animated arrow doesn't
+// cross the node cards).
 const ARCH = (() => {
-  const cx = 600, cy = 330, R = 280;
+  const W = 1200, H = 660;
+  const cx = 600, cy = 330, R = 220, RR = R + 14;
   const positions = STAGE_DEFS.map((s, i) => {
     const a = -Math.PI / 2 + i * (2 * Math.PI / STAGE_DEFS.length);
-    return { ...s, idx: i, x: cx + Math.cos(a) * R, y: cy + Math.sin(a) * R };
+    return { ...s, idx: i, a, x: cx + Math.cos(a) * R, y: cy + Math.sin(a) * R };
   });
   const arcs = positions.map((p, i) => {
     const n = STAGE_DEFS.length;
-    const a1 = -Math.PI / 2 + i * (2 * Math.PI / n) + 0.32;
-    const a2 = -Math.PI / 2 + ((i + 1) % n) * (2 * Math.PI / n) - 0.32;
-    const x1 = cx + Math.cos(a1) * R;
-    const y1 = cy + Math.sin(a1) * R;
-    const x2 = cx + Math.cos(a2) * R;
-    const y2 = cy + Math.sin(a2) * R;
+    const a1 = p.a + 0.32;
+    const a2 = positions[(i + 1) % n].a - 0.32;
+    const x1 = cx + Math.cos(a1) * RR;
+    const y1 = cy + Math.sin(a1) * RR;
+    const x2 = cx + Math.cos(a2) * RR;
+    const y2 = cy + Math.sin(a2) * RR;
     return { d: 'M' + x1.toFixed(1) + ' ' + y1.toFixed(1)
-      + ' A' + R + ' ' + R + ' 0 0 1 '
+      + ' A' + RR + ' ' + RR + ' 0 0 1 '
       + x2.toFixed(1) + ' ' + y2.toFixed(1) };
   });
-  return { cx, cy, positions, arcs };
+  // Spokes from each node to the hub edge.
+  const spokes = positions.map((p) => {
+    const dx = cx - p.x, dy = cy - p.y;
+    const d = Math.sqrt(dx * dx + dy * dy);
+    const ux = dx / d, uy = dy / d;
+    const x1 = p.x + ux * 67;     // NODE_W/2 + 2
+    const y1 = p.y + uy * 30;     // NODE_H/2 + 2
+    const x2 = cx - ux * 80;      // hub radius 78
+    const y2 = cy - uy * 80;
+    return { x1, y1, x2, y2 };
+  });
+  // File anchor strip at the bottom: 7 columns.
+  const legendY = H - 34;
+  const colW = W / STAGE_DEFS.length;
+  const anchors = STAGE_DEFS.map((s, i) => ({
+    key: s.key,
+    file: s.file,
+    cx: colW * i + colW / 2,
+    y: legendY,
+  }));
+  return { W, H, cx, cy, R, positions, arcs, spokes, anchors };
 })();
 
 function fmtNum(v) { return Number(v || 0).toLocaleString(); }
@@ -56,6 +92,21 @@ function truncate(s, n = 28) {
   return s.length > n ? s.slice(0, n - 1) + '…' : s;
 }
 function safeArr(x) { return Array.isArray(x) ? x : []; }
+function shortenPath(s, max = 22) {
+  if (!s) return '';
+  return s.length > max ? '…' + s.slice(-(max - 1)) : s;
+}
+
+// Format a duration in seconds as "Nd Nh" / "Nh Nm" / "Nm Ns".
+function fmtDuration(sec) {
+  sec = Math.max(0, Math.floor(sec || 0));
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor((sec % 86400) / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
 
 export const Dashboard = defineComponent({
   name: 'Dashboard',
@@ -73,7 +124,34 @@ export const Dashboard = defineComponent({
     const lastRefresh = ref(0);
     const resolvingId = ref('');
 
+    // Rolling history arrays for sparklines (max 60 samples).
+    const hist = {
+      total: [], today: [], active: [], links: [], clusters: [],
+      avg: [], decay: [], entities: [],
+    };
+
     let pollHandle = null;
+
+    function pushHistory(arr, v) {
+      arr.push(v);
+      if (arr.length > 60) arr.shift();
+    }
+
+    // Build an SVG `d` attribute for a sparkline.
+    function sparkPath(series, w = 100, h = 18) {
+      if (!series || series.length < 2) return '';
+      const max = Math.max(...series, 1);
+      const min = Math.min(...series, 0);
+      const range = (max - min) || 1;
+      const step = w / (series.length - 1);
+      let d = '';
+      series.forEach((v, i) => {
+        const x = i * step;
+        const y = h - ((v - min) / range) * (h - 4) - 2;
+        d += (i === 0 ? 'M' : 'L') + x.toFixed(1) + ' ' + y.toFixed(1) + ' ';
+      });
+      return d.trim();
+    }
 
     async function refresh() {
       loading.value = true;
@@ -104,6 +182,19 @@ export const Dashboard = defineComponent({
         llmAudit.value = audit;
         writeGuard.value = guard;
         lastRefresh.value = Date.now();
+
+        // Update sparkline history when new insights arrive.
+        if (insightsData?.overview) {
+          const o = insightsData.overview;
+          pushHistory(hist.total, o.total || 0);
+          pushHistory(hist.today, o.today || 0);
+          pushHistory(hist.active, o.active || 0);
+          pushHistory(hist.links, o.links || 0);
+          pushHistory(hist.clusters, o.clusters || 0);
+          pushHistory(hist.avg, o.avg_score || 0);
+          pushHistory(hist.decay, o.decay_pct || 0);
+          pushHistory(hist.entities, o.entities || 0);
+        }
       } catch (e) { live.value = false; }
       finally { loading.value = false; }
       await loadWeekly(weeklyDays.value);
@@ -253,6 +344,16 @@ export const Dashboard = defineComponent({
       ).join(', ') + ');';
     });
 
+    // Uptime derived from the oldest LLM audit record (matches the
+    // legacy behaviour of "server has been recording for N").
+    const guardUptime = computed(() => {
+      const recent = llmAudit.value?.recent || [];
+      if (!recent.length) return '—';
+      const oldest = Math.min(...recent.map(r => r.ts || 0));
+      if (!oldest) return '—';
+      return fmtDuration(Date.now() / 1000 - oldest);
+    });
+
     // reactive aliases for i18n
     void computed(() => store.lang);
 
@@ -262,7 +363,8 @@ export const Dashboard = defineComponent({
       llmAudit, writeGuard, sourceHealth,
       resolvingId, resolvePair,
       KIND_TONE, STATUS_TONE, SOURCE_COLORS, STAGE_DEFS, SVGNS, ARCH, lifecycleStyle,
-      fmtNum, truncate, timeAgo,
+      fmtNum, truncate, timeAgo, sparkPath, fmtDuration, shortenPath,
+      guardUptime, hist,
       ring, donutArcPaths, trendPoints, ingestBars, barsFor,
       sourceBars, pipelineBars, lifecycleSegments,
       onRefresh: refresh,
@@ -289,7 +391,7 @@ export const Dashboard = defineComponent({
       </div>
     </div>
 
-    <!-- 1. KPI tiles + ring meters -->
+    <!-- 1. KPI tiles (11) + ring meters -->
     <div class="ins-section" v-if="insights">
       <div class="ins-section-title">
         <span class="ico">📊</span>
@@ -297,17 +399,74 @@ export const Dashboard = defineComponent({
         <span class="bar"></span>
         <span class="right">{{ fmtNum(insights.overview && insights.overview.total) }} {{ t('dash.kpi.totalLabel') }}</span>
       </div>
+
       <div class="ins-kpi-11">
-        <div class="ins-kpi" data-tone="blue"><div class="ik-label">{{ t('dash.kpi.total') }}</div><div class="ik-val">{{ fmtNum(insights.overview && insights.overview.total) }}</div><div class="ik-sub">{{ t('dash.kpi.totalSub') }}</div></div>
-        <div class="ins-kpi" data-tone="green"><div class="ik-label">{{ t('dash.kpi.today') }}</div><div class="ik-val">{{ fmtNum(insights.overview && insights.overview.today) }}</div><div class="ik-sub">{{ t('dash.kpi.todaySub') }}</div></div>
-        <div class="ins-kpi" data-tone="amber"><div class="ik-label">{{ t('dash.kpi.active') }}</div><div class="ik-val">{{ fmtNum(insights.overview && insights.overview.active) }}</div><div class="ik-sub">{{ t('dash.kpi.activeSub') }}</div></div>
-        <div class="ins-kpi" data-tone="purple"><div class="ik-label">{{ t('dash.kpi.links') }}</div><div class="ik-val">{{ fmtNum(insights.overview && insights.overview.links) }}</div><div class="ik-sub">{{ t('dash.kpi.linksSub') }}</div></div>
-        <div class="ins-kpi" data-tone="cyan"><div class="ik-label">{{ t('dash.kpi.clusters') }}</div><div class="ik-val">{{ fmtNum(insights.overview && insights.overview.clusters) }}</div><div class="ik-sub">{{ t('dash.kpi.clustersSub') }}</div></div>
-        <div class="ins-kpi" data-tone="green"><div class="ik-label">{{ t('dash.kpi.avg') }}</div><div class="ik-val">{{ ((insights.overview && insights.overview.avg_score || 0) * 100).toFixed(0) }}%</div><div class="ik-sub">{{ t('dash.kpi.avgSub') }}</div></div>
-        <div class="ins-kpi" data-tone="rose"><div class="ik-label">{{ t('dash.kpi.decay') }}</div><div class="ik-val">{{ ((insights.overview && insights.overview.decay_pct) || 0).toFixed(0) }}%</div><div class="ik-sub">{{ t('dash.kpi.decaySub') }}</div></div>
-        <div class="ins-kpi" data-tone="purple"><div class="ik-label">{{ t('dash.kpi.entities') }}</div><div class="ik-val">{{ fmtNum(insights.overview && insights.overview.entities) }}</div><div class="ik-sub">{{ t('dash.kpi.entitiesSub') }}</div></div>
-        <div class="ins-kpi" data-tone="violet"><div class="ik-label">{{ t('dash.kpi.wiki') }}</div><div class="ik-val">{{ fmtNum(insights.wiki_health && insights.wiki_health.pages) }}</div><div class="ik-sub">{{ t('dash.kpi.wikiHealthSub') }}</div></div>
-        <div class="ins-kpi" data-tone="cyan"><div class="ik-label">{{ t('dash.kpi.recall24h') }}</div><div class="ik-val">{{ fmtNum(insights.recall_24h && insights.recall_24h.total) }}</div><div class="ik-sub">{{ fmtNum(insights.recall_24h && insights.recall_24h.unique_memories) }} {{ t('dash.kpi.uniqueMems') }}</div></div>
+        <div class="ins-kpi" data-tone="blue">
+          <div class="ik-label">{{ t('dash.kpi.total') }}</div>
+          <div class="ik-val">{{ fmtNum(insights.overview && insights.overview.total) }}</div>
+          <div class="ik-sub">{{ t('dash.kpi.totalSub2') }}{{ (insights.sources || []).length }} {{ t('dash.kpi.sourceCountUnit') }}</div>
+          <svg class="ik-spark" viewBox="0 0 100 18" preserveAspectRatio="none"><path :d="sparkPath(hist.total)"></path></svg>
+        </div>
+        <div class="ins-kpi" data-tone="green">
+          <div class="ik-label">{{ t('dash.kpi.today') }}</div>
+          <div class="ik-val">{{ fmtNum(insights.overview && insights.overview.today) }}</div>
+          <div class="ik-sub">{{ t('dash.kpi.todaySub') }}</div>
+          <svg class="ik-spark" viewBox="0 0 100 18" preserveAspectRatio="none"><path :d="sparkPath(hist.today)"></path></svg>
+        </div>
+        <div class="ins-kpi" data-tone="amber">
+          <div class="ik-label">{{ t('dash.kpi.active') }}</div>
+          <div class="ik-val">{{ fmtNum(insights.overview && insights.overview.active) }}</div>
+          <div class="ik-sub">{{ fmtNum(insights.overview && insights.overview.active) }}/{{ fmtNum(insights.overview && insights.overview.total) }} {{ t('dash.kpi.ofTotal') }}</div>
+          <svg class="ik-spark" viewBox="0 0 100 18" preserveAspectRatio="none"><path :d="sparkPath(hist.active)"></path></svg>
+        </div>
+        <div class="ins-kpi" data-tone="purple">
+          <div class="ik-label">{{ t('dash.kpi.links') }}</div>
+          <div class="ik-val">{{ fmtNum(insights.overview && insights.overview.links) }}</div>
+          <div class="ik-sub">{{ t('dash.kpi.linksSub') }}</div>
+          <svg class="ik-spark" viewBox="0 0 100 18" preserveAspectRatio="none"><path :d="sparkPath(hist.links)"></path></svg>
+        </div>
+        <div class="ins-kpi" data-tone="cyan">
+          <div class="ik-label">{{ t('dash.kpi.clusters') }}</div>
+          <div class="ik-val">{{ fmtNum(insights.overview && insights.overview.clusters) }}</div>
+          <div class="ik-sub">{{ fmtNum(insights.overview && insights.overview.clusters) }} {{ t('dash.kpi.groups') }}</div>
+          <svg class="ik-spark" viewBox="0 0 100 18" preserveAspectRatio="none"><path :d="sparkPath(hist.clusters)"></path></svg>
+        </div>
+        <div class="ins-kpi" data-tone="green">
+          <div class="ik-label">{{ t('dash.kpi.avg') }}</div>
+          <div class="ik-val">{{ ((insights.overview && insights.overview.avg_score || 0) * 100).toFixed(0) }}%</div>
+          <div class="ik-sub">{{ t('dash.kpi.avgSub') }}</div>
+          <svg class="ik-spark" viewBox="0 0 100 18" preserveAspectRatio="none"><path :d="sparkPath(hist.avg)"></path></svg>
+        </div>
+        <div class="ins-kpi" data-tone="rose">
+          <div class="ik-label">{{ t('dash.kpi.decay') }}</div>
+          <div class="ik-val">{{ ((insights.overview && insights.overview.decay_pct) || 0).toFixed(0) }}%</div>
+          <div class="ik-sub">{{ t('dash.kpi.decaySub') }}</div>
+          <svg class="ik-spark" viewBox="0 0 100 18" preserveAspectRatio="none"><path :d="sparkPath(hist.decay)"></path></svg>
+        </div>
+        <div class="ins-kpi" data-tone="purple">
+          <div class="ik-label">{{ t('dash.kpi.entities') }}</div>
+          <div class="ik-val">{{ fmtNum(insights.overview && insights.overview.entities) }}</div>
+          <div class="ik-sub">{{ t('dash.kpi.entitiesSub') }}</div>
+          <svg class="ik-spark" viewBox="0 0 100 18" preserveAspectRatio="none"><path :d="sparkPath(hist.entities)"></path></svg>
+        </div>
+        <div class="ins-kpi" data-tone="cyan">
+          <div class="ik-label">{{ t('dash.kpi.sources') }}</div>
+          <div class="ik-val">{{ fmtNum((insights.sources || []).reduce((a, b) => a + (b.count || 0), 0)) }}</div>
+          <div class="ik-sub">{{ (insights.sources || []).length }} {{ t('dash.kpi.distinct') }}</div>
+          <svg class="ik-spark" viewBox="0 0 100 18" preserveAspectRatio="none"></svg>
+        </div>
+        <div class="ins-kpi" data-tone="amber">
+          <div class="ik-label">{{ t('dash.kpi.wikiHealth') }}</div>
+          <div class="ik-val">{{ fmtNum(insights.wiki_health && insights.wiki_health.pages) }}</div>
+          <div class="ik-sub">{{ fmtNum(insights.wiki_health && insights.wiki_health.pages) }} {{ t('dash.kpi.pages') }} · {{ t('dash.src.wikiImp') }} {{ insights.wiki_health && insights.wiki_health.avg_importance ? Math.round(insights.wiki_health.avg_importance * 100) + '%' : '—' }}</div>
+          <svg class="ik-spark" viewBox="0 0 100 18" preserveAspectRatio="none"></svg>
+        </div>
+        <div class="ins-kpi" data-tone="rose">
+          <div class="ik-label">{{ t('dash.kpi.recall24h') }}</div>
+          <div class="ik-val">{{ fmtNum(insights.recall_24h && insights.recall_24h.total) }}</div>
+          <div class="ik-sub">{{ fmtNum(insights.recall_24h && insights.recall_24h.unique_memories) }} {{ t('dash.kpi.uniqueMems') }}</div>
+          <svg class="ik-spark" viewBox="0 0 100 18" preserveAspectRatio="none"></svg>
+        </div>
       </div>
 
       <div class="ins-rings">
@@ -321,6 +480,7 @@ export const Dashboard = defineComponent({
           </svg>
           <div class="irc-info">
             <div class="irc-label"><span class="ico">💎</span>{{ t('dash.ring.occ') }}</div>
+            <div class="irc-val">{{ ((insights.overview && insights.overview.occupation) || 0).toFixed(0) }}%</div>
             <div class="irc-sub">{{ t('dash.ring.occSub') }}</div>
           </div>
         </div>
@@ -334,6 +494,7 @@ export const Dashboard = defineComponent({
           </svg>
           <div class="irc-info">
             <div class="irc-label"><span class="ico">🔗</span>{{ t('dash.ring.cite') }}</div>
+            <div class="irc-val">{{ ((insights.overview && insights.overview.citation) || 0).toFixed(0) }}%</div>
             <div class="irc-sub">{{ t('dash.ring.citeSub') }}</div>
           </div>
         </div>
@@ -347,6 +508,7 @@ export const Dashboard = defineComponent({
           </svg>
           <div class="irc-info">
             <div class="irc-label"><span class="ico">📉</span>{{ t('dash.ring.decay') }}</div>
+            <div class="irc-val">{{ ((insights.overview && insights.overview.decay) || 0).toFixed(0) }}%</div>
             <div class="irc-sub">{{ t('dash.ring.decaySub') }}</div>
           </div>
         </div>
@@ -522,7 +684,7 @@ export const Dashboard = defineComponent({
           </div>
         </div>
         <div class="ins-dist-card">
-          <div class="ins-dist-title">📈 状态分布</div>
+          <div class="ins-dist-title">📈 {{ t('dash.dist.statusTitle') }}</div>
           <div class="dist-list">
             <div v-for="row in (insights.distribution.status || [])" :key="row.status" class="dist-row">
               <span class="dist-label">
@@ -538,7 +700,7 @@ export const Dashboard = defineComponent({
           </div>
         </div>
         <div class="ins-dist-card">
-          <div class="ins-dist-title">📈 7日趋势</div>
+          <div class="ins-dist-title">📈 {{ t('dash.dist.trendTitle') }}</div>
           <svg class="ins-trend-svg" viewBox="0 0 300 140" preserveAspectRatio="none">
             <defs>
               <linearGradient id="dist-trend-grad" x1="0" y1="0" x2="0" y2="1">
@@ -578,7 +740,7 @@ export const Dashboard = defineComponent({
                   :stroke-dasharray="a.dasharray" :stroke-dashoffset="a.dashoffset"></circle>
               </g>
               <text x="65" y="65" text-anchor="middle" font-size="10" fill="var(--text-faint)">{{ t('common.sources') }}</text>
-              <text x="65" y="83" text-anchor="middle" font-size="14" font-weight="700" fill="var(--text)">{{ (insights.sources || []).length }}</text>
+              <text x="65" y="83" text-anchor="middle" font-size="14" font-weight="700" fill="var(--text)">{{ (insights.sources || []).reduce((a,b)=>a+(b.count||0),0).toLocaleString() }}</text>
             </svg>
             <div class="ins-src-legend">
               <div v-for="(row, i) in sourceBars(insights.sources)" :key="row.source" class="ins-src-legend-item">
@@ -695,7 +857,7 @@ export const Dashboard = defineComponent({
     <!-- 9. LLM Audit + WriteGuard -->
     <div class="ins-section" v-if="insights">
       <div class="ins-section-title">
-        <span class="ico">🧠</span>
+        <span class="ico">🔬</span>
         <span>{{ t('dash.audit.title') }}</span>
         <span class="bar"></span>
         <span class="right">{{ t('dash.audit.sub') }}</span>
@@ -719,7 +881,10 @@ export const Dashboard = defineComponent({
           <div v-else class="muted" style="font-size:11px;">{{ t('dash.audit.empty') }}</div>
         </div>
         <div class="ins-guard-card">
-          <div class="ins-guard-title"><span>🛡 {{ t('dash.audit.guard') }}</span></div>
+          <div class="ins-guard-title">
+            <span>🛡 {{ t('dash.audit.guard') }}</span>
+            <span style="margin-left:auto;font-size:10.5px;color:var(--text-faint);">uptime {{ guardUptime }}</span>
+          </div>
           <div class="ins-guard-stats" v-if="writeGuard">
             <div class="ins-guard-stat" data-tone="duplicate"><div class="ins-guard-stat-val">{{ fmtNum((writeGuard.totals && writeGuard.totals.duplicate) || writeGuard.duplicate) }}</div><div class="ins-guard-stat-lbl">{{ t('dash.audit.duplicate') }}</div></div>
             <div class="ins-guard-stat" data-tone="too_long"><div class="ins-guard-stat-val">{{ fmtNum((writeGuard.totals && writeGuard.totals.too_long) || writeGuard.too_long) }}</div><div class="ins-guard-stat-lbl">{{ t('dash.audit.tooLong') }}</div></div>
@@ -742,31 +907,55 @@ export const Dashboard = defineComponent({
       <div class="ins-arch-wrap">
         <svg class="ins-arch-svg" viewBox="0 0 1200 660" preserveAspectRatio="xMidYMid meet">
           <defs>
-            <marker id="arch-arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
-              <path d="M0,0 L0,6 L9,3 z" fill="var(--accent)"></path>
+            <marker id="arch-arrow" markerWidth="10" markerHeight="10" refX="6" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L0,6 L7,3 z" fill="var(--accent)"></path>
             </marker>
             <linearGradient id="arch-hub-grad" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stop-color="color-mix(in srgb, var(--accent) 28%, var(--surface))"></stop>
               <stop offset="100%" stop-color="var(--surface)"></stop>
             </linearGradient>
           </defs>
-          <g transform="translate(600,330)">
-            <circle r="80" fill="url(#arch-hub-grad)" stroke="var(--accent)" stroke-width="2"></circle>
-            <text text-anchor="middle" font-size="14" font-weight="700" fill="var(--text)" y="-4">{{ t('dash.arch.coreData') }}</text>
-            <text text-anchor="middle" font-size="11" fill="var(--text-faint)" y="14">{{ t('dash.arch.coreStore') }}</text>
-          </g>
-          <g v-for="s in ARCH.positions" :key="s.key">
-            <rect :x="s.x - 70" :y="s.y - 32" width="140" height="64" rx="10" :class="'ins-arch-node-bg tone-' + s.tone"></rect>
-            <text :x="s.x" :y="s.y - 6" text-anchor="middle" font-size="12" font-weight="600" fill="var(--text)">
-              {{ s.idx + 1 }}. {{ t('dash.arch.' + s.key, s.key) }}
+
+          <!-- Title + subtitle above the ring -->
+          <text :x="ARCH.cx" y="38" text-anchor="middle" font-size="14" font-weight="700" fill="var(--text)">
+            {{ t('dash.arch.loopTitle') }}
+          </text>
+          <text :x="ARCH.cx" y="56" text-anchor="middle" font-size="11" fill="var(--text-faint)">
+            {{ t('dash.arch.loopSub') }}
+          </text>
+
+          <!-- Outer ring path (dashed) -->
+          <circle :cx="ARCH.cx" :cy="ARCH.cy" :r="ARCH.R" fill="none" stroke="var(--border)" stroke-width="1.5" stroke-dasharray="4 4"></circle>
+
+          <!-- Center hub -->
+          <circle :cx="ARCH.cx" :cy="ARCH.cy" r="78" fill="url(#arch-hub-grad)" stroke="var(--accent)" stroke-width="2"></circle>
+          <text :x="ARCH.cx" :y="ARCH.cy - 6" text-anchor="middle" font-size="13" font-weight="700" fill="var(--text)">loop_memory</text>
+          <text :x="ARCH.cx" :y="ARCH.cy + 12" text-anchor="middle" font-size="10" fill="var(--text-faint)">{{ t('dash.arch.coreStore') }}</text>
+          <text :x="ARCH.cx" :y="ARCH.cy + 26" text-anchor="middle" font-size="10" fill="var(--text-faint)">{{ t('dash.arch.coreData') }}</text>
+
+          <!-- 7 nodes + spokes + labels -->
+          <g v-for="(s, i) in ARCH.positions" :key="s.key">
+            <rect :x="s.x - 67" :y="s.y - 28" width="134" height="56" rx="10" :class="'ins-arch-node-bg tone-' + s.tone"></rect>
+            <text :x="s.x - 50" :y="s.y + 5" text-anchor="middle" font-size="16">{{ s.icon }}</text>
+            <text :x="s.x + 8" :y="s.y - 4" text-anchor="middle" font-size="11" font-weight="600" fill="var(--text)">
+              {{ t('dash.arch.' + s.key, s.key) }}
             </text>
-            <text :x="s.x" :y="s.y + 12" text-anchor="middle" font-size="9.5" fill="var(--text-faint)">
+            <text :x="s.x + 8" :y="s.y + 10" text-anchor="middle" font-size="9.5" fill="var(--text-faint)">
               {{ t('dash.arch.' + s.key + 'Sub', s.file) }}
             </text>
-            <line :x1="s.x" :y1="s.y + (s.y < ARCH.cy ? -32 : 32)" :x2="ARCH.cx" :y2="ARCH.cy" stroke="var(--border)" stroke-width="1" stroke-dasharray="2 3"></line>
+            <line :x1="ARCH.spokes[i].x1" :y1="ARCH.spokes[i].y1" :x2="ARCH.spokes[i].x2" :y2="ARCH.spokes[i].y2" stroke="var(--border)" stroke-width="1" stroke-dasharray="2 3"></line>
           </g>
-          <g>
-            <path v-for="(a, i) in ARCH.arcs" :key="'arc-' + i" class="ins-arch-edge animated" :d="a.d" marker-end="url(#arch-arrow)"></path>
+
+          <!-- 7 animated arc edges (clockwise flow) -->
+          <path v-for="(a, i) in ARCH.arcs" :key="'arc-' + i" class="ins-arch-edge animated" :d="a.d" marker-end="url(#arch-arrow)"></path>
+
+          <!-- File anchor strip at the bottom -->
+          <g v-for="(a, i) in ARCH.anchors" :key="'anchor-' + a.key">
+            <rect :x="a.cx - (ARCH.W / ARCH.positions.length) / 2 + 6" :y="a.y - 18" :width="ARCH.W / ARCH.positions.length - 12" height="28" rx="6" fill="var(--surface-2)" stroke="var(--border)" stroke-width="1"></rect>
+            <text :x="a.cx" :y="a.y - 5" text-anchor="middle" font-size="10" font-weight="600" fill="var(--text)">
+              {{ i + 1 }}. {{ t('dash.arch.' + a.key, a.key) }}
+            </text>
+            <text :x="a.cx" :y="a.y + 6" text-anchor="middle" font-size="9" fill="var(--text-faint)">{{ shortenPath(a.file) }}</text>
           </g>
         </svg>
       </div>

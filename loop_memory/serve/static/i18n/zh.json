@@ -520,5 +520,8 @@
   "wiki.titlePlaceholder": "简洁的标题",
   "wiki.versionTip": "版本 {n}",
   "wiki.view": "查看",
-  "wiki.viewEvidence": "跳转到源记忆"
+  "wiki.viewEvidence": "跳转到源记忆",
+  "topbar.rebuildGraph": "重建知识图谱",
+  "topbar.doctor": "运行 Doctor",
+  "common.close": "关闭"
 }

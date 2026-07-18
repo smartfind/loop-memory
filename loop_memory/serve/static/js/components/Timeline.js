@@ -1,23 +1,30 @@
 /**
  * Timeline — the "memory list" view, the default tab.
  *
- * Shows a reverse-chronological list of memories with kind badges, scores,
- * source labels and inline tags. Search uses the unified `/api/recall`
- * endpoint so Chinese tokenisation + importance ranking both apply.
- *
- * Filters (kind, score, date range) live in component-local state. The
- * query string is passed straight to the API.
+ * Faithful to the legacy vanilla-JS renderTimeline (pre-Vue 8498eca):
+ * - Each card shows: kind-icon (emoji), kind label, polish-spark ✨ if
+ *   the memory was AI-distilled (updated_at > created_at), full kind
+ *   label, source chip, relative time, full timestamp, score %, body,
+ *   visual score-bar, importance %, tags, and a copy-to-clipboard
+ *   action button.
+ * - Search uses /api/recall so Chinese tokenisation + importance
+ *   ranking both apply. Filters (kind, score, date range) live in
+ *   component-local state.
  */
-import { defineComponent, ref, computed, onMounted, watch, h } from 'https://unpkg.com/vue@3.4.38/dist/vue.esm-browser.prod.js';
-import { store, t, escapeHtml, timeAgo } from '../store.js';
+import { defineComponent, ref, computed, onMounted, watch } from 'https://unpkg.com/vue@3.4.38/dist/vue.esm-browser.prod.js';
+import { store, t, escapeHtml, timeAgo, fmtTime, toast } from '../store.js';
 import { api } from '../api.js';
 
-const KIND_LABELS = {
-  episode:  'Episode',
-  fact:     'Fact',
-  rule:     'Rule',
-  scratch:  'Scratch',
-  summary:  'Summary',
+const KIND_ICON = {
+  fact: '#',
+  episode: '⏵',
+  plan: '✱',
+  reflection: '✦',
+  turn: '↻',
+  rule: '§',
+  summary: '∑',
+  scratch: '·',
+  concept: '◇',
 };
 
 export const Timeline = defineComponent({
@@ -31,14 +38,6 @@ export const Timeline = defineComponent({
     const minScore = ref(0);
     const since = ref('');
     const until = ref('');
-
-    const sources = computed(() => {
-      const set = new Set();
-      for (const m of memories.value) {
-        if (m.source) set.add(m.source);
-      }
-      return Array.from(set).sort();
-    });
 
     async function refresh() {
       loading.value = true;
@@ -59,7 +58,6 @@ export const Timeline = defineComponent({
           });
           rows = Array.isArray(data) ? data : (data.memories || data.items || []);
         }
-        // Apply client-side filters that the API doesn't expose yet
         if (kind.value) rows = rows.filter(r => r.kind === kind.value);
         if (minScore.value) rows = rows.filter(r => (r.score || r.importance || 0) >= Number(minScore.value));
         memories.value = rows;
@@ -82,7 +80,21 @@ export const Timeline = defineComponent({
 
     function scoreFmt(s) {
       if (s == null) return '—';
-      return (s * 100).toFixed(0) + '%';
+      return (s * 100).toFixed(1) + '%';
+    }
+
+    function kindIcon(k) { return KIND_ICON[k] || '·'; }
+
+    function isPolished(m) {
+      // AI-distilled if the memory was rewritten after creation
+      return m && m.updated_at && m.created_at && (m.updated_at - m.created_at) > 1;
+    }
+
+    async function onCopy(m) {
+      try {
+        await navigator.clipboard?.writeText(m.text || '');
+        toast(t('toast.copied'));
+      } catch (e) { /* ignore */ }
     }
 
     function onClickMemory(m) {
@@ -90,13 +102,12 @@ export const Timeline = defineComponent({
     }
 
     onMounted(() => refresh());
-    // Refresh on stats changes (new memories ingested)
     watch(() => store.stats.memories, refresh);
 
     return {
       store, t, memories, recallMeta, loading, q, kind, minScore, since, until,
-      sources, KIND_LABELS,
-      refresh, resetFilters, onSearchSubmit, scoreFmt, onClickMemory, timeAgo,
+      refresh, resetFilters, onSearchSubmit, scoreFmt, kindIcon, isPolished,
+      onCopy, onClickMemory, timeAgo, fmtTime, KIND_ICON,
     };
   },
   template: /* html */ `
@@ -109,7 +120,8 @@ export const Timeline = defineComponent({
         <option value="episode">{{ t('kind.episode') }}</option>
         <option value="fact">{{ t('kind.fact') }}</option>
         <option value="rule">{{ t('kind.rule') }}</option>
-        <option value="summary">{{ t('kind.summary') }}</option>
+        <option value="plan">{{ t('kind.plan') }}</option>
+        <option value="reflection">{{ t('kind.reflection') }}</option>
       </select>
       <input type="number" v-model.number="minScore" min="0" max="1" step="0.05" :placeholder="t('timeline.minScore')" @change="refresh" />
       <input type="date" v-model="since" @change="refresh" :title="t('timeline.since')" />
@@ -127,18 +139,33 @@ export const Timeline = defineComponent({
     </div>
 
     <div class="tl-list" v-if="memories.length">
-      <article v-for="m in memories" :key="m.id" class="tl-card"
-               :class="{ active: store.activeMemory === m.id }"
+      <article v-for="m in memories" :key="m.id"
+               class="bubble kind-{{ m.kind || 'turn' }}"
+               :class="{ active: store.activeMemory === m.id, polished: isPolished(m) }"
+               :data-id="m.id"
                @click="onClickMemory(m)">
-        <div class="tl-head">
-          <span class="src-badge" :data-source="m.source">{{ m.source || '—' }}</span>
-          <span class="kind" :class="'kind-' + (m.kind || '')">{{ t('kind.' + (m.kind || 'episode')) }}</span>
-          <span class="score" :title="t('timeline.score')">{{ scoreFmt(m.score ?? m.importance) }}</span>
-          <span class="ts">{{ timeAgo(m.created_at) }}</span>
+        <div class="head">
+          <span class="kind-icon">{{ kindIcon(m.kind) }}</span>
+          <span style="font-weight:600;color:var(--text-mute);">{{ t('kind.' + (m.kind || 'episode')) }}</span>
+          <span v-if="isPolished(m)" class="polish-spark">✨ {{ store.lang === 'zh' ? '已浓缩' : 'AI' }}</span>
+          <span>·</span>
+          <span :title="fmtTime(m.created_at)">{{ timeAgo(m.created_at) }}</span>
+          <span v-if="m.source">·</span>
+          <span v-if="m.source" class="src-chip" :class="m.source">{{ m.source }}</span>
+          <span style="flex:1"></span>
+          <span>{{ scoreFmt(m.score ?? m.importance) }}</span>
         </div>
-        <div class="tl-body">{{ m.text }}</div>
-        <div class="tl-tags" v-if="m.tags && m.tags.length">
-          <span v-for="tag in m.tags" :key="tag" class="tag">#{{ tag }}</span>
+        <div class="text">{{ m.text }}</div>
+        <div class="score-bar"><span :style="{ width: scoreFmt(m.score ?? m.importance) }"></span></div>
+        <div class="foot">
+          <span class="meta-item">{{ t('common.importance') }} <strong>{{ Math.round((m.importance || 0) * 100) }}%</strong></span>
+          <span v-if="m.tags && m.tags.length" class="meta-item">
+            <code>{{ m.tags.slice(0, 4).join(', ') }}</code>
+          </span>
+          <span class="meta-item" :title="fmtTime(m.created_at)">{{ fmtTime(m.created_at) }}</span>
+        </div>
+        <div class="actions">
+          <button type="button" :title="t('timeline.copy')" @click.stop="onCopy(m)">⧉</button>
         </div>
       </article>
     </div>

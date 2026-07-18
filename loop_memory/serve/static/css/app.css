@@ -2835,3 +2835,102 @@
     .ins-health-row { grid-template-columns: 1fr; }
   }
 
+
+/* ===== Knowledge graph (Vue side panel + legend + toolbar additions) ===== */
+.stat-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-mute);
+}
+.stat-pill strong { color: var(--text); font-weight: 600; }
+.graph-toolbar .tb-action.active {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  border-color: var(--accent);
+}
+.graph-shell {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 480px;
+  background: var(--graph-bg, transparent);
+}
+.graph-side {
+  position: absolute;
+  top: 12px; right: 12px;
+  width: 320px;
+  max-height: calc(100% - 24px);
+  overflow: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md, 0 4px 12px rgba(0,0,0,0.10));
+  padding: 14px 16px;
+  z-index: 3;
+  font-size: 13px;
+}
+.graph-side-head { display: flex; align-items: flex-start; gap: 8px; }
+.graph-side-head h3 { margin: 0 0 6px; font-size: 15px; font-weight: 600; }
+.graph-side-close {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  width: 24px; height: 24px;
+  font-size: 16px;
+  cursor: pointer;
+  color: var(--text-mute);
+}
+.graph-side-close:hover { color: var(--text); border-color: var(--accent); }
+.graph-side-meta { display: flex; gap: 6px; margin-bottom: 4px; }
+.graph-side h4 {
+  margin: 14px 0 6px; font-size: 11px;
+  text-transform: uppercase; color: var(--text-faint);
+  letter-spacing: 1px; font-weight: 600;
+}
+.rel-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 0;
+  border-bottom: 1px dashed var(--border);
+}
+.rel-row .rel-name { flex: 1; min-width: 0; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.rel-row .badge {
+  background: var(--accent-soft); color: var(--accent-strong);
+  border-radius: 999px; padding: 1px 6px;
+  font-size: 11px; font-weight: 600;
+}
+.rel-empty, .evidence-empty {
+  color: var(--text-faint); font-size: 12px; font-style: italic;
+}
+.evidence-row {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.evidence-row:hover { border-color: var(--accent); }
+.graph-legend {
+  position: absolute; bottom: 12px; left: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  display: flex; gap: 12px; font-size: 11px;
+  color: var(--text-mute);
+  z-index: 3;
+}
+.graph-legend .dot {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  margin-right: 4px;
+  vertical-align: middle;
+}

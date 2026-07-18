@@ -520,5 +520,8 @@
   "wiki.titlePlaceholder": "Short, descriptive title",
   "wiki.versionTip": "Version {n}",
   "wiki.view": "View",
-  "wiki.viewEvidence": "Jump to source memory"
+  "wiki.viewEvidence": "Jump to source memory",
+  "topbar.rebuildGraph": "Rebuild graph",
+  "topbar.doctor": "Run doctor",
+  "common.close": "Close"
 }

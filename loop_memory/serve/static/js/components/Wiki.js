@@ -7,7 +7,7 @@
  * function that hand-built HTML strings — Vue's template syntax is
  * significantly easier to scan and edit.
  */
-import { defineComponent, ref, computed, onMounted, watch } from 'https://unpkg.com/vue@3.4.38/dist/vue.esm-browser.prod.js';
+import { defineComponent, ref, computed, onMounted, onUnmounted, watch } from 'https://unpkg.com/vue@3.4.38/dist/vue.esm-browser.prod.js';
 import { store, t, escapeHtml, fmtTime } from '../store.js';
 import { api } from '../api.js';
 import { WikiEditor } from './WikiEditor.js';
@@ -93,7 +93,26 @@ export const Wiki = defineComponent({
       return lines.slice(0, 3).join('\n');
     }
 
-    onMounted(() => refresh());
+    async function openWikiBySlug(slug) {
+      if (!slug) return;
+      try {
+        const list = await api.listWiki();
+        const found = (list || []).find(x => x.slug === slug || x.title === slug);
+        if (found) editing.value = found.id;
+      } catch (e) { /* ignore */ }
+    }
+    function onOpenWiki(e) {
+      const slug = (e && e.detail && e.detail.slug) || '';
+      store.activeTab = 'wiki';
+      openWikiBySlug(slug);
+    }
+    onMounted(() => {
+      refresh();
+      window.addEventListener('loop-memory:open-wiki', onOpenWiki);
+    });
+    onUnmounted(() => {
+      window.removeEventListener('loop-memory:open-wiki', onOpenWiki);
+    });
     watch(() => store.stats.wiki_pages, refresh);
 
     return {

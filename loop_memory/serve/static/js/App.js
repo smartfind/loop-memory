@@ -3,7 +3,7 @@
  *
  * Renders: TopBar, Sidebar, Tabs, the active tab pane, Settings drawer,
  * RunStrip, Toast, Diagnostic modal. Listens for cross-component events
- * (ingest, rescore, llm-run, run-now) and calls the API.
+ * (ingest, rescore, llm-run, run-now, rebuild-graph) and calls the API.
  *
  * The store is the cross-component bus: every component reads from it
  * (lang, theme, stats, runStatus, activeTab) and a few write to it
@@ -11,7 +11,7 @@
  * Components DO NOT call each other directly — the App listens to user
  * events emitted by TopBar and orchestrates API calls.
  */
-import { defineComponent, ref, computed, onMounted, onUnmounted, watch } from 'https://unpkg.com/vue@3.4.38/dist/vue.esm-browser.prod.js';
+import { defineComponent, ref, computed, onMounted, onUnmounted, watch, nextTick } from 'https://unpkg.com/vue@3.4.38/dist/vue.esm-browser.prod.js';
 import { store, t, applyTheme, applyLang, loadI18n, toast } from './store.js';
 import { api } from './api.js';
 
@@ -43,7 +43,7 @@ export const App = defineComponent({
           ...store.stats,
           memories: data.memories, sessions: data.sessions,
           wiki_pages: data.wiki_pages || 0, avg_score: data.avg_score,
-          graph: data.entities ? `${data.entities}/${data.entities}` : '0/0',  // entities not in stats — fallback to 0/0
+          graph: data.entities ? `${data.entities}/${data.entities}` : '0/0',
           dbPath: data.path,
         };
       } catch (e) { /* ignore */ }
@@ -59,7 +59,6 @@ export const App = defineComponent({
           api_key_set: !!r?.api_key_set,
           key_len: r?.key_len || 0,
         };
-        // Trigger refresh of child components when run count changed
         if (r?.last_run && r.last_run !== store.lastRunId) {
           store.lastRunId = r.last_run;
           refreshStats();
@@ -84,18 +83,27 @@ export const App = defineComponent({
       await loadI18n();
       applyTheme();
       applyLang();
-      // Force re-render of all components that depend on i18n
       store.ready = true;
       refreshStats();
       refreshRunStatus();
       statusPoll = setInterval(refreshRunStatus, 3000);
       modelPoll = setInterval(refreshStats, 8000);
+      // Cmd+D shortcut — open Doctor diagnostic modal.
+      window.addEventListener('keydown', onGlobalKeydown);
     });
 
     onUnmounted(() => {
       if (statusPoll) clearInterval(statusPoll);
       if (modelPoll) clearInterval(modelPoll);
+      window.removeEventListener('keydown', onGlobalKeydown);
     });
+
+    function onGlobalKeydown(e) {
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'd' || e.key === 'D')) {
+        e.preventDefault();
+        diagOpen.value = true;
+      }
+    }
 
     // --- Action handlers ---
     async function onIngest() {
@@ -126,10 +134,38 @@ export const App = defineComponent({
     function onOpenDiag() { diagOpen.value = true; }
     function onOpenStats() { /* legacy stats popover — delegated to TopBar */ }
 
+    async function onRebuildGraph() {
+      // Switch to the graph tab first so the user sees progress; the
+      // KnowledgeGraph component itself owns the rebuild request now.
+      store.activeTab = 'graph';
+      // Wait a tick so the KG is mounted, then trigger its handler.
+      await nextTick();
+      window.dispatchEvent(new CustomEvent('loop-memory:rebuild-graph'));
+    }
+
+    async function onConsolidate() {
+      // Trigger LLM-driven consolidation (a.k.a. AI Run) — uses the same
+      // endpoint as the topbar's "AI Run" button, just navigated via kebab.
+      try {
+        const r = await api.llmRun({});
+        if (r.queued) toast(t('action.llmRunQueued'), 2000);
+      } catch (e) {
+        toast(t('common.error') + ': ' + e.message, 4000);
+      }
+    }
+
+    async function onOpenWiki(payload) {
+      // From graph dblclick: switch to wiki tab and request the editor to open.
+      store.activeTab = 'wiki';
+      await nextTick();
+      window.dispatchEvent(new CustomEvent('loop-memory:open-wiki', { detail: payload || {} }));
+    }
+
     return {
       store, t, settingsOpen, diagOpen,
       onIngest, onRescore, onLlmRun, onRunNow,
       onOpenSettings, onOpenStats, onOpenDiag,
+      onRebuildGraph, onOpenWiki,
       dismissStrip: () => { store.stripDismissed = true; },
     };
   },
@@ -137,7 +173,9 @@ export const App = defineComponent({
 <div class="app-shell">
   <TopBar @ingest="onIngest" @rescore="onRescore"
           @llm-run="onLlmRun" @run-now="onRunNow"
-          @open-settings="onOpenSettings" @open-diag="onOpenDiag" />
+          @open-settings="onOpenSettings" @open-diag="onOpenDiag"
+          @rebuild-graph="onRebuildGraph"
+          @consolidate="onConsolidate" />
   <div class="app-body">
     <Sidebar />
     <main class="content">
@@ -146,7 +184,8 @@ export const App = defineComponent({
         <Timeline v-show="store.activeTab === 'timeline'" />
         <Dashboard v-show="store.activeTab === 'dashboard'" />
         <Wiki v-show="store.activeTab === 'wiki'" />
-        <KnowledgeGraph v-show="store.activeTab === 'graph'" />
+        <KnowledgeGraph v-show="store.activeTab === 'graph'"
+                        @open-wiki="onOpenWiki" />
       </div>
     </main>
   </div>

@@ -15,13 +15,13 @@ import { api, ApiError } from '../api.js';
 
 export const TopBar = defineComponent({
   name: 'TopBar',
-  emits: ['ingest', 'rescore', 'llm-run', 'run-now', 'open-settings', 'open-stats', 'open-diag'],
+  emits: ['ingest', 'rescore', 'llm-run', 'run-now', 'open-settings', 'open-stats', 'open-diag', 'rebuild-graph', 'consolidate'],
   setup(props, { emit }) {
     const statsOpen = ref(false);
     const kebabOpen = ref(false);
 
     const runLabel = computed(() => {
-      if (store.runStatus?.is_running) {
+      if (store.runStatus && store.runStatus.is_running) {
         const p = store.runStatus.progress || {};
         if (p.total > 0) return `${p.current}/${p.total}`;
         return '…';
@@ -29,7 +29,7 @@ export const TopBar = defineComponent({
       return t('topbar.run.idle');
     });
 
-    const runState = computed(() => store.runStatus?.is_running ? 'running' : 'idle');
+    const runState = computed(() => store.runStatus && store.runStatus.is_running ? 'running' : 'idle');
 
     function toggleStats() { statsOpen.value = !statsOpen.value; kebabOpen.value = false; }
     function toggleKebab() { kebabOpen.value = !kebabOpen.value; statsOpen.value = false; }
@@ -38,7 +38,6 @@ export const TopBar = defineComponent({
     function setLang(l) { patchPrefs({ lang: l }); closeAll(); }
     function setTheme(th) { patchPrefs({ theme: th }); closeAll(); }
 
-    // Close popovers on outside click
     function onDocClick(e) {
       if (!e.target.closest('#stats-chip') && !e.target.closest('#stats-pop')) statsOpen.value = false;
       if (!e.target.closest('.tb-kebab') && !e.target.closest('.tb-kebab-menu')) kebabOpen.value = false;
@@ -58,6 +57,8 @@ export const TopBar = defineComponent({
       onOpenSettings:() => emit('open-settings'),
       onOpenStats:   () => emit('open-stats'),
       onOpenDiag:    () => emit('open-diag'),
+      onRebuildGraph:() => { closeAll(); emit('rebuild-graph'); },
+      onConsolidate:  () => { closeAll(); emit('consolidate'); },
     };
   },
   template: /* html */ `
@@ -151,6 +152,10 @@ export const TopBar = defineComponent({
         <button class="menu-item" :class="{ active: store.theme === 'auto' }" @click="setTheme('auto')">Auto</button>
         <button class="menu-item" :class="{ active: store.theme === 'light' }" @click="setTheme('light')">Light</button>
         <button class="menu-item" :class="{ active: store.theme === 'dark' }" @click="setTheme('dark')">Dark</button>
+        <hr/>
+        <button class="menu-item" @click="onRebuildGraph">{{ t('topbar.rebuildGraph') }}</button>
+        <button class="menu-item" @click="onOpenDiag" title="Cmd+D">{{ t('topbar.doctor') }}</button>
+        <button class="menu-item" @click="onConsolidate">{{ t('action.consolidate') }}</button>
         <hr/>
         <button class="menu-item" @click="onOpenSettings">{{ t('action.settings') }}</button>
       </div>
