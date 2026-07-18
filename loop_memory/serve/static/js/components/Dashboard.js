@@ -235,7 +235,29 @@ export const Dashboard = defineComponent({
           insights.value.pulse.contradictions = insights.value.pulse.contradictions
             .filter(item => contradictionKey(item) !== contradictionKey(pair));
         }
-        toast(action === 'ignore' ? t('dash.pulse.resolvedIgnore') : t('dash.pulse.resolvedDel'), 2400);
+        const payload = await res.json().catch(() => ({}));
+        let toastKey = 'dash.pulse.resolvedDel';
+        let toastVars = undefined;
+        if (action === 'ignore') {
+          toastKey = 'dash.pulse.resolvedIgnore';
+        } else if (action === 'merge') {
+          if (payload && payload.merged) {
+            // Show a 'merged both into one' message; if the loser's text was
+            // actually appended (rather than being a substring already
+            // present in the winner), include the new total length.
+            toastKey = payload.appended
+              ? 'dash.pulse.resolvedMergeAppended'
+              : 'dash.pulse.resolvedMerge';
+            if (payload.appended) {
+              toastVars = { length: fmtNum(payload.new_length || 0) };
+            }
+          } else {
+            // One side was already missing — we still cleaned up.
+            toastKey = 'dash.pulse.resolvedMergeOneGone';
+          }
+        }
+        // keepA / keepB still delete the loser side
+        toast(toastVars ? t(toastKey, toastVars) : t(toastKey), 2400);
         void refresh();
       } catch (e) {
         toast(t('dash.pulse.resolvedErr') + (e?.message || 'resolve failed'), 3200);

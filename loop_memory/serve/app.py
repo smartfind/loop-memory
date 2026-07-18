@@ -1114,7 +1114,8 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
 
         ``action``:
           - ``ignore``  — hide this pair from future pulses (default)
-          - ``merge``   — keep the higher-scored side, delete the loser
+          - ``merge``   — fuse the two into one memory (winner keeps its
+            row, loser's text is appended, the loser is deleted)
           - ``keepA``   — explicitly delete side B
           - ``keepB``   — explicitly delete side A
         """
@@ -1135,28 +1136,32 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
             except Exception:
                 pass
         elif action == "merge":
-            # Keep the higher-scored side, delete the other.
-            ma = store.get_memory(a_id)
-            mb = store.get_memory(b_id)
-            if ma is None and mb is None:
-                raise HTTPException(404, "neither memory exists")
-            if ma is None:
-                loser, winner = a_id, b_id
-            elif mb is None:
-                loser, winner = b_id, a_id
-            else:
-                # Keep the HIGHER-scored side; delete the LOWER-scored one.
-                # Tie-break: keep A (the first one surfaced in the pulse).
-                if (ma.score or 0) >= (mb.score or 0):
-                    winner, loser = a_id, b_id
-                else:
-                    winner, loser = b_id, a_id
-            store.delete_memory(loser)
-            result["deleted"].append({"id": loser, "kept": winner})
+            # True fusion: keep the higher-scored side as the row that
+            # survives, append the loser's text to it (de-duplicated),
+            # bump importance/score to the max of the two, then delete
+            # the loser in the same transaction. ``merge_memories``
+            # also writes the pair into ``contradiction_ignored`` so
+            # the pulse does not surface it again.
             try:
-                store.record_signal(winner, positive=True)
-            except Exception:
-                pass
+                merge_info = store.merge_memories(a_id, b_id)
+            except ValueError as e:
+                raise HTTPException(400, str(e))
+            if not merge_info.get("merged"):
+                # One of the sides was already gone; nothing to merge.
+                result["merged"] = False
+                result["loser"] = merge_info.get("lost")
+                if merge_info.get("reason") == "neither_exists":
+                    raise HTTPException(404, "neither memory exists")
+            else:
+                result["merged"] = True
+                result["winner"] = merge_info["kept"]
+                result["loser"] = merge_info["lost"]
+                result["appended"] = merge_info.get("appended", False)
+                result["new_length"] = merge_info.get("new_length", 0)
+                try:
+                    store.record_signal(merge_info["kept"], positive=True)
+                except Exception:
+                    pass
         elif action in ("keepa", "keepb"):
             loser = b_id if action == "keepa" else a_id
             store.delete_memory(loser)

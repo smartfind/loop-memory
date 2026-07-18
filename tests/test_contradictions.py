@@ -72,22 +72,88 @@ class ContradictionResolveTests(unittest.TestCase):
             self.assertIsNone(self.store.get_memory(self.b.id))
             self.assertTrue(self.store.is_contradiction_ignored(self.a.id, self.b.id))
 
-    def test_resolve_endpoint_merge_keeps_higher_scored(self):
+    def test_resolve_endpoint_merge_fuses_text_into_winner(self):
+        """``merge`` should fuse the two memories into one: loser's text is
+        appended onto the winner (with a separator), score/importance are
+        bumped to the max, and the loser is deleted. The pair must also
+        be marked ignored so it does not resurface in the pulse."""
         from fastapi.testclient import TestClient
         from loop_memory.serve.app import create_app
-        # Force A to have higher score than B so the merge keeps A.
+        # Force A (winner) higher than B (loser) on score.
         with self.store._conn() as conn:
             conn.execute("UPDATE memories SET score=? WHERE id=?", (0.95, self.a.id))
             conn.execute("UPDATE memories SET score=? WHERE id=?", (0.20, self.b.id))
+            conn.execute("UPDATE memories SET importance=? WHERE id=?", (0.55, self.a.id))
+            conn.execute("UPDATE memories SET importance=? WHERE id=?", (0.40, self.b.id))
         app = create_app(self.store)
         with TestClient(app) as c:
             r = c.post(f"/api/contradictions/resolve?a={self.a.id}&b={self.b.id}&action=merge")
             self.assertEqual(r.status_code, 200, r.text)
             data = r.json()
+            # Action reports the new semantics, not the old 'deleted' array.
             self.assertEqual(data["action"], "merge")
-            self.assertEqual(len(data["deleted"]), 1)
-            self.assertEqual(data["deleted"][0]["kept"], self.a.id)
-            self.assertEqual(data["deleted"][0]["id"], self.b.id)
+            self.assertTrue(data.get("merged"))
+            self.assertEqual(data["winner"], self.a.id)
+            self.assertEqual(data["loser"], self.b.id)
+            self.assertTrue(data["appended"])
+
+        # Winner still exists, now with appended loser's text.
+        winner = self.store.get_memory(self.a.id)
+        self.assertIsNotNone(winner)
+        a_text = winner.text
+        # The winner's original text + the separator + loser's text.
+        self.assertIn(self.b.text, a_text)
+        self.assertIn("---", a_text)
+        # Loser is gone.
+        self.assertIsNone(self.store.get_memory(self.b.id))
+        # Importance / score are the max of the pair.
+        self.assertAlmostEqual(winner.importance, 0.55, places=4)
+        self.assertAlmostEqual(winner.score, 0.95, places=4)
+        # The pair is now hidden so the pulse will not resurface it.
+        self.assertTrue(self.store.is_contradiction_ignored(self.a.id, self.b.id))
+
+    def test_resolve_endpoint_merge_skips_append_when_subset(self):
+        """If the loser's text is already contained in the winner's, the
+        merge must not duplicate text; it should still delete the loser."""
+        from fastapi.testclient import TestClient
+        from loop_memory.serve.app import create_app
+        # Make B's text a strict substring of A's so the merge is a no-op
+        # for content even though it still deletes the loser row.
+        with self.store._conn() as conn:
+            conn.execute(
+                "UPDATE memories SET score=?, text=? WHERE id=?",
+                (0.9, "User preferences collected so far: " + self.b.text, self.a.id),
+            )
+            conn.execute(
+                "UPDATE memories SET score=? WHERE id=?",
+                (0.1, self.b.id),
+            )
+        app = create_app(self.store)
+        with TestClient(app) as c:
+            r = c.post(f"/api/contradictions/resolve?a={self.a.id}&b={self.b.id}&action=merge")
+            self.assertEqual(r.status_code, 200, r.text)
+            data = r.json()
+            self.assertTrue(data["merged"])
+            self.assertFalse(data["appended"])
+        winner = self.store.get_memory(self.a.id)
+        self.assertIsNotNone(winner)
+        self.assertEqual(winner.text.count("---"), 0)
+        self.assertIsNone(self.store.get_memory(self.b.id))
+
+    def test_resolve_endpoint_merge_tie_keeps_a(self):
+        """Ties should resolve to side A; new semantics still report winner."""
+        from fastapi.testclient import TestClient
+        from loop_memory.serve.app import create_app
+        with self.store._conn() as conn:
+            conn.execute("UPDATE memories SET score=? WHERE id=?", (0.5, self.a.id))
+            conn.execute("UPDATE memories SET score=? WHERE id=?", (0.5, self.b.id))
+        app = create_app(self.store)
+        with TestClient(app) as c:
+            r = c.post(f"/api/contradictions/resolve?a={self.a.id}&b={self.b.id}&action=merge")
+            self.assertEqual(r.status_code, 200, r.text)
+            data = r.json()
+            self.assertEqual(data["winner"], self.a.id)
+            self.assertEqual(data["loser"], self.b.id)
 
     def test_resolve_endpoint_ignore_keeps_both_but_hides_pair(self):
         from fastapi.testclient import TestClient
