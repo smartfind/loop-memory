@@ -116,13 +116,42 @@ export const TopBar = defineComponent({
   <div class="spacer"></div>
 
   <div class="group-right topbar-command-bar">
-    <span class="model-chip" id="model-chip" :data-state="store.modelInfo.api_key_set ? 'ok' : 'off'" role="button" tabindex="0"
-          :title="t('model.configureTip')" @click="onOpenSettings">
-      <span class="dot"></span>
-      <span>{{ t('model.label') }}</span>
-      <span class="model-name">{{ store.modelInfo.model || 'rules' }}</span>
-      <svg class="lock" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 015 0v2"/></svg>
-    </span>
+    <!--
+      Model entry — always shows provider + status so users know
+      (a) which model is in use, (b) whether an API key has been set,
+      and (c) that clicking opens the configurator. The previous
+      design had transparent background + transparent border, which
+      made the entry visually disappear into the topbar.
+    -->
+    <button class="model-chip" id="model-chip"
+            :data-state="store.modelInfo.api_key_set ? 'ok' : 'warn'"
+            role="button" type="button"
+            :title="store.modelInfo.api_key_set ? t('model.savedTip', { provider: store.modelInfo.provider, model: store.modelInfo.model }) : t('model.missingTip', { provider: store.modelInfo.provider, model: store.modelInfo.model })"
+            @click="onOpenSettings">
+      <span class="m-icon">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+          <circle cx="8" cy="8" r="3"/>
+          <path d="M2.5 8h2M11.5 8h2M8 2.5v2M8 11.5v2"/>
+          <path d="M3.8 3.8l1.4 1.4M10.8 10.8l1.4 1.4M3.8 12.2l1.4-1.4M10.8 5.2l1.4-1.4"/>
+        </svg>
+      </span>
+      <span class="m-info">
+        <span class="m-label">{{ t('model.label') }}</span>
+        <span class="m-line">
+          <span class="m-name">{{ store.modelInfo.model || 'rules' }}</span>
+          <span class="m-status">
+            <svg v-if="store.modelInfo.api_key_set" class="m-status-icon ok" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M3 8.5l3.2 3 6.8-7.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <svg v-else class="m-status-icon warn" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
+              <path d="M8 2L15 14H1z" stroke-linejoin="round"/>
+              <path d="M8 6v4" stroke-linecap="round"/><circle cx="8" cy="12" r="0.7" fill="currentColor"/>
+            </svg>
+            <span class="m-status-text">{{ store.modelInfo.api_key_set ? t('model.keyOk') : t('model.keyWarn') }}</span>
+          </span>
+        </span>
+      </span>
+    </button>
 
     <div class="tb-command-group">
       <div class="tb-ingest">

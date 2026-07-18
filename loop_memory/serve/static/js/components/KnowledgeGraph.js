@@ -523,7 +523,46 @@ export const KnowledgeGraph = defineComponent({
     }
     function zoomIn() { zoomBy(1.25); }
     function zoomOut() { zoomBy(1 / 1.25); }
-    function fit() { fitToCanvas(); drawCanvas(); }
+    /* Fit-to-window: animate scale + translate over ~260ms so the
+     * user can SEE the refit motion even when the graph is already
+     * roughly in place. The previous instant teleport produced a
+     * zero-pixel diff against the previous frame, so the button
+     * looked broken. */
+    let fitTweenRaf = null;
+    function fit() {
+      // Snapshot the pre-fit transform FIRST, then compute the new
+      // fit, then tween from snapshot → new transform in a rAF loop.
+      const start = {
+        scale: graphLayout.scale,
+        tx: graphLayout.tx,
+        ty: graphLayout.ty,
+      };
+      fitToCanvas();  // mutates graphLayout in place to the new fit
+      const target = {
+        scale: graphLayout.scale,
+        tx: graphLayout.tx,
+        ty: graphLayout.ty,
+      };
+      // Restore start values so the tween animates from old → new
+      graphLayout.scale = start.scale;
+      graphLayout.tx = start.tx;
+      graphLayout.ty = start.ty;
+      const dur = 260;
+      const t0 = performance.now();
+      function step() {
+        const t = Math.min(1, (performance.now() - t0) / dur);
+        const e = 1 - Math.pow(1 - t, 3);  // ease-out-cubic
+        graphLayout.scale = start.scale + (target.scale - start.scale) * e;
+        graphLayout.tx = start.tx + (target.tx - start.tx) * e;
+        graphLayout.ty = start.ty + (target.ty - start.ty) * e;
+        drawCanvas();
+        if (t < 1) {
+          fitTweenRaf = requestAnimationFrame(step);
+        }
+      }
+      if (fitTweenRaf) cancelAnimationFrame(fitTweenRaf);
+      fitTweenRaf = requestAnimationFrame(step);
+    }
 
     function ensureSim() {
       if (sim) return;
