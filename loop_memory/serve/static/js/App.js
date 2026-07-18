@@ -3,7 +3,7 @@
  *
  * Renders: TopBar, Sidebar, Tabs, the active tab pane, Settings drawer,
  * RunStrip, Toast, Diagnostic modal. Listens for cross-component events
- * (ingest, rescore, llm-run, run-now, rebuild-graph) and calls the API.
+ * (ingest, rescore, llm-run, rebuild-graph) and calls the API.
  *
  * The store is the cross-component bus: every component reads from it
  * (lang, theme, stats, runStatus, activeTab) and a few write to it
@@ -166,10 +166,6 @@ export const App = defineComponent({
         if (r.queued) toast(t('action.llmRunQueued'), 2000);
       } catch (e) { toast(t('common.error') + ': ' + e.message, 4000); }
     }
-    async function onRunNow() {
-      try { await api.llmRun({ force: true }); toast(t('action.runNowQueued'), 2000); }
-      catch (e) { toast(t('common.error') + ': ' + e.message, 4000); }
-    }
     function onOpenSettings() { settingsOpen.value = true; }
     function onOpenDiag() { diagOpen.value = true; }
     function onOpenStats() { /* legacy stats popover — delegated to TopBar */ }
@@ -203,7 +199,7 @@ export const App = defineComponent({
 
     return {
       store, t, settingsOpen, diagOpen,
-      onIngest, onRescore, onLlmRun, onRunNow,
+      onIngest, onRescore, onLlmRun,
       onOpenSettings, onOpenStats, onOpenDiag,
       onRebuildGraph, onOpenWiki,
       dismissStrip: () => { store.stripDismissed = true; },
@@ -212,7 +208,7 @@ export const App = defineComponent({
   template: /* html */ `
 <div class="app-shell">
   <TopBar @ingest="onIngest" @rescore="onRescore"
-          @llm-run="onLlmRun" @run-now="onRunNow"
+          @llm-run="onLlmRun"
           @open-settings="onOpenSettings" @open-diag="onOpenDiag"
           @rebuild-graph="onRebuildGraph"
           @consolidate="onConsolidate" />

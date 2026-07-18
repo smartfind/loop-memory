@@ -119,6 +119,86 @@ class WikiExportTests(unittest.TestCase):
             self.assertEqual(r.status_code, 400)
 
 
+class WikiImportExportRoundTrip(unittest.TestCase):
+    """Verify JSON export → import is a loss-less round-trip
+    and markdown import parses ## sections correctly."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.db = os.path.join(self.tmp, "test.db")
+        self.store = MemoryStore(self.db)
+        _seed_wiki(self.store)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_export_json_returns_all_records(self):
+        from fastapi.testclient import TestClient
+        from loop_memory.serve.app import create_app
+        app = create_app(self.store)
+        with TestClient(app) as c:
+            r = c.get("/api/wiki/export", params={"format": "json"})
+            self.assertEqual(r.status_code, 200)
+            data = r.json()
+            self.assertEqual(data["format"], "json")
+            self.assertEqual(data["count"], 2)
+
+    def test_import_json_creates_and_updates(self):
+        from fastapi.testclient import TestClient
+        from loop_memory.serve.app import create_app
+        app = create_app(self.store)
+        with TestClient(app) as c:
+            # First import: two new pages
+            r1 = c.post("/api/wiki/import", json={
+                "format": "json",
+                "pages": [
+                    {"slug": "imported-a", "title": "Imported A", "body": "Body A", "importance": 0.6},
+                    {"slug": "imported-b", "title": "Imported B", "body": "Body B", "summary": "s"},
+                ],
+            })
+            self.assertEqual(r1.status_code, 200)
+            self.assertEqual(r1.json()["created"], 2)
+            self.assertEqual(r1.json()["updated"], 0)
+            # Re-import with same slug updates
+            r2 = c.post("/api/wiki/import", json={
+                "format": "json",
+                "pages": [{"slug": "imported-a", "title": "Imported A v2", "body": "Body A v2"}],
+            })
+            self.assertEqual(r2.status_code, 200)
+            self.assertEqual(r2.json()["updated"], 1)
+            self.assertEqual(r2.json()["created"], 0)
+            # Round-trip: re-export and confirm 4 pages
+            r3 = c.get("/api/wiki/export", params={"format": "json"})
+            self.assertEqual(r3.json()["count"], 4)
+
+    def test_import_markdown_parses_h2_sections(self):
+        from fastapi.testclient import TestClient
+        from loop_memory.serve.app import create_app
+        app = create_app(self.store)
+        md = (
+            "## Page Alpha\n\n"
+            "Body of alpha.\n\n"
+            "## Page Beta\n\n"
+            "Body of beta with more text.\n\n"
+            "## 中文测试\n\n"
+            "中文正文。\n"
+        )
+        with TestClient(app) as c:
+            r = c.post("/api/wiki/import", json={"format": "markdown", "markdown": md})
+            self.assertEqual(r.status_code, 200)
+            data = r.json()
+            self.assertEqual(data["created"], 3)
+            self.assertEqual(data["updated"], 0)
+
+    def test_import_rejects_unknown_format(self):
+        from fastapi.testclient import TestClient
+        from loop_memory.serve.app import create_app
+        app = create_app(self.store)
+        with TestClient(app) as c:
+            r = c.post("/api/wiki/import", json={"format": "xml", "pages": []})
+            self.assertEqual(r.status_code, 400)
+
+
 class ConsolidateNowTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()

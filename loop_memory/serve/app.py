@@ -1539,15 +1539,27 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
     @app.get("/api/wiki/export")
     def wiki_export(format: str = "markdown", limit: int = 500,
                     q: str | None = None):
-        """Dump all (or matched) wiki pages as a single markdown string.
+        """Dump all (or matched) wiki pages for backup / sharing.
 
-        ``format`` is currently only ``markdown``. ``q`` (optional)
-        filters by substring match against the page title or body.
+        ``format``:
+          - ``markdown``  (default) — single markdown document.
+          - ``json``                — round-trippable JSON object
+                                     (``{format, count, pages}``)
+                                     that the import endpoint can
+                                     re-ingest without loss.
+        ``q`` (optional) filters by substring match against title/body.
         """
         try:
             pages = store.list_wiki_pages(limit=limit, query=q)
         except Exception:
             pages = []
+        fmt = (format or "markdown").lower()
+        if fmt == "json":
+            return {
+                "format": "json",
+                "count": len(pages),
+                "pages": [dict(p) for p in pages],
+            }
         out_lines = ["# Loop Memory — Distilled Knowledge", ""]
         out_lines.append(f"_Exported {len(pages)} wiki pages._")
         out_lines.append("")
@@ -1567,7 +1579,114 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
                 ev = ", ".join(str(x) for x in evidence[:6])
                 out_lines.append(f"<sub>evidence: {ev}… ({len(evidence)} sources)</sub>")
                 out_lines.append("")
-        return {"format": format, "count": len(pages), "markdown": "\n".join(out_lines)}
+        return {"format": "markdown", "count": len(pages), "markdown": "\n".join(out_lines)}
+
+
+    @app.post("/api/wiki/import")
+    def wiki_import(body: dict):
+        """Bulk-upsert wiki pages from JSON or Markdown.
+
+        Body shape (one of):
+          - ``{"format": "json", "pages": [...]}``  — round-trip from
+            ``/api/wiki/export?format=json``. Each entry needs at
+            minimum ``slug`` (or ``title``), ``title`` and ``body``.
+          - ``{"format": "markdown", "markdown": "..."}``  — text dump
+            with ``## title`` sections. The slug is derived from the
+            title (lowercase, spaces → dashes, ascii-safe).
+
+        Returns ``{created, updated, skipped, errors}``. Pages whose
+        slug matches an existing one are updated; new slugs are
+        created. Malformed entries are skipped (counted in
+        ``skipped``) and the first error is reported.
+        """
+        if not isinstance(body, dict):
+            raise HTTPException(400, "body must be an object")
+        fmt = (body.get("format") or "json").lower()
+        entries: list[dict] = []
+        errors: list[str] = []
+
+        def _slugify(title: str, fallback: str = "") -> str:
+            import re as _re
+            s = (title or fallback or "").strip().lower()
+            s = _re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "-", s)
+            s = s.strip("-")[:80]
+            return s or "untitled"
+
+        if fmt == "json":
+            raw = body.get("pages")
+            if not isinstance(raw, list):
+                raise HTTPException(400, "pages must be a list")
+            for i, item in enumerate(raw):
+                if not isinstance(item, dict):
+                    errors.append(f"#{i}: not an object"); continue
+                title = (item.get("title") or "").strip()
+                body_text = (item.get("body") or "").strip()
+                slug = (item.get("slug") or "").strip()
+                if not title or not body_text:
+                    errors.append(f"#{i}: missing title/body"); continue
+                if not slug:
+                    slug = _slugify(title)
+                entries.append({
+                    "slug": slug.lower().replace(" ", "-")[:80],
+                    "title": title,
+                    "body": body_text,
+                    "summary": (item.get("summary") or "").strip(),
+                    "tags": item.get("tags") or [],
+                    "importance": float(item.get("importance") or 0.5),
+                    "evidence_ids": item.get("evidence_ids") or [],
+                })
+        elif fmt == "markdown":
+            md = (body.get("markdown") or "").strip()
+            if not md:
+                raise HTTPException(400, "markdown is empty")
+            # Split on "## " headings. Each chunk becomes a page.
+            import re as _re
+            chunks = _re.split(r"\n(?=##\s)", md)
+            for chunk in chunks:
+                chunk = chunk.strip()
+                if not chunk.startswith("## "):
+                    continue
+                # Drop leading "## "
+                lines = chunk.splitlines()
+                title = lines[0][3:].strip()
+                rest  = "\n".join(lines[1:]).strip()
+                # Optional ">" summary at the start
+                summary = ""
+                if rest.startswith(">"):
+                    maybe = rest.split("\n", 1)
+                    summary = maybe[0].lstrip("> ").strip()
+                    rest = maybe[1].strip() if len(maybe) > 1 else ""
+                if not title or not rest:
+                    continue
+                entries.append({
+                    "slug": _slugify(title),
+                    "title": title,
+                    "body": rest,
+                    "summary": summary,
+                    "tags": [],
+                    "importance": 0.5,
+                    "evidence_ids": [],
+                })
+        else:
+            raise HTTPException(400, f"unknown format {fmt!r}; use 'json' or 'markdown'")
+
+        created = 0
+        updated = 0
+        for e in entries:
+            try:
+                existing = store.get_wiki_page_by_slug(e["slug"])
+                store.upsert_wiki_page(**e)
+                if existing: updated += 1
+                else:        created += 1
+            except Exception as ex:
+                errors.append(f"{e['slug']}: {ex}")
+        return {
+            "created": created,
+            "updated": updated,
+            "skipped": len(errors),
+            "errors": errors[:10],
+            "total": len(entries),
+        }
 
     @app.get("/api/wiki/{page_id}/export")
     def wiki_page_export(page_id: str, format: str = "markdown"):
