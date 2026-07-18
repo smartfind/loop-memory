@@ -6681,11 +6681,51 @@ async function loadGraph() {
   // a sphere surface so the projected globe looks truly round. Each
   // node's (x, y) ends up as the projection of its (lat, lon_base),
   // which the rotation tick advances over time.
+  //
+  // IMPORTANT: shuffle the names by mention before seeding so high-
+  // mention nodes (wiki pages, important tags) are not all crammed
+  // into the lowest Fibonacci indices — that would put them all at
+  // one pole of the sphere (screen-bottom), making the upper
+  // hemisphere look empty. We use a stable hash so the layout
+  // doesn't reshuffle on every redraw.
   const names = Object.keys(graphNodes);
+  function _stableHash(s) {
+    let h = 0x811c9dc5 >>> 0;
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    return h;
+  }
+  // Sort by (mention, hash) — high-mention nodes still get a stable
+  // position but the hash spreads them across the index space.
+  names.sort((a, b) => {
+    const ma = graphNodes[a].mention || 0;
+    const mb = graphNodes[b].mention || 0;
+    if (ma !== mb) return mb - ma;
+    return _stableHash(a) - _stableHash(b);
+  });
   const N = names.length;
   const R = Math.max(220, Math.sqrt(N) * 28); // sphere radius in graph units
   const PHI = Math.PI * (3 - Math.sqrt(5));   // golden angle
-  names.forEach((name, i) => {
+  // Interleave: assign indices in interleaved blocks of HIGH/LOW so
+  // that high-mention nodes (sorted first) end up at lat = -π/2..0
+  // (top of the sphere) and low-mention nodes at lat = 0..+π/2
+  // (bottom). Without this, even with a shuffled order, the top 5%
+  // of nodes by mention tend to cluster visually together.
+  const orderedNames = new Array(N);
+  const halfHigh = Math.min(N, Math.ceil(N * 0.5));
+  let hi = 0, lo = halfHigh;
+  for (let i = 0; i < N; i++) {
+    if (i % 2 === 0 && hi < halfHigh) {
+      orderedNames[i] = names[hi++];
+    } else if (lo < N) {
+      orderedNames[i] = names[lo++];
+    } else {
+      orderedNames[i] = names[hi++];
+    }
+  }
+  orderedNames.forEach((name, i) => {
     // Fibonacci sphere (even latitudinal spacing)
     const lat = Math.asin(1 - 2 * (i + 0.5) / N);    // -π/2 .. π/2
     const lon0 = ((i * PHI) % (Math.PI * 2));
@@ -7275,9 +7315,14 @@ function drawCanvas() {
 
     // label
     const mention = n.mention || 0;
-    const importantLabel = n.kind === 'wiki_page' || mention >= 8;
-    const mediumLabel = mention >= 4 && depth >= 0.58;
-    const zoomedLabel = graphLayout.scale >= 1.45 && depth >= 0.68;
+    // IMPORTANT: importantLabel and tag/mediumLabel ignore depth so the
+    // upper hemisphere is just as readable as the lower. The previous
+    // logic filtered upper-hemisphere labels by depth, which made the
+    // whole top of the sphere look unlabeled because wiki_pages /
+    // high-mention tags were all seeded to the bottom pole.
+    const importantLabel = n.kind === 'wiki_page' || mention >= 6;
+    const mediumLabel = n.kind === 'tag' || mention >= 3;
+    const zoomedLabel = graphLayout.scale >= 1.30;
     const showLabel = isSel || isHover || importantLabel || mediumLabel || zoomedLabel;
     if (showLabel) {
       const label = n.name.length > 34 ? n.name.slice(0, 32) + '…' : n.name;
@@ -7293,11 +7338,8 @@ function drawCanvas() {
       //     *below* the dot (ly = py + r + 6)
       //   - nodes in the lower hemisphere (py > 0) place their label
       //     *above* the dot (ly = py - r - 14)
-      // This way the top of the sphere is just as readable as the
-      // bottom, and labels never wander off the canvas while the
-      // globe rotates. Selected / hovered nodes keep the original
-      // "always above" so the highlighted node reads as a tooltip
-      // pill.
+      // Selected / hovered nodes keep "always above" so the
+      // highlighted node reads as a tooltip pill.
       const dropBelow = (isSel || isHover) ? false : (py < 0);
       const ly = dropBelow ? (py + r + 6) : (py - r - 14);
 
@@ -8889,6 +8931,18 @@ if (wikiNew) {
 
 applyTheme();
 applyLang();
+
+// Optional ?tab=graph|wiki|dashboard|timeline|list|hooks URL param so users
+// can bookmark a specific view (or open the graph directly from a link).
+try {
+  const _qs = new URLSearchParams(location.search);
+  const _tab = _qs.get('tab');
+  if (_tab) {
+    const _el = document.querySelector('.tab[data-tab="' + _tab + '"]');
+    if (_el) _el.click();
+  }
+} catch (e) { /* ignore */ }
+
 refreshAll();
 
 // Lazy-load graph data on first visit

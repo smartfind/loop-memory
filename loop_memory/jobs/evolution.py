@@ -75,17 +75,31 @@ PROFILE_DIMS = ("preferences", "decisions", "projects", "domain", "feedback")
 # Common assistant boilerplate / meta-narration to strip from raw memory text
 # when synthesizing wiki bodies without an LLM. We keep the regex list small
 # and targeted so a real, atomic fact still survives.
+# Recognise the common "wrapper" prefixes the loop-memory hooks prepend
+# to assistant text. We strip the whole wrapper so the atomic fact inside
+# can survive, instead of being glued to cron ids / working-directory tags.
+_NOISE_WRAPPER_PATTERNS = [
+    # Cron-prompt headers: "[cron:UUID label] 请立即生成..."
+    r"\[cron:[^\]]+\]",
+    # Working-directory wrapper: "[Working directory: ~/.openclaw/workspace] 帮我..."
+    r"\[Working directory:[^\]]*\]\s*",
+    # Provider / source prefix: "[codex] ", "[claude] ", "[hermes] ", "[openclaw] "
+    r"\[(?:codex|claude|hermes|openclaw|claude-code|chatgpt|hermes-cli)\][\s:：]+",
+    # Outcome / Result / Status / Task / Latest / Output prefix
+    r"^(?:Outcome|Result|Status|Task|Latest|Output|Reply|Response|Assistant|Human|User intent)\s*[:：]\s*",
+    # "[thinking]" inline blocks: keep stripping
+    r"\[thinking\][\s\S]*?\[/thinking\]",
+    r"\[thinking\]\s*",
+    # "You are an assistant..." tool-system narration
+    r"You are an? [^.\n]{1,160}\.\s*",
+    # "<cwd>", "<shell>", "<current_date>", "<permissions_instructions>" env tags
+    r"<\w+>[\s\S]*?</\w+>",
+    r"<\w+>\s*",
+    # "**已完成**" / "**全部完成**" / "DONE" markers as standalone
+    r"^\*\*(?:已完成|全部完成|DONE|DONE\.|OK|完成|完成\.)\*\*\s*[:：]?\s*",
+]
 _NOISE_PREFIX_RE = re.compile(
-    r"^(?:"
-    r"(?:Outcome|Result|Status|Task|Latest|Output)\s*[:：]\s*"
-    r"|\[thinking\][^\n]*\n"
-    r"|User intent\s*[:：]\s*"
-    r"|You are an? [^.\n]{1,80}\.\s*"
-    r"|Assistant\s*[:：]\s*"
-    r"|Human\s*[:：]\s*"
-    r"|\[cron:[a-f0-9\- ]+\][^\n]*\n?"
-    r"|<[^>]+>\s*"
-    r")",
+    "|".join(_NOISE_WRAPPER_PATTERNS),
     re.IGNORECASE,
 )
 _NOISE_CODE_FENCE_RE = re.compile(r"```[^`]*```", re.DOTALL)
@@ -94,6 +108,14 @@ _NOISE_PATH_RE = re.compile(r"/Users/[^\s)\"<>]+")
 _NOISE_URL_RE = re.compile(r"https?://[^\s)\"<>]+")
 _NOISE_WS_RE = re.compile(r"[ \t]+")
 _NOISE_NEWLINES_RE = re.compile(r"\n{2,}")
+# Markdown table rows: "| col | col | col |" — never a fact
+_NOISE_TABLE_ROW_RE = re.compile(r"(?:\|[^|\n]*)+\|")
+# Markdown headings: "## Heading" or "### Heading"
+_NOISE_HEADING_RE = re.compile(r"^#+\s+[^\n]+", re.MULTILINE)
+# Markdown emphasis that wraps an entire short line: "**全部完成。**"
+_NOISE_BOLD_LINE_RE = re.compile(r"^\*\*[^\n]{1,40}\*\*\s*[:：]?\s*", re.MULTILINE)
+# Repeated punctuation runs (---, ====, *****)
+_NOISE_RULE_RE = re.compile(r"^[-=*]{3,}\s*$", re.MULTILINE)
 
 
 def _clean_noise(text: str, *, max_len: int = 240) -> str:
@@ -102,15 +124,29 @@ def _clean_noise(text: str, *, max_len: int = 240) -> str:
     The goal is *not* to summarize (the LLM does that); it is to remove the
     80% of characters that are pleasantries, code fences, narration, file
     paths, and tool chatter so a downstream bullet is readable on its own.
+
+    Order matters: bigger wrappers (cron headers, env tags) first, then
+    inline / line-level noise (markdown tables, bold-as-line, code).
     """
     if not text:
         return ""
     s = text
     # Drop code fences entirely (they are usually tool output, not a fact).
     s = _NOISE_CODE_FENCE_RE.sub(" ", s)
-    # Drop [thinking] blocks first (always multi-line, never useful).
-    s = re.sub(r"\[thinking\][\s\S]*?\[/thinking\]", " ", s, flags=re.I)
-    s = _NOISE_PREFIX_RE.sub("", s)
+    # Markdown structural noise: tables, headings, hrules, whole-line bold
+    s = _NOISE_TABLE_ROW_RE.sub(" ", s)
+    s = _NOISE_RULE_RE.sub(" ", s)
+    s = _NOISE_HEADING_RE.sub(" ", s)
+    s = _NOISE_BOLD_LINE_RE.sub("", s)
+    # Drop wrapper prefixes (cron, working directory, provider tags, [thinking],
+    # <cwd> env tags, "Outcome: ", "User intent: ", etc.). Use a loop because
+    # the same text can have multiple stacked wrappers ("[openclaw] [Working
+    # directory: ...] 帮我...") and a single sub() only catches the first.
+    for _ in range(4):
+        prev_new = _NOISE_PREFIX_RE.sub("", s)
+        if prev_new == s:
+            break
+        s = prev_new
     # Inline code: keep the inside, not the backticks.
     s = _NOISE_INLINE_CODE_RE.sub(r"\1", s)
     # Drop absolute home paths (these leak the user's filesystem, not a fact).
@@ -127,6 +163,104 @@ def _clean_noise(text: str, *, max_len: int = 240) -> str:
     return s
 
 
+# Patterns that mark a memory as pure status narration / completion ping
+# with no atomic fact a wiki page should remember. Matched on the CLEANED
+# (lowercased) form. The bar is: would a future user re-derive something
+# they didn't already know? If the answer is no, drop it.
+_LOW_SIGNAL_PATTERNS = (
+    # English
+    r"^tests? (is|are) green",
+    r"^ci (passed|green|succeeded|is green)",
+    r"^all (good|done|set|clear|green|passing|checks? pass)",
+    r"^running\s*\.\.\.?\s*$",
+    r"^done\.?$",
+    r"^ok\.?$",
+    r"^green\.?$",
+    r"^passed\.?$",
+    r"^succeeded\.?$",
+    r"^pushed successfully",
+    r"^now (commit|wait|push|run|deploy|test)",
+    r"^everything is green",
+    r"^all tests pass",
+    r"^build (passed|succeeded|is green)",
+    r"^lints? clean",
+    r"^ruff (clean|is clean|ok)",
+    r"^verified? (locally|and ready|ok)",
+    # Chinese
+    r"^全部完成",
+    r"^已完成",
+    r"^完成\.?",
+    r"^已经完成",
+    r"^都 (好|搞定|完成|通过了)",
+    r"^测试 (通过|成功|过了|全过)",
+    r"^跑通了?",
+    r"^没问题",
+    r"^好的",
+    r"^已推送",
+    r"^推送成功",
+    r"^现在 (推送|提交|等待|运行|测试)",
+    r"^任务完成",
+    r"^看板 (已|现在) 显示",
+    r"^一切 (正常|就绪|顺利)",
+    r"^191/191",
+    r"^\d+/\d+",
+)
+
+# Heuristic flags for RAW USER PROMPTS that should never become wiki
+# bullets. These are conversational imperatives that wrap the user's
+# request — useful for session replay, but they contain no atomic fact a
+# future user (or model) would re-derive. Matched on the cleaned form.
+_RAW_PROMPT_PATTERNS = (
+    # "帮我..." (help me...)
+    r"^帮我",
+    r"\s帮我(?!知道|看一下|看看)",
+    r"帮我(检查|梳理|分析|整理|写|生成|跑|修复|优化|测试|部署|调研|对比|总结|封装|压缩|转换|翻译)",
+    # "请立即..." / "请..." (Please immediately)
+    r"^请立即",
+    r"^请(?!求|求你|告诉我)",
+    # Catch short imperative + concrete action even after wrapper stripping
+    r"^请立即生成",
+    r"^请把",
+    r"^请你",
+    # "the user is asking..." / "the user wants..." - assistant narration
+    r"the user (is asking|wants|wants? to|asked|wants me to|requested)",
+    r"^the user ",
+    # "如何..." / "How to..." / "怎么..." (how to)
+    r"^(如何|怎么|怎样|怎么(样|做)|how (to|do|can|should))\b",
+    # English imperatives the user types verbatim
+    r"^(please\s+)?(help|write|create|make|build|find|fix|run|do|generate|check|analy[sz]e|review|explain|compare|summari[sz]e|optimi[sz]e|clean|deploy)\s+(me\s+|a\s+|an\s+|the\s+|this\s+|that\s+|my\s+|our\s+|some\s+|all\s+)?",
+    # Verb-first project briefs
+    r"^(thoroughly|completely|fully|deeply|carefully)\s+(explore|review|analy[sz]e|investigate|examine|rewrite|rebuild|redesign)\b",
+    # "整理..." wrappers
+    r"^整理[\"\u201c].*?(目录|文件|报告|教程|笔记)",
+    r"^梳理.*?(市场|标的|行业|板块|投资|整个项目|项目|缺陷|代码|逻辑)",
+    # More Chinese imperatives (verb-first) — match the verb alone so
+    # "整理整个项目" / "分析下当前" / "运行测试" all flag.
+    r"^(分析|调研|梳理|整理|检查|生成|写|制作|开发|修复|优化|跑通|跑|测试|运行|启动|部署|上传|下载|导出|导入|删除|添加|新增|更新|修改|重写|重构|封装|压缩|转换|翻译|读取|写入|抓取|爬取|搜索|查看|打开|关闭|重启|停止|暂停|继续|创建|构建|编译|操作|执行|移动|复制|粘贴|撤销|恢复|清理|清空|刷新|加载|渲染|展示)",
+    # Verb + 下/一下/看看
+    r"(帮我|请)?(看|处理|搞|弄|调整|改|写|跑|做|检查|分析|调研|梳理|整理|总结|测试|运行|启动|部署|搜索|查看)(一下|看|看看|下)",
+    r"^(看|处理|搞|弄|调整|改|写|跑|做|检查|分析|调研|梳理|整理|总结|测试|运行|启动|部署|搜索|查看)(一下|看|看看|下)",
+    # "我..." user-self imperative
+    r"^我(想|需要|要|想请|想让|希望)",
+    # "You are ..." assistant task instructions (colon or period)
+    r"^you are (implementing|fixing|reviewing|writing|building|creating|checking|verifying|analy[sz]ing|investigating|designing|updating|modifying)\b",
+    # Pure file-path / tool recipes
+    r"^[/~][\w./_-]+/\w+\.(py|md|sh|json|yml|yaml|toml)\s*$",
+    # "PDF was generated" / "I am now going to" type assistant narration
+    r"^(pdf|the pdf|the file|the report|it) was (generated|created|saved|uploaded|sent)",
+    r"^(i|now|next|then) (will|am going to|need to|should|want to)\b",
+    # "let me ..." assistant narration
+    r"^let me (check|look|run|try|verify|test|create|build|do|now)\b",
+    r"^now let me ",
+    # "I\'m going to ..." assistant narration
+    r"^i.m going to ",
+    # Verb-imperative-only (when text is 4-7 chars, no period, ends in noun)
+    r"^[一-鿿]{2,4}[一-鿿a-z]",
+    # "看下X" / "整理X" / etc. — verb + 下/一下/看/看看 with anything after
+    r"^[看处理搞弄调整改写跑做检查分析调研梳理整理总结测试运行启动部署搜索查看](下|一下|看|看看)",
+)
+
+
 def _is_low_signal(text: str) -> bool:
     """Return True if a memory contains no actionable information worth a wiki
     bullet. Used to drop near-empty / pure-status memories before clustering.
@@ -136,17 +270,43 @@ def _is_low_signal(text: str) -> bool:
     s = _clean_noise(text, max_len=400).strip().lower()
     if len(s) < 12:
         return True
-    # Pure "Tests are green" / "CI passed" / "done" style status pings.
-    low_patterns = (
-        r"^tests are green",
-        r"^ci (passed|green|succeeded)",
-        r"^all (good|done|set|clear)",
-        r"^running\s*\.\.\.?\s*$",
-        r"^done\.?$",
-        r"^ok\.?$",
-    )
-    for pat in low_patterns:
+    for pat in _LOW_SIGNAL_PATTERNS:
         if re.match(pat, s):
+            return True
+    return False
+
+
+def _looks_like_raw_prompt(text: str) -> bool:
+    """Return True if a memory is *primarily* a raw user prompt — i.e. its
+    atomic value is essentially the question / command itself, not a fact.
+
+    The wiki must NOT show these: the user already remembers the question,
+    and stuffing it into the wiki pollutes recall. We DO keep the memory in
+    the store (so context can be replayed) but the rule-based wiki step
+    drops the prompt form. A real LLM distillation would also drop these.
+    """
+    if not text:
+        return True
+    s = _clean_noise(text, max_len=400).strip().lower()
+    # Threshold: very short texts (< 4 chars) are too ambiguous to
+    # classify (a single Chinese verb is itself 2 chars, so 4 is the
+    # smallest useful unit for an imperative).
+    if len(s) < 4:
+        return False
+    for pat in _RAW_PROMPT_PATTERNS:
+        if re.search(pat, s):
+            return True
+    # "Thoroughly explore the X project at I need to understand: 1. 2. 3. ..."
+    # type run-on briefs. If the cleaned text still contains "i need to
+    # understand" or "i want to" verbatim, it's a brief, not a fact.
+    if re.search(r"i (need|want) to (understand|know|do|build|check|see|review|explore)", s):
+        return True
+    # Long imperative sentence (>140 cleaned chars) with no period in the
+    # first 80 chars is almost always a user prompt, not an observation.
+    head = s[:80]
+    if len(s) > 140 and "." not in head and (" " in head[:20] or "\n" not in head):
+        # Additional sanity: starts with a verb or 帮我 / 请 / how / please
+        if re.match(r"^(please|how|why|what|when|where|can|could|would|should|do|does|is|are|was|were|i|you|we|let)", head):
             return True
     return False
 
@@ -639,7 +799,74 @@ class EvolutionConsolidator:
             if not placed:
                 clusters.append({"centroid": emb, "items": [m], "misc": False})
 
-        # Sort clusters: largest first, misc last
+        # Second pass: SESSION-AWARE MERGE. The user explicitly asked
+        # that a single conversation not be fragmented into too many
+        # knowledge pieces. After the cosine pass, we look for small
+        # clusters (<= 8 items) that share session_ids with other
+        # clusters and merge them so a single conversation produces
+        # one wiki page, not many. We cap the merge to avoid giant
+        # mixed clusters; only merge into the cluster with the highest
+        # cumulative importance.
+        def _session_counts(items):
+            counts: dict[str, int] = {}
+            for it in items:
+                sid = getattr(it, "session_id", None)
+                if sid:
+                    counts[sid] = counts.get(sid, 0) + 1
+            return counts
+
+        # Build a list of (cluster, session_counts) for non-misc clusters
+        non_misc = [c for c in clusters if not c.get("misc")]
+        for c in non_misc:
+            c["_sc"] = _session_counts(c["items"])
+        # Repeat: find the smallest cluster, see if any other cluster
+        # shares a session, and merge into the one with higher total
+        # importance. Bound iterations to keep this O(N) not O(N²).
+        for _ in range(20):
+            merged = False
+            non_misc.sort(key=lambda c: (len(c["items"]), -sum(getattr(it, "importance", 0) or 0 for it in c["items"])))
+            for i, small in enumerate(non_misc):
+                if len(small["items"]) >= 9:
+                    continue  # only merge small clusters
+                if not small["_sc"]:
+                    continue
+                best_j = -1
+                best_overlap = 0
+                for j, big in enumerate(non_misc):
+                    if i == j:
+                        continue
+                    if len(big["items"]) >= max_per_cluster:
+                        continue
+                    overlap = sum(
+                        min(small["_sc"].get(s, 0), big["_sc"].get(s, 0))
+                        for s in small["_sc"]
+                    )
+                    if overlap >= 2 and overlap > best_overlap:
+                        best_overlap = overlap
+                        best_j = j
+                if best_j >= 0:
+                    big = non_misc[best_j]
+                    big["items"].extend(small["items"])
+                    # Recompute centroid (running mean)
+                    n = len(big["items"])
+                    if big["centroid"] is not None:
+                        # Re-derive centroid from all members (cheap)
+                        embs = [_hash_embed(getattr(m, "text", "") or "") for m in big["items"]]
+                        dim = len(embs[0]) if embs else 128
+                        cent = [0.0] * dim
+                        for e in embs:
+                            for k in range(dim):
+                                cent[k] += e[k]
+                        big["centroid"] = [x / n for x in cent]
+                    big["_sc"] = _session_counts(big["items"])
+                    non_misc.remove(small)
+                    merged = True
+                    break
+            if not merged:
+                break
+
+        # Final sort: largest first, misc last
+        clusters = non_misc + [c for c in clusters if c.get("misc")]
         clusters.sort(key=lambda c: (c.get("misc", False), -len(c["items"])))
         return [c["items"] for c in clusters]
 
@@ -840,7 +1067,74 @@ class EvolutionConsolidator:
                     stats.notes.append(f"wiki retired: {title[:40]!r}")
                 except Exception:
                     pass
-        # Second sweep: rewrite auto-aggregator pages (auto-episode /
+        # Second sweep: REWRITE every existing page's bullets through
+        # the new cleaner + raw-prompt filter. The previous run may have
+        # produced bullets that look like raw user prompts (especially
+        # legacy pages from before _looks_like_raw_prompt existed). We
+        # rebuild the body from the surviving bullets, re-extract the
+        # title, and re-summarize. This is the cheapest way to bring
+        # legacy pages up to the new quality bar.
+        for p2 in self.store.list_wiki_pages(limit=200):
+            slug = (p2.get("slug") or "")
+            if not slug:
+                continue
+            body = p2.get("body") or ""
+            # Skip the auto-aggregator pages — handled below.
+            if slug in ("auto-episode", "auto-fact"):
+                continue
+            # Collect surviving bullets after raw-prompt / low-signal filter
+            bullet_lines = [b for b in body.split("\n") if b.startswith("- ")]
+            surviving: list[str] = []
+            seen: set[str] = set()
+            for b in bullet_lines:
+                txt = b[2:].strip()
+                if _looks_like_raw_prompt(txt) or _is_low_signal(txt):
+                    continue
+                # Re-run the cleaner for the new max_len (slightly longer)
+                clean = _clean_noise(txt, max_len=200)
+                if not clean or len(clean) < 6:
+                    continue
+                key = clean[:60].lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                surviving.append(f"- {clean}")
+                if len(surviving) >= 8:
+                    break
+            if not surviving:
+                # All bullets filtered out -> retire the page.
+                try:
+                    self.store.delete_wiki_page(p2["id"])
+                    retired += 1
+                    stats.notes.append(f"wiki retired (empty after re-clean): {slug}")
+                except Exception:
+                    pass
+                continue
+            # If we have new surviving bullets, rewrite the body.
+            if len(surviving) != len(bullet_lines):
+                new_body = "\n".join(surviving)
+                evidence = p2.get("evidence_ids") or []
+                if evidence:
+                    new_body += f"\n\n_Source: {len(evidence)} memories (rewritten by Stage 4.6)_"
+                # Re-extract title + summary from the new top bullet
+                top = surviving[0].lstrip("- ")
+                new_title = _title_from(top, fallback_kind="", max_len=58)
+                new_summary = top[:200].rstrip(" .,;:")
+                try:
+                    self.store.upsert_wiki_page(
+                        slug=slug,
+                        title=new_title,
+                        body=new_body,
+                        summary=new_summary,
+                        tags=p2.get("tags", []),
+                        importance=p2.get("importance", 0.5),
+                        evidence_ids=evidence,
+                        run_id=self._run_id,
+                    )
+                    stats.notes.append(f"wiki re-cleaned: {slug} ({len(bullet_lines)}→{len(surviving)} bullets)")
+                except Exception:
+                    pass
+        # Third sweep: rewrite auto-aggregator pages (auto-episode /
         # auto-fact) using fresh bullet bodies if their current body still
         # contains glued fragments. We never delete these — they back many
         # cross-session facts — but we DO clean their body.
@@ -997,9 +1291,13 @@ class EvolutionConsolidator:
         Produces real, browsable wiki pages even when no LLM is
         configured (or when the configured LLM is failing). Each page
         has a real noun-phrase title, a 1-line summary, and a body of
-        3-8 atomic bullets — never a glued-up concatenation of raw
-        memory text. This is the fallback that drives the entire wiki
+        dynamic-length atomic bullets — never a glued-up concatenation of
+        raw memory text. This is the fallback that drives the entire wiki
         when the user has not yet configured an API key.
+
+        Bullet count is **dynamic** (2..8) based on cluster size and
+        quality. We aggressively filter out raw user prompts and pure
+        status pings so the wiki stays dense and useful.
         """
         import hashlib as _h
         created = 0
@@ -1011,12 +1309,38 @@ class EvolutionConsolidator:
             ranked = sorted(
                 memories,
                 key=lambda m: -(float(getattr(m, "importance", 0.0) or 0.0)),
-            )[:7]
+            )
+            # Dynamic max bullets: small cluster -> few bullets, big -> more.
+            n = len(ranked)
+            if n <= 2:
+                max_bullets = 2
+            elif n <= 5:
+                max_bullets = 3
+            elif n <= 10:
+                max_bullets = 5
+            else:
+                max_bullets = 7
+            # Hard ceiling so a noisy session never produces a wall of bullets.
+            max_bullets = min(max_bullets, 8)
             bullets: list[str] = []
             seen: set[str] = set()
+            skipped_prompts = 0
             for m in ranked:
-                bullet = _clean_noise(getattr(m, "text", "") or "", max_len=160)
+                txt = getattr(m, "text", "") or ""
+                # Drop raw user prompts outright: they add zero atomic value.
+                if _looks_like_raw_prompt(txt):
+                    skipped_prompts += 1
+                    continue
+                bullet = _clean_noise(txt, max_len=160)
                 if not bullet:
+                    continue
+                # Even after cleaning, a memory can still be pure status —
+                # be conservative and skip if it's just a low-signal ping.
+                if _is_low_signal(bullet):
+                    continue
+                # Bullet-length sanity: drop bullets that are still
+                # "raw prompt in disguise" (long, imperative, no period).
+                if len(bullet) > 140 and "." not in bullet[:80]:
                     continue
                 key = bullet[:60].lower()
                 if key in seen:
@@ -1025,19 +1349,30 @@ class EvolutionConsolidator:
                 if len(bullet) < 6:
                     continue
                 bullets.append(f"- {bullet}")
-                if len(bullets) >= 7:
+                if len(bullets) >= max_bullets:
                     break
             if not bullets:
                 continue
             kind_hint = (cs.get("kind") or cs.get("dominating_tag") or "").lower().strip()
+            # Use the FIRST surviving bullet for the topic + title — never
+            # the cluster summary text, which can be a raw user prompt.
             topic_src = bullets[0].lstrip("- ")
+            # Strip any lingering prompt words from the title.
+            topic_src = re.sub(
+                r"^(帮我|请立即|请|如何|怎么|thoroughly explore\s+the\s+|please\s+)\S*",
+                "",
+                topic_src,
+                flags=re.I,
+            ).strip(" ,;:|/。")
+            if not topic_src:
+                topic_src = bullets[0].lstrip("- ")
             words = re.findall(r"[a-z0-9一-鿿]+", topic_src.lower())
             topic = "-".join([w for w in words if len(w) > 1][:4]) or f"cluster-{i+1}"
             slug_src = f"{kind_hint}-{topic}" if kind_hint else topic
             slug = re.sub(r"[^a-z0-9一-鿿-]+", "-", slug_src).strip("-").lower()[:60]
             if not slug:
                 slug = "auto-cluster-" + _h.md5(slug_src.encode("utf-8")).hexdigest()[:10]
-            title = _title_from(bullets[0].lstrip("- "), fallback_kind=kind_hint, max_len=58)
+            title = _title_from(topic_src, fallback_kind=kind_hint, max_len=58)
             summary = bullets[0].lstrip("- ")[:200].rstrip(" .,;:")
             if not summary:
                 continue
@@ -1051,14 +1386,14 @@ class EvolutionConsolidator:
             body_lines = list(bullets)
             if evidence_ids:
                 body_lines.append(
-                    f"\n_Source: {len(evidence_ids)} memories · importance-weighted top-7_"
+                    f"\n_Source: {len(evidence_ids)} memories · importance-weighted top-{len(ranked)}_"
                 )
             body = "\n".join(body_lines)
             tags = ["auto", "rule-based"]
             if kind_hint:
                 tags.append(kind_hint)
-            top3_imp = [float(getattr(m, "importance", 0.0) or 0.0) for m in ranked[:3]]
-            importance = max(0.35, sum(top3_imp) / max(1, len(top3_imp)))
+            top_imp = [float(getattr(m, "importance", 0.0) or 0.0) for m in ranked[:5]]
+            importance = max(0.35, sum(top_imp) / max(1, len(top_imp)))
             importance = round(min(1.0, importance), 2)
             existing_p = self.store.get_wiki_page_by_slug(slug)
             try:
@@ -1073,6 +1408,10 @@ class EvolutionConsolidator:
                 created += 1
             else:
                 updated += 1
+            if skipped_prompts:
+                stats.notes.append(
+                    f"rule-wiki {slug[:30]}: skipped {skipped_prompts} raw prompt(s)"
+                )
         stats.wiki_calls += 1
         return {"created": created, "updated": updated, "calls": 1}
 
@@ -1083,14 +1422,21 @@ class EvolutionConsolidator:
         self, memories: list[StoredMemory]
     ) -> list[StoredMemory]:
         """Drop memories that carry no actionable information: short
-        status pings, single-line acknowledgements, etc. These dilute
-        the cluster LLM and inflate the wiki page count without value."""
+        status pings, single-line acknowledgements, raw user prompts, etc.
+        These dilute the cluster LLM and inflate the wiki page count
+        without value. We keep raw user prompts in the *store* (for
+        session replay and contradiction detection) but filter them from
+        the distillation path."""
         kept: list[StoredMemory] = []
         for m in memories:
             text = (m.text or "").strip()
             if _is_low_signal(text):
                 continue
             if len(text) < 16:
+                continue
+            # Hard filter: raw user prompts should not pollute the wiki.
+            # We classify them as noise for the distillation pipeline.
+            if _looks_like_raw_prompt(text):
                 continue
             kept.append(m)
         return kept
