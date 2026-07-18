@@ -121,6 +121,12 @@ export const KnowledgeGraph = defineComponent({
           entities: (g.entities || []).length,
           relations: (g.relations || []).length,
         };
+        if (Number.isFinite(g.stats?.entities) && Number.isFinite(g.stats?.relations)) {
+          store.stats = {
+            ...store.stats,
+            graph: `${g.stats.entities}/${g.stats.relations}`,
+          };
+        }
 
         graphEdges = (g.relations || []).map((r, i) => ({
           src: r.src, dst: r.dst, weight: r.weight,

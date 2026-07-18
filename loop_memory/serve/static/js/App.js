@@ -43,7 +43,9 @@ export const App = defineComponent({
           ...store.stats,
           memories: data.memories, sessions: data.sessions,
           wiki_pages: data.wiki_pages || 0, avg_score: data.avg_score,
-          graph: data.entities ? `${data.entities}/${data.entities}` : '0/0',
+          graph: Number.isFinite(data.entities) && Number.isFinite(data.relations)
+            ? `${data.entities}/${data.relations}`
+            : store.stats.graph,
           dbPath: data.path,
         };
       } catch (e) { /* ignore */ }

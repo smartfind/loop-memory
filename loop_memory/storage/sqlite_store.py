@@ -1383,12 +1383,16 @@ class MemoryStore:
             n_mem = c.execute("SELECT COUNT(*) c FROM memories").fetchone()["c"]
             n_ses = c.execute("SELECT COUNT(*) c FROM sessions").fetchone()["c"]
             n_wiki = c.execute("SELECT COUNT(*) c FROM wiki_pages").fetchone()["c"]
+            n_entities = c.execute("SELECT COUNT(*) c FROM entities").fetchone()["c"]
+            n_relations = c.execute("SELECT COUNT(*) c FROM relations").fetchone()["c"]
             avg = c.execute("SELECT AVG(score) a FROM memories").fetchone()["a"] or 0.0
             wiki_avg = c.execute("SELECT AVG(importance) a FROM wiki_pages").fetchone()["a"] or 0.0
             return {
                 "memories": n_mem,
                 "sessions": n_ses,
                 "wiki_pages": n_wiki,
+                "entities": n_entities,
+                "relations": n_relations,
                 "wiki_avg_importance": round(float(wiki_avg), 4),
                 "avg_score": round(avg, 4),
                 "path": str(self.path),
