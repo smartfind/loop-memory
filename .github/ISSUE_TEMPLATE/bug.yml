@@ -1,0 +1,16 @@
+name: Bug report
+description: Something is broken.
+labels: ["bug"]
+body:
+  - type: textarea
+    attributes:
+      label: What happened?
+      placeholder: Traceback + minimal repro.
+  - type: input
+    attributes:
+      label: Loop Memory version
+      placeholder: 0.1.0
+  - type: input
+    attributes:
+      label: Python version
+      placeholder: "3.12"

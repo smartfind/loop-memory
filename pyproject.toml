@@ -1,0 +1,84 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "loop-memory"
+version = "0.3.0"
+description = "A Loop Engineering memory system for large language models, with a local web UI and auto-ingest from Codex / Claude / Hermes transcripts."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Loop Memory contributors <loop-memory@users.noreply.github.com>" }]
+keywords = ["llm", "memory", "agent", "rag", "long-term-memory", "loop-engineering"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
+dependencies = []
+
+[project.optional-dependencies]
+openai   = ["openai~=1.30"]
+chroma   = ["chromadb~=0.4"]
+sentence = ["sentence-transformers~=2.6"]
+serve    = ["fastapi~=0.110", "uvicorn~=0.27"]
+dev      = ["pytest~=8.0", "coverage~=7.0", "ruff~=0.5"]
+all      = ["openai~=1.30", "chromadb~=0.4", "sentence-transformers~=2.6", "fastapi~=0.110", "uvicorn~=0.27"]
+
+[project.urls]
+Homepage       = "https://github.com/smartfind/loop-memory"
+Documentation  = "https://github.com/smartfind/loop-memory#readme"
+Source         = "https://github.com/smartfind/loop-memory"
+Issues         = "https://github.com/smartfind/loop-memory/issues"
+Changelog      = "https://github.com/smartfind/loop-memory/blob/main/CHANGELOG.md"
+
+[project.scripts]
+loop-memory = "loop_memory.cli.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["loop_memory*"]
+
+[tool.setuptools.package-data]
+loop_memory = ["py.typed", "serve/static/*.html"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501", "E701", "E702", "F821", "F401", "B007", "B904", "UP035", "I001"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.coverage.run]
+source = ["loop_memory"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+exclude_lines = ["pragma: no cover"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+warn_unused_ignores = false
+warn_redundant_casts = false
+# `from __future__ import annotations` is used everywhere, so type
+# comments live in annotations rather than runtime objects — be
+# lenient about untyped decorators / dynamic dicts.
+disallow_untyped_defs = false

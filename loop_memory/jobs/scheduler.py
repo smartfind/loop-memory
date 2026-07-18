@@ -1,0 +1,317 @@
+"""Background scheduler for LLM-driven consolidation.
+
+A single daemon thread (started lazily on the first call) keeps a
+cheap clock and triggers an ``LLMConsolidator.run`` when the user's
+configured schedule says so. Modes supported:
+
+* ``off``       - never run
+* ``realtime``  - run after ingest has been idle for N seconds
+* ``hourly``    - run every hour on the hour
+* ``daily``     - run once a day at ``schedule.hour:schedule.minute``
+* ``weekly``    - run once a week on ``schedule.weekday`` at the same
+                  hour/minute
+* ``interval``  - run every ``schedule.interval_minutes`` minutes
+
+The scheduler is *co-operative*: it can be stopped and reconfigured
+without restarting the server. ``tick(now)`` is idempotent.
+"""
+
+from __future__ import annotations
+
+import logging
+import threading
+import time
+from dataclasses import dataclass
+from typing import Any
+
+from ..llm.providers import build_provider, default_config, validate_config
+from ..storage.sqlite_store import MemoryStore
+from .llm_consolidate import ConsolidateStats, LLMConsolidator
+
+log = logging.getLogger(__name__)
+
+
+def _next_daily(now: float, hour: int, minute: int) -> float:
+    import datetime as _dt
+    t = _dt.datetime.fromtimestamp(now)
+    nxt = t.replace(hour=int(hour) % 24, minute=int(minute) % 60, second=0, microsecond=0)
+    if nxt.timestamp() <= now:
+        nxt = nxt + _dt.timedelta(days=1)
+    return nxt.timestamp()
+
+
+def _next_weekly(now: float, weekday: int, hour: int, minute: int) -> float:
+    import datetime as _dt
+    t = _dt.datetime.fromtimestamp(now)
+    nxt = t.replace(hour=int(hour) % 24, minute=int(minute) % 60, second=0, microsecond=0)
+    days_ahead = (int(weekday) - t.weekday()) % 7
+    if days_ahead == 0 and nxt.timestamp() <= now:
+        days_ahead = 7
+    nxt = nxt + _dt.timedelta(days=days_ahead)
+    return nxt.timestamp()
+
+
+@dataclass
+class _State:
+    next_run: float = 0.0
+    last_run: float = 0.0
+    last_stats: dict[str, Any] | None = None
+    last_error: str | None = None
+    last_run_id: str | None = None
+    is_running: bool = False
+    last_ingest_at: float = 0.0    # updated by watcher / ingest hooks
+    # Live progress for the currently active run.
+    progress_current: int = 0
+    progress_total: int = 0
+    progress_started_at: float = 0.0
+    progress_run_id: str | None = None
+    progress_message: str = ""
+
+
+class ConsolidatorScheduler:
+    """A small in-process scheduler.
+
+    It is *not* a replacement for cron/launchd. It's good enough to
+    satisfy "the page should auto-refresh on a schedule even when the
+    server is just running in the background" - the typical developer
+    loop.
+    """
+
+    def __init__(self, store: MemoryStore) -> None:
+        self.store = store
+        self._lock = threading.RLock()
+        self._state = _State()
+        self._thread: threading.Thread | None = None
+        self._run_threads: set[threading.Thread] = set()
+        self._stop = threading.Event()
+        self._wake = threading.Event()  # set by config changes to recompute next_run
+        self._cfg: dict[str, Any] = default_config()
+        self._load_config()
+
+    # --- public API -------------------------------------------------------
+
+    def reload_config(self) -> dict[str, Any]:
+        """Read latest config from the store; return the effective config."""
+        with self._lock:
+            self._load_config()
+            self._recompute_next_run(time.time())
+            self._wake.set()
+        return self._cfg
+
+    def status(self) -> dict[str, Any]:
+        with self._lock:
+            s = self._state
+            return {
+                "is_running": s.is_running,
+                "next_run": s.next_run if s.next_run > 0 else None,
+                "last_run": s.last_run if s.last_run > 0 else None,
+                "last_stats": s.last_stats,
+                "last_error": s.last_error,
+                "last_run_id": s.last_run_id,
+                "schedule": (self._cfg.get("schedule") or {}),
+                "behaviour": (self._cfg.get("behaviour") or {}),
+                "provider": self._cfg.get("provider"),
+                "model": self._cfg.get("model"),
+                "progress": {
+                    "current": s.progress_current,
+                    "total": s.progress_total,
+                    "started_at": s.progress_started_at if s.progress_started_at > 0 else None,
+                    "run_id": s.progress_run_id,
+                    "message": s.progress_message,
+                },
+            }
+
+    def notify_ingest(self) -> None:
+        """Mark 'something was just ingested' so realtime mode can fire."""
+        with self._lock:
+            self._state.last_ingest_at = time.time()
+            sched = self._cfg.get("schedule") or {}
+            if sched.get("mode") == "realtime":
+                self._recompute_next_run(time.time())
+                self._wake.set()
+
+    def run_now(self, trigger: str = "manual", block: bool = False) -> dict[str, Any] | None:
+        """Run a consolidation pass synchronously (or on a background
+        thread if ``block`` is False). Returns the run id when async."""
+        if block:
+            return self._do_run(trigger)
+        self._start_run_thread(trigger)
+        return None
+
+    def start(self) -> None:
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._loop, name="consolidator", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._wake.set()
+        if self._thread:
+            self._thread.join(timeout=2.0)
+            self._thread = None
+        with self._lock:
+            run_threads = list(self._run_threads)
+        for thread in run_threads:
+            thread.join(timeout=2.0)
+
+    def _start_run_thread(self, trigger: str) -> None:
+        def run() -> None:
+            try:
+                self._do_run_safe(trigger)
+            finally:
+                with self._lock:
+                    self._run_threads.discard(thread)
+
+        thread = threading.Thread(target=run, daemon=True)
+        with self._lock:
+            self._run_threads.add(thread)
+        thread.start()
+
+    # --- internals --------------------------------------------------------
+
+    def _load_config(self) -> None:
+        cfg = self.store.get_setting("llm_consolidator", default_config())
+        if not isinstance(cfg, dict):
+            cfg = default_config()
+        cfg, _ = validate_config(cfg)
+        self._cfg = cfg
+
+    def _recompute_next_run(self, now: float) -> None:
+        sched = self._cfg.get("schedule") or {}
+        mode = sched.get("mode", "off")
+        s = self._state
+        if not sched.get("enabled", False) or mode == "off":
+            s.next_run = 0.0
+            return
+        if mode == "hourly":
+            # next top of hour
+            import datetime as _dt
+            t = _dt.datetime.fromtimestamp(now)
+            nxt = t.replace(minute=0, second=0, microsecond=0) + _dt.timedelta(hours=1)
+            s.next_run = nxt.timestamp()
+            return
+        if mode == "daily":
+            s.next_run = _next_daily(now, sched.get("hour", 3), sched.get("minute", 0))
+            return
+        if mode == "weekly":
+            s.next_run = _next_weekly(
+                now, sched.get("weekday", 0), sched.get("hour", 3), sched.get("minute", 0)
+            )
+            return
+        if mode == "interval":
+            minutes = max(1, int(sched.get("interval_minutes") or 60))
+            base = s.last_run or now
+            s.next_run = base + minutes * 60
+            if s.next_run < now:
+                s.next_run = now + 1
+            return
+        if mode == "realtime":
+            idle = max(0, int(sched.get("after_ingest_idle_sec") or 30))
+            base = max(s.last_ingest_at, now)
+            s.next_run = base + idle
+            return
+        s.next_run = 0.0
+
+    def _loop(self) -> None:
+        log.info("consolidator scheduler started")
+        while not self._stop.is_set():
+            now = time.time()
+            with self._lock:
+                s = self._state
+                sched = self._cfg.get("schedule") or {}
+                enabled = bool(sched.get("enabled", False)) and (sched.get("mode", "off") != "off")
+                if not enabled:
+                    s.next_run = 0.0
+                else:
+                    if s.next_run <= 0:
+                        self._recompute_next_run(now)
+                    if now >= s.next_run and not s.is_running:
+                        s.is_running = True
+                        trigger = "schedule" if sched.get("mode") != "realtime" else "realtime"
+                        self._start_run_thread(trigger)
+                wait = max(1.0, min(60.0, (s.next_run - now) if s.next_run > 0 else 30.0))
+            self._wake.wait(timeout=wait)
+            self._wake.clear()
+        log.info("consolidator scheduler stopped")
+
+    def _do_run_safe(self, trigger: str) -> None:
+        try:
+            self._do_run(trigger)
+        except Exception as e:
+            log.exception("consolidator run failed: %s", e)
+        finally:
+            with self._lock:
+                self._state.is_running = False
+                self._recompute_next_run(time.time())
+                self._wake.set()
+
+    def _do_run(self, trigger: str) -> dict[str, Any]:
+        # Reload config in case the user updated it between ticks.
+        with self._lock:
+            self._load_config()
+            cfg = self._cfg
+            model_name = cfg.get("model") or "?"
+            self._state.is_running = True
+            self._state.progress_current = 0
+            self._state.progress_total = 0
+            self._state.progress_started_at = time.time()
+            self._state.progress_message = ""
+        provider = build_provider(cfg)
+        run_id = self.store.start_consolidation_run(trigger=trigger, model=model_name)
+        log.info("consolidation run %s start (trigger=%s, model=%s)", run_id, trigger, model_name)
+        with self._lock:
+            self._state.progress_run_id = run_id
+
+        def _progress(current: int, total: int) -> None:
+            with self._lock:
+                self._state.progress_current = current
+                self._state.progress_total = total
+                self._state.progress_message = f"{current}/{total} memories"
+
+        stats: ConsolidateStats
+        try:
+            cons = LLMConsolidator(self.store, provider, cfg.get("behaviour") or {})
+            cons.set_run_id(run_id)
+            stats = cons.run(progress=_progress)
+        except Exception as e:
+            log.exception("consolidator failed: %s", e)
+            self.store.finish_consolidation_run(run_id, "error", stats=None, error=str(e))
+            with self._lock:
+                self._state.is_running = False
+                self._state.progress_current = 0
+                self._state.progress_total = 0
+                self._state.progress_started_at = 0.0
+                self._state.progress_message = ""
+                self._state.last_error = str(e)
+                self._state.last_run_id = run_id
+                self._state.last_run = time.time()
+            return {"run_id": run_id, "status": "error", "error": str(e)}
+        d = stats.to_dict()
+        self.store.finish_consolidation_run(run_id, "done", stats=d)
+        # If the run produced or updated any wiki pages, refresh the
+        # knowledge graph from the new distilled knowledge so the
+        # graph tab stays in sync with the wiki.
+        try:
+            if (d.get("wiki_pages_created") or 0) + (d.get("wiki_pages_updated") or 0) > 0:
+                from ..graph.build import KnowledgeGraph
+                report = KnowledgeGraph(self.store).rebuild_from_wiki(clear=True)
+                log.info(
+                    "graph auto-rebuilt after run %s: %d entities, %d relations",
+                    run_id, report.entities, report.relations,
+                )
+        except Exception as e:
+            log.warning("post-run graph rebuild failed: %s", e)
+        with self._lock:
+            self._state.is_running = False
+            self._state.progress_current = 0
+            self._state.progress_total = 0
+            self._state.progress_started_at = 0.0
+            self._state.progress_message = ""
+            self._state.last_run = time.time()
+            self._state.last_stats = d
+            self._state.last_error = None
+            self._state.last_run_id = run_id
+        log.info("consolidation run %s done: %s", run_id, d)
+        return {"run_id": run_id, "status": "done", "stats": d}
