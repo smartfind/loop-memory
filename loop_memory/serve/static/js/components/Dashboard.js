@@ -172,7 +172,7 @@ export const Dashboard = defineComponent({
             avg_score: stats.avg_score,
             graph: insightsData
               ? `${insightsData.overview?.entities || 0}/${insightsData.overview?.links || 0}`
-              : '0/0',
+              : store.stats.graph,
             dbPath: stats.path,
           };
         }

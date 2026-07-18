@@ -95,9 +95,14 @@ class StoreTests(unittest.TestCase):
         s = self.store.upsert_session(source="codex", external_id="z", message_count=0)
         self.store.upsert_memory(kind="turn", text="x", session_id=s.id)
         self.store.upsert_memory(kind="turn", text="y", session_id=s.id)
+        self.store.upsert_entity("Codex")
+        self.store.upsert_entity("Claude")
+        self.store.upsert_relation("Codex", "Claude")
         stats = self.store.stats()
         self.assertEqual(stats["memories"], 2)
         self.assertEqual(stats["sessions"], 1)
+        self.assertEqual(stats["entities"], 2)
+        self.assertEqual(stats["relations"], 1)
 
 
 if __name__ == "__main__":
