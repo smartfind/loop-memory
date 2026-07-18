@@ -659,13 +659,17 @@ section > h3 { font-size: 12px; text-transform: uppercase; color: var(--text-fai
   font-variant-numeric: tabular-nums;
 }
 
-/* --- Lifecycle strip (6 stages) --- */
+/* --- Lifecycle strip (6 stages) ----------------------------------- */
+/* Slimmer icons + a rail whose vertical midline exactly meets the
+ * icon centers (was 10px below). Three small beads per gap roll
+ * left → right with a gentle color shift; the destination bead is
+ * one size larger but not the heavy "pop" the previous version did. */
 .ins-lifecycle {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 0;
-  padding: 18px 10px 14px;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 2.5%, var(--surface)), var(--surface));
+  padding: 22px 10px 16px;       /* top:22 so flow top:18 + half-icon sits over the rail midline */
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 2%, var(--surface)), var(--surface));
   border-radius: 14px;
   border: 1px solid var(--border);
   overflow: hidden;
@@ -673,7 +677,7 @@ section > h3 { font-size: 12px; text-transform: uppercase; color: var(--text-fai
 @media (max-width: 900px) { .ins-lifecycle { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 .ins-lc-stage {
   --stage-color: #6366f1;
-  padding: 4px 8px 2px;
+  padding: 0 6px;
   display: flex; flex-direction: column; align-items: center; gap: 4px;
   position: relative;
   min-width: 0;
@@ -683,65 +687,86 @@ section > h3 { font-size: 12px; text-transform: uppercase; color: var(--text-fai
 .ins-lc-stage[data-tone="purple"] { --stage-color: #8b5cf6; }
 .ins-lc-stage[data-tone="slate"]  { --stage-color: #64748b; }
 .ins-lc-stage[data-tone="rose"]   { --stage-color: #f43f5e; }
+/* Slimmer icon: was 42px, now 32px with a thin ring (no heavy box-shadow halo). */
 .ins-lc-icon {
-  width: 42px; height: 42px;
+  width: 32px; height: 32px;
   display: grid; place-items: center;
   border-radius: 50%;
-  font-size: 17px; font-weight: 700;
+  font-size: 14px; font-weight: 600;
   color: var(--stage-color);
-  background: var(--surface);
-  border: 1px solid color-mix(in srgb, var(--stage-color) 40%, var(--border));
-  box-shadow: 0 0 0 5px color-mix(in srgb, var(--stage-color) 10%, transparent);
+  background: color-mix(in srgb, var(--stage-color) 7%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--stage-color) 45%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--stage-color) 8%, transparent);
   position: relative;
   z-index: 3;
+  transition: box-shadow .35s ease, background .35s ease;
 }
-.ins-lc-stage.active .ins-lc-icon { animation: lc-node-breathe 3.2s ease-in-out infinite; }
-.ins-lc-val { margin-top: 5px; font-size: 17px; line-height: 1; font-weight: 750; color: var(--text); font-variant-numeric: tabular-nums; }
-.ins-lc-label { font-size: 11px; color: var(--text-mute); font-weight: 650; }
-.ins-lc-pct { font-size: 10.5px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
-/* Rollers: three coloured beads per gap, each travels from the
- * source stage icon to the destination icon, growing ~1.6x along the
- * way. The bead starts in --from-tone and shades toward --to-tone
- * during the journey, ending bigger and in --to-tone so it visibly
- * pops as it lands at the destination.
- *
- * `--from-tone` and `--to-tone` are set inline per gap from the
- * template (Dashboard.js -> lifecycleSegments -> ins-lc-flow style).
- */
+/* Active stage: a soft continuous pulse instead of a thumping keyframe. */
+.ins-lc-stage.active .ins-lc-icon {
+  box-shadow: 0 0 0 5px color-mix(in srgb, var(--stage-color) 14%, transparent);
+  background: color-mix(in srgb, var(--stage-color) 12%, var(--surface));
+}
+.ins-lc-val { margin-top: 7px; font-size: 15px; line-height: 1; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
+.ins-lc-label { font-size: 11px; color: var(--text-mute); font-weight: 600; }
+.ins-lc-pct { font-size: 10px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+
+/* Rail — positioned so its vertical center matches the icon center.
+ * Icon top y = 22 (stage padding-top) + 0 = 22; center y = 22+16 = 38.
+ * Flow height = 4 → flow top = 38 - 2 = 36. Distance from icon center
+ * to flow mid: 0. (Was 10px below.) */
 .ins-lc-flow {
   position: absolute;
   z-index: 1;
-  top: 28px;
-  left: calc(50% + 22px);
-  width: calc(100% - 44px);
-  height: 14px;
+  top: 36px;
+  left: calc(50% + 16px);
+  width: calc(100% - 32px);
+  height: 4px;
   pointer-events: none;
 }
-/* Static rail so the path is always visible even between balls. */
+/* Static rail — thin, low-opacity gradient so the eye reads "path"
+ * without competing with the beads. */
 .ins-lc-flow::before {
   content: "";
   position: absolute;
-  top: 6px;
-  left: 0;
-  right: 0;
-  height: 2px;
+  top: 50%;
+  left: 0; right: 0;
+  height: 1px;
+  margin-top: -0.5px;
+  border-radius: 1px;
+  background: linear-gradient(
+    to right,
+    transparent 0%,
+    color-mix(in srgb, var(--from-tone) 55%, transparent) 18%,
+    color-mix(in srgb, var(--from-tone, var(--to-tone)) 60%, var(--to-tone) 40%) 50%,
+    color-mix(in srgb, var(--to-tone) 55%, transparent) 82%,
+    transparent 100%
+  );
+  opacity: .45;
+}
+/* Soft ambient trail — a faint colored haze behind the rail that
+ * suggests flow direction without overpowering the beads. */
+.ins-lc-flow::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 0; right: 0;
+  height: 3px;
+  margin-top: -1.5px;
   border-radius: 999px;
   background: linear-gradient(
     to right,
-    color-mix(in srgb, var(--from-tone) 38%, transparent) 0%,
-    color-mix(in srgb, var(--from-tone) 38%, var(--to-tone) 50%) 50%,
-    color-mix(in srgb, var(--to-tone) 38%, transparent) 100%
+    transparent,
+    color-mix(in srgb, var(--from-tone) 10%, transparent),
+    color-mix(in srgb, var(--to-tone) 10%, transparent),
+    transparent
   );
-  opacity: .55;
+  filter: blur(2px);
+  opacity: .5;
 }
-/* Lifecycle beads: three colored balls per gap, two small ones
- * rolling on the line and one clearly larger destination pop.
- *
- * Translation is done via the `left` property (referring to PARENT
- * width) rather than `translateX(%)`, which would reference the
- * ball's own width and effectively never move. */
+
+/* Beads — small (3-4px), single soft glow, color-shifting during travel. */
 .ins-lc-ball {
-  --ball-size: 6px;
+  --ball-size: 4px;
   position: absolute;
   top: 50%;
   left: 0;
@@ -752,60 +777,51 @@ section > h3 { font-size: 12px; text-transform: uppercase; color: var(--text-fai
   background: var(--from-tone);
   opacity: 0;
   will-change: left, transform, opacity, background-color, box-shadow;
-  outline: 1px solid rgba(255,255,255,.35);
-  outline-offset: -1px;
 }
-/* Two on-line rolling beads + one clearly larger destination bead.
- * The destination bead (p3) is intentionally ~1 size larger than
- * the on-line beads so it visibly "lands" at the next stage. */
-.ins-lc-ball.p1 { --ball-size: 6px;  animation: lc-ball-roll 2.6s linear infinite;   }  /* on-line */
-.ins-lc-ball.p2 { --ball-size: 5px;  animation: lc-ball-roll 2.6s linear 0.85s infinite; } /* on-line */
-.ins-lc-ball.p3 { --ball-size: 12px; animation: lc-ball-roll 2.6s linear 1.7s infinite; }  /* destination pop ~1 size larger */
+/* Two on-line rolling beads (small) + one destination bead
+ * (~1 size larger). All very subtle. */
+.ins-lc-ball.p1 { --ball-size: 4px;  animation: lc-ball-roll 3.2s linear infinite; }
+.ins-lc-ball.p2 { --ball-size: 3px;  animation: lc-ball-roll 3.2s linear 1.05s infinite; }
+.ins-lc-ball.p3 { --ball-size: 6px;  animation: lc-ball-roll 3.2s linear 2.1s  infinite; }
 
-/* Each bead leaves from the source icon, glides left → right, grows
- * visibly, shifts color from --from-tone to --to-tone, and pops at
- * the destination. Using `left` (parent-relative) instead of
- * `translateX` (self-relative) so the bead actually moves across
- * the rail instead of staying pinned at scale-only motion. */
+/* Slow, gentle, color-shifting roll. The destination bead (p3)
+ * grows ~1.5x when it lands; on-line beads stay small throughout. */
 @keyframes lc-ball-roll {
   0% {
     left: 0;
-    transform: scale(0.6);
+    transform: scale(0.5);
     background: var(--from-tone);
-    box-shadow: 0 0 0 color-mix(in srgb, var(--from-tone) 65%, transparent);
+    box-shadow: 0 0 0 transparent;
     opacity: 0;
   }
-  12% {
-    left: calc(12% - var(--ball-size) * 0.12);
+  10% {
+    left: 10%;
     transform: scale(1);
-    opacity: 1;
+    opacity: 0.95;
+    box-shadow: 0 0 4px color-mix(in srgb, var(--from-tone) 60%, transparent);
   }
   50% {
     left: calc(50% - var(--ball-size) / 2);
-    transform: scale(1.1);
+    transform: scale(1);
     background: color-mix(in srgb, var(--from-tone) 50%, var(--to-tone) 50%);
     box-shadow:
-      0 0 8px color-mix(in srgb, var(--from-tone) 50%, var(--to-tone) 50%),
-      0 0 14px color-mix(in srgb, var(--from-tone) 40%, transparent);
+      0 0 5px color-mix(in srgb, var(--from-tone) 50%, var(--to-tone) 50%),
+      0 0 10px color-mix(in srgb, var(--from-tone) 25%, transparent);
   }
-  88% {
+  85% {
     left: calc(100% - var(--ball-size));
-    transform: scale(1.6);
+    opacity: 0.95;
+    transform: scale(1.5);
     background: var(--to-tone);
     box-shadow:
-      0 0 14px var(--to-tone),
-      0 0 26px color-mix(in srgb, var(--to-tone) 55%, transparent);
-    opacity: 1;
+      0 0 6px var(--to-tone),
+      0 0 12px color-mix(in srgb, var(--to-tone) 40%, transparent);
   }
   100% {
     left: calc(100% - var(--ball-size));
-    transform: scale(1.6);
+    transform: scale(1.5);
     opacity: 0;
   }
-}
-@keyframes lc-node-breathe {
-  0%, 100% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--stage-color) 7%, transparent); }
-  50%      { box-shadow: 0 0 0 9px color-mix(in srgb, var(--stage-color) 2%, transparent); }
 }
 @media (max-width: 900px) {
   .ins-lc-stage:nth-child(3) .ins-lc-flow { display: none; }
