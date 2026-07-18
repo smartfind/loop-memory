@@ -18,7 +18,7 @@ export const TopBar = defineComponent({
   emits: ['ingest', 'rescore', 'llm-run', 'run-now', 'open-settings', 'open-stats', 'open-diag', 'rebuild-graph', 'consolidate'],
   setup(props, { emit }) {
     const statsOpen = ref(false);
-    const kebabOpen = ref(false);
+    const toolsOpen = ref(false);
 
     const runLabel = computed(() => {
       if (store.runStatus && store.runStatus.is_running) {
@@ -31,32 +31,32 @@ export const TopBar = defineComponent({
 
     const runState = computed(() => store.runStatus && store.runStatus.is_running ? 'running' : 'idle');
 
-    function toggleStats() { statsOpen.value = !statsOpen.value; kebabOpen.value = false; }
-    function toggleKebab() { kebabOpen.value = !kebabOpen.value; statsOpen.value = false; }
-    function closeAll() { statsOpen.value = false; kebabOpen.value = false; }
+    function toggleStats() { statsOpen.value = !statsOpen.value; toolsOpen.value = false; }
+    function toggleTools() { toolsOpen.value = !toolsOpen.value; statsOpen.value = false; }
+    function closeAll() { statsOpen.value = false; toolsOpen.value = false; }
 
     function setLang(l) { patchPrefs({ lang: l }); closeAll(); }
     function setTheme(th) { patchPrefs({ theme: th }); closeAll(); }
 
     function onDocClick(e) {
       if (!e.target.closest('#stats-chip') && !e.target.closest('#stats-pop')) statsOpen.value = false;
-      if (!e.target.closest('.tb-kebab') && !e.target.closest('.tb-kebab-menu')) kebabOpen.value = false;
+      if (!e.target.closest('.tb-tools') && !e.target.closest('.tb-tools-menu')) toolsOpen.value = false;
     }
     onMounted(() => document.addEventListener('click', onDocClick));
     onUnmounted(() => document.removeEventListener('click', onDocClick));
 
     return {
       store, t, runLabel, runState,
-      statsOpen, kebabOpen,
-      toggleStats, toggleKebab, closeAll,
+      statsOpen, toolsOpen,
+      toggleStats, toggleTools, closeAll,
       setLang, setTheme,
-      onIngest:      () => emit('ingest'),
-      onRescore:     () => emit('rescore'),
-      onLlmRun:      () => emit('llm-run'),
-      onRunNow:      () => emit('run-now'),
-      onOpenSettings:() => emit('open-settings'),
+      onIngest:      () => { closeAll(); emit('ingest'); },
+      onRescore:     () => { closeAll(); emit('rescore'); },
+      onLlmRun:      () => { closeAll(); emit('llm-run'); },
+      onRunNow:      () => { closeAll(); emit('run-now'); },
+      onOpenSettings:() => { closeAll(); emit('open-settings'); },
       onOpenStats:   () => emit('open-stats'),
-      onOpenDiag:    () => emit('open-diag'),
+      onOpenDiag:    () => { closeAll(); emit('open-diag'); },
       onRebuildGraph:() => { closeAll(); emit('rebuild-graph'); },
       onConsolidate:  () => { closeAll(); emit('consolidate'); },
     };
@@ -105,8 +105,8 @@ export const TopBar = defineComponent({
 
   <div class="spacer"></div>
 
-  <div class="group-right">
-    <span class="model-chip" id="model-chip" :data-state="store.modelInfo.api_key_set ? 'on' : 'off'" role="button" tabindex="0"
+  <div class="group-right topbar-command-bar">
+    <span class="model-chip" id="model-chip" :data-state="store.modelInfo.api_key_set ? 'ok' : 'off'" role="button" tabindex="0"
           :title="t('model.configureTip')" @click="onOpenSettings">
       <span class="dot"></span>
       <span>{{ t('model.label') }}</span>
@@ -114,51 +114,63 @@ export const TopBar = defineComponent({
       <svg class="lock" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 015 0v2"/></svg>
     </span>
 
-    <div class="tb-divider"></div>
-
-    <button class="tb-action" :title="t('action.ingestTip')" @click="onIngest">
-      <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1l3.5 4H9v6H7V5H4.5L8 1zM2 13h12v1.5H2z"/></svg>
-      <span>{{ t('action.ingest') }}</span>
-    </button>
-    <button class="tb-action" :title="t('action.rescoreTip')" @click="onRescore">
-      <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 3a5 5 0 105 5h-2a3 3 0 11-3-3V3z"/></svg>
-      <span>{{ t('action.rescore') }}</span>
-    </button>
-    <button class="tb-action primary" :title="t('action.llmRunTip')" @click="onLlmRun">
-      <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1l2.2 4.6L15 6.3l-3.5 3.4.8 4.8L8 12.4 3.7 14.5l.8-4.8L1 6.3l4.8-.7L8 1z"/></svg>
-      <span>{{ t('action.llmRun') }}</span>
-    </button>
-    <button class="tb-action accent" :title="t('action.runNowTip')" @click="onRunNow">
-      <svg viewBox="0 0 16 16" fill="currentColor"><path d="M9 1L3 9h4l-1 6 6-8H8l1-6z"/></svg>
-      <span>{{ t('action.runNow') }}</span>
-    </button>
-
-    <div class="tb-divider"></div>
-
-    <button class="tb-action ghost" :title="t('diag.title')" @click="onOpenDiag">
-      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6"/><path d="M8 4v4l3 2"/></svg>
-    </button>
-
-    <div class="tb-kebab" style="position:relative;">
-      <button class="tb-action ghost" :title="t('topbar.settings')" @click.stop="toggleKebab">
-        <svg viewBox="0 0 16 16" fill="currentColor"><circle cx="3" cy="8" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="13" cy="8" r="1.5"/></svg>
+    <div class="tb-command-group">
+      <button class="tb-action" :title="t('action.ingestTip')" @click="onIngest">
+        <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1l3.5 4H9v6H7V5H4.5L8 1zM2 13h12v1.5H2z"/></svg>
+        <span>{{ t('action.ingest') }}</span>
       </button>
-      <div class="tb-kebab-menu" v-show="kebabOpen" @click.stop>
-        <div class="menu-section">{{ t('topbar.language') }}</div>
-        <button class="menu-item" :class="{ active: store.lang === 'zh' }" @click="setLang('zh')">中文</button>
-        <button class="menu-item" :class="{ active: store.lang === 'en' }" @click="setLang('en')">English</button>
-        <hr/>
-        <div class="menu-section">{{ t('topbar.theme') }}</div>
-        <button class="menu-item" :class="{ active: store.theme === 'auto' }" @click="setTheme('auto')">Auto</button>
-        <button class="menu-item" :class="{ active: store.theme === 'light' }" @click="setTheme('light')">Light</button>
-        <button class="menu-item" :class="{ active: store.theme === 'dark' }" @click="setTheme('dark')">Dark</button>
-        <hr/>
-        <button class="menu-item" @click="onRebuildGraph">{{ t('topbar.rebuildGraph') }}</button>
-        <button class="menu-item" @click="onOpenDiag" title="Cmd+D">{{ t('topbar.doctor') }}</button>
-        <button class="menu-item" @click="onConsolidate">{{ t('action.consolidate') }}</button>
-        <hr/>
-        <button class="menu-item" @click="onOpenSettings">{{ t('action.settings') }}</button>
+      <button class="tb-action primary" :title="t('action.llmRunTip')" @click="onLlmRun">
+        <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1l2.2 4.6L15 6.3l-3.5 3.4.8 4.8L8 12.4 3.7 14.5l.8-4.8L1 6.3l4.8-.7L8 1z"/></svg>
+        <span>{{ t('action.llmRun') }}</span>
+      </button>
+      <button class="tb-action accent" :title="t('action.runNowTip')" @click="onRunNow">
+        <svg viewBox="0 0 16 16" fill="currentColor"><path d="M9 1L3 9h4l-1 6 6-8H8l1-6z"/></svg>
+        <span>{{ t('action.runNow') }}</span>
+      </button>
+    </div>
+
+    <div class="tb-tools">
+      <button class="tb-action tb-tools-trigger" :class="{ active: toolsOpen }"
+              :title="t('topbar.toolsTip')" @click.stop="toggleTools">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 4h10M3 8h10M3 12h10"/><circle cx="6" cy="4" r="1.5" fill="var(--surface)"/><circle cx="10" cy="8" r="1.5" fill="var(--surface)"/><circle cx="7" cy="12" r="1.5" fill="var(--surface)"/></svg>
+        <span>{{ t('topbar.tools') }}</span>
+        <svg class="caret" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 6.5L8 9.5l3-3"/></svg>
+      </button>
+      <div class="tb-tools-menu" v-show="toolsOpen" @click.stop>
+        <div class="tb-tools-heading">{{ t('topbar.maintenance') }}</div>
+        <button class="tb-tools-item" @click="onRescore">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13 8a5 5 0 11-1.5-3.6"/><path d="M10 2.5h3v3"/></svg>
+          <span><b>{{ t('action.rescore') }}</b><small>{{ t('action.rescoreTip') }}</small></span>
+        </button>
+        <button class="tb-tools-item" @click="onConsolidate">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 4h10M4.5 8h7M6 12h4"/></svg>
+          <span><b>{{ t('action.consolidate') }}</b><small>{{ t('topbar.consolidateTip') }}</small></span>
+        </button>
+        <button class="tb-tools-item" @click="onRebuildGraph">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="5.5"/><path d="M8 4.5v3.8l2.6 1.5"/></svg>
+          <span><b>{{ t('topbar.rebuildGraph') }}</b><small>{{ t('topbar.rebuildGraphTip') }}</small></span>
+        </button>
+        <div class="tb-tools-heading">{{ t('topbar.system') }}</div>
+        <button class="tb-tools-item" @click="onOpenDiag">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2.5 8h2l1.3-3 2.4 6 1.5-3H13.5"/></svg>
+          <span><b>{{ t('topbar.doctor') }}</b><small>⌘D</small></span>
+        </button>
       </div>
+    </div>
+
+    <div class="tb-utility-group">
+      <div class="tb-seg lang" :title="t('topbar.language')">
+        <button :class="{ active: store.lang === 'zh' }" @click="setLang('zh')">中</button>
+        <button :class="{ active: store.lang === 'en' }" @click="setLang('en')">EN</button>
+      </div>
+      <div class="tb-seg theme" :title="t('topbar.theme')">
+        <button :class="{ active: store.theme === 'auto' }" :title="t('topbar.themeAuto')" @click="setTheme('auto')">A</button>
+        <button :class="{ active: store.theme === 'light' }" :title="t('topbar.themeLight')" @click="setTheme('light')">☀</button>
+        <button :class="{ active: store.theme === 'dark' }" :title="t('topbar.themeDark')" @click="setTheme('dark')">☾</button>
+      </div>
+      <button class="icon-btn-circle settings-shortcut" :title="t('action.settings')" @click="onOpenSettings">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="2.4"/><path d="M8 1.8v1.5M8 12.7v1.5M1.8 8h1.5M12.7 8h1.5M3.6 3.6l1 1M11.4 11.4l1 1M3.6 12.4l1-1M11.4 4.6l1-1"/></svg>
+      </button>
     </div>
   </div>
 </header>
