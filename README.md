@@ -88,12 +88,19 @@ loop-memory consolidate          # rescore + GC + dedupe
 
 ---
 
-## Architecture
+## Architecture & docs
 
-See [docs/architecture.md](docs/architecture.md) for a layered view of the
-subpackages, the 5-stage evolution pipeline, the request lifecycle, and how
-secrets and settings are separated between the SQLite store and a local
-permission-restricted secrets file.
+| Doc | What's in it |
+| --- | --- |
+| [docs/architecture.md](docs/architecture.md) | Layered view of the subpackages, the 5-stage evolution pipeline, the request lifecycle, and how secrets and settings are separated between the SQLite store and a local permission-restricted secrets file |
+| [docs/api.md](docs/api.md) | HTTP API reference — every route, request body, and response shape the UI consumes |
+| [docs/providers.md](docs/providers.md) | LLM provider reference — built-in providers, defaults, base URLs, and how to add a new one |
+| [docs/auto-capture.md](docs/auto-capture.md) | Hooking Codex / Claude / Hermes / OpenClaw watchers (filesystem, launchd, systemd, cron) |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Local dev loop, pytest, where secrets live, how to add a provider/source |
+| [CHANGELOG.md](CHANGELOG.md) | Per-release notes |
+
+The live interactive OpenAPI document is at `http://127.0.0.1:7767/docs`
+once the server is running.
 
 ---
 

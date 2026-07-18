@@ -175,7 +175,9 @@ class OpenAICompatProvider(LLMClient):
         model: str = "gpt-4o-mini",
         api_key: str | None = None,
         base_url: str = "https://api.openai.com/v1",
-        timeout: float = 20.0,
+        # Default raised 20s → 60s in v2: with max_output_tokens=4096 the
+        # server can take well over 30s to stream a long wiki body.
+        timeout: float = 60.0,
     ) -> None:
         self.model = model
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY") or os.environ.get("LOOP_MEMORY_API_KEY")
@@ -210,7 +212,7 @@ class AnthropicProvider(LLMClient):
         model: str = "claude-3-5-haiku-latest",
         api_key: str | None = None,
         base_url: str = "https://api.anthropic.com",
-        timeout: float = 20.0,
+        timeout: float = 60.0,
     ) -> None:
         self.model = model
         self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
@@ -398,8 +400,12 @@ def default_config() -> dict[str, Any]:
         "behaviour": {
             "batch_size": 50,
             "min_importance": 0.0,
-            "max_text_chars": 1200,
-            "max_output_tokens": 800,
+            # Defaults tuned for the v2 distillation policy: completeness over
+            # compactness. We let the LLM see ~4K of input chars (enough to absorb
+            # a whole cluster + a chunk of prior wiki context) and emit up to
+            # 4K output tokens for wiki bodies that must preserve every fact.
+            "max_text_chars": 4000,
+            "max_output_tokens": 4096,
             "temperature": 0.3,
             "enable_score": True,         # re-score by LLM
             "enable_filter": True,        # drop noise
@@ -462,9 +468,9 @@ def validate_config(cfg: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     except Exception:
         beh["batch_size"] = 50
     try:
-        beh["max_output_tokens"] = max(64, min(int(beh.get("max_output_tokens") or 800), 4096))
+        beh["max_output_tokens"] = max(64, min(int(beh.get("max_output_tokens") or 4096), 8192))
     except Exception:
-        beh["max_output_tokens"] = 800
+        beh["max_output_tokens"] = 4096
     try:
         beh["temperature"] = max(0.0, min(float(beh.get("temperature") or 0.3), 2.0))
     except Exception:

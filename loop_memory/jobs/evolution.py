@@ -334,20 +334,37 @@ RECALL_SATURATION = 5         # recall_count / 5 saturates the recall boost
 NEGATIVE_SATURATION = 3       # 3 negative events = full dampener
 
 # Stage 3 system prompt: per-cluster, keep/rewrite/drop actions.
+#
+# Length policy (v2 — completeness over compactness):
+#   * No hard character caps anywhere. The goal is one COMPLETE, USABLE fact
+#     per item, written so a human or another LLM can act on it later without
+#     re-reading the original transcript.
+#   * Brevity is still preferred where it does not lose information: prefer a
+#     single declarative sentence; collapse obvious tautologies; but NEVER cut
+#     a fact, a constraint, a number, a name, or a qualifier just to hit a
+#     length target.
+#   * Strip ONLY the wrapper noise (see below). The body of the fact stays.
 _CLUSTER_SYSTEM = (
     "You are an assistant that tidies a small cluster of personal memory snippets. "
     "Treat every item as raw evidence and pull out the ATOMIC fact, never the wrapper.\n"
+    "COMPLETENESS OVER COMPACTNESS: the user is rebuilding a long-term personal "
+    "knowledge base. Losing a fact is much worse than writing a longer distill. "
+    "If the row contains a concrete decision, preference, number, name, "
+    "constraint, error, or workaround — preserve it verbatim. Prefer a single "
+    "declarative sentence but DO NOT truncate mid-clause to hit a length cap.\n"
     "For EACH item return a JSON object with:\n"
     '  keep: boolean (true = the row contains real signal worth keeping long-term)\n'
     '  importance: number 0..1 (your new estimate of long-term importance for a '
     'user-profile knowledge base — be strict; routine tool chatter is <0.3)\n'
-    '  distill: a SHORT rewritten version (<= 180 chars) capturing the core fact. '
-    'STRIP ALL of the following before writing the distill: greeting/pleasantries, '
+    '  distill: a complete, standalone rewritten version of the core fact. '
+    'NO HARD CHARACTER LIMIT. Strip ONLY wrapper noise: greeting/pleasantries, '
     'tool chatter ("Now let me check...", "Let me run..."), [thinking] blocks, '
-    'code fences, raw user prompts repeated verbatim, "Outcome:" prefixes that just '
-    "echo the user's question, file paths inside the user's home directory, "
-    'console-style progress narration, and meta commentary about the assistant itself. '
-    'Prefer a single declarative sentence. Empty string keeps the original.\n'
+    'code fences, raw user prompts repeated verbatim, "Outcome:" prefixes that '
+    "just echo the user's question, file paths inside the user's home directory, "
+    'console-style progress narration, and meta commentary about the assistant '
+    'itself. The fact itself — every decision, number, name, error message, '
+    'command, or constraint — MUST survive intact. If the row has no real fact '
+    'after stripping wrapper noise, set distill to "".\n'
     '  tags: array of up to 5 lowercase tags (no duplicates, snake_case preferred).\n'
     'Set keep=false for: pure repetition of an earlier item, status pings with no '
     'fact ("Tests are green"), single-line acknowledgements, or text whose only '
@@ -356,30 +373,52 @@ _CLUSTER_SYSTEM = (
 )
 
 # Stage 4 system prompt: build/update wiki pages from cluster summaries.
+#
+# Length policy (v2 — completeness over compactness):
+#   * No hard character caps on title / summary / body / slug.
+#   * Bullets must be COMPLETE atomic facts — every decision, number, name,
+#     constraint, error, or workaround from the source clusters must survive
+#     in at least one bullet on the relevant page.
+#   * Brevity is still preferred where it does not lose information — but the
+#     test is: "could the user act on this bullet without re-reading the
+#     original conversation?". If not, expand it.
 _WIKI_SYSTEM = (
     "You maintain a personal knowledge base for ONE user. You receive the user's "
     "existing wiki pages plus a batch of distilled cluster summaries (each already "
     "filtered for noise).\n"
-    "GOAL: each page must be a CONCISE, ACTIONABLE atomic note the user would actually "
-    "want to recall later — NOT a quote of the original conversation.\n"
+    "GOAL: each page must be a COMPLETE, ACTIONABLE atomic note the user would "
+    "actually want to recall later — NOT a quote of the original conversation, "
+    "and NOT a half-fact that loses the actionable detail.\n"
+    "COMPLETENESS OVER COMPACTNESS: if a cluster contains a number, a name, a "
+    "decision, a constraint, an error message, or a workaround, that detail "
+    "MUST land on the relevant page. The user will rely on this knowledge base "
+    "to skip re-deriving facts. Losing a fact is much worse than a longer page.\n"
     "ALWAYS bucket into one of these dimensions, and make the slug reflect the topic:\n"
     "  preferences-<topic>, decision-<topic>, project-<topic>, domain-<topic>, "
     "feedback-<topic>. Examples: 'prefers-dark-mode', 'decision-batch-size-50', "
     "'project-loop-memory', 'domain-crypto-swing-trades', 'feedback-no-mixed-lang'.\n"
     "Each page MUST have:\n"
-    '  slug: lowercase, hyphen-separated, <= 60 chars, prefixed with the dimension\n'
-    '  title: a real noun phrase, <= 60 chars (NEVER a truncated user prompt)\n'
-    '  summary: 1-sentence definition, <= 200 chars, MUST stand on its own\n'
-    '  body: bullet-point markdown, 3-8 short bullets, each starting with "- ". '
-    'Each bullet states ONE atomic fact. No prose paragraphs. No "Outcome: ..." echoes. '
-    'No code fences unless the fact is literally a command.\n'
+    '  slug: lowercase, hyphen-separated, prefixed with the dimension; no hard '
+    'length cap, but keep it readable in a URL. NEVER a truncated user prompt.\n'
+    '  title: a real noun phrase that names the topic; no hard length cap, but '
+    'keep it under ~12 words. NEVER a truncated user prompt.\n'
+    '  summary: 1-3 sentence definition that stands on its own; no hard length '
+    'cap, no truncation mid-clause, MUST be understandable without the source.\n'
+    '  body: bullet-point markdown, each bullet starting with "- ". One atomic '
+    'fact per bullet. NO hard cap on bullet count — use as many bullets as the '
+    'source clusters justify, typically 4-20 for a real page. Every decision, '
+    'number, name, error, constraint, or workaround from the source MUST appear '
+    'in at least one bullet. No prose paragraphs. No "Outcome: ..." echoes. '
+    'Code fences ONLY when the fact is literally a command or config snippet.\n'
     '  tags: 3-6 lowercase tags, snake_case\n'
     '  importance: 0..1 (1 = critical user preference/project, 0.3 = transient detail)\n'
     '  evidence_ids: list of memory ids that back this page (cite real ids from the input)\n'
     "SKIP a cluster summary if it is just a user prompt, status update, or repeats "
     "another cluster. PREFER updating an existing page (same slug) over creating a "
-    "near-duplicate. Reply with JSON: {\"pages\": [...]}. If nothing adds new info, "
-    "reply {\"pages\": []}. No prose, no markdown outside the JSON."
+    "near-duplicate — when updating, APPEND new atomic facts rather than rewriting "
+    "existing ones, so cumulative knowledge is preserved. Reply with JSON: "
+    "{\"pages\": [...]}. If nothing adds new info, reply {\"pages\": []}. No prose, "
+    "no markdown outside the JSON."
 )
 
 
@@ -1558,7 +1597,7 @@ class EvolutionConsolidator:
             reply = self.provider.complete(
                 history,
                 temperature=float(cfg.get("temperature") or 0.3),
-                max_tokens=int(cfg.get("max_output_tokens") or 900),
+                max_tokens=int(cfg.get("max_output_tokens") or 4096),
             ) or ""
         except Exception as e:
             stats.notes.append(f"{kind} llm error: {type(e).__name__}: {e}")
