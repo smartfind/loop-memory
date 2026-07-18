@@ -462,3 +462,153 @@ section > h3 { font-size: 12px; text-transform: uppercase; color: var(--text-fai
   from { transform: translateX(-8px); opacity: 0; }
   to { transform: translateX(0); opacity: 1; }
 }
+
+/* --- Knowledge graph workspace --- */
+#pane-graph {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  padding: 16px 24px 22px;
+  background:
+    radial-gradient(circle at 78% 16%, color-mix(in srgb, var(--accent) 5%, transparent), transparent 34%),
+    var(--bg);
+}
+
+#pane-graph .graph-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  min-height: 50px;
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 4px 18px rgba(15, 23, 42, 0.045);
+}
+
+#pane-graph .graph-toolbar input,
+#pane-graph .graph-toolbar select {
+  height: 34px;
+  padding: 0 10px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  outline: none;
+  transition: border-color .16s ease, box-shadow .16s ease, background .16s ease;
+}
+
+#pane-graph .graph-toolbar input {
+  width: min(220px, 24vw);
+}
+
+#pane-graph .graph-toolbar input:focus,
+#pane-graph .graph-toolbar select:focus {
+  background: var(--surface);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+#pane-graph .stats-text {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 9px;
+  color: var(--text-mute);
+  background: var(--surface-2);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+#pane-graph .stats-text strong {
+  margin-right: 3px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.rotation-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-mute);
+  height: 28px;
+  padding: 0 10px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.rotation-status[data-paused="true"] {
+  background: color-mix(in srgb, #f59e0b 14%, transparent);
+  color: #d97706;
+  border-color: color-mix(in srgb, #f59e0b 30%, transparent);
+}
+.graph-tooltip {
+  position: absolute;
+  bottom: 34px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
+  border-radius: 10px;
+  padding: 9px 14px;
+  box-shadow: 0 10px 30px rgba(15,23,42,0.13);
+  backdrop-filter: blur(10px);
+  pointer-events: none;
+  text-align: center;
+  max-width: 360px;
+  animation: graph-tip-in .14s ease-out;
+}
+.gt-name {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text);
+  word-break: break-all;
+}
+.gt-hint {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-top: 2px;
+}
+
+.graph-wrap {
+  flex: 1;
+  position: relative;
+  min-height: 0;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: linear-gradient(135deg, var(--surface) 0%, var(--surface-2) 100%);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 55%, transparent), 0 10px 34px rgba(15,23,42,.055);
+  overflow: hidden;
+}
+
+.graph-wrap canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+[data-theme="dark"] #pane-graph .graph-toolbar,
+[data-theme="dark"] .graph-wrap {
+  box-shadow: 0 10px 32px rgba(0, 0, 0, .18);
+}
+
+@keyframes graph-tip-in {
+  from { opacity: 0; transform: translate(-50%, 5px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+@media (max-width: 980px) {
+  #pane-graph { padding: 12px; }
+  #pane-graph .graph-toolbar { flex-wrap: wrap; }
+  #pane-graph .graph-toolbar .spacer { display: none; }
+  #pane-graph .graph-toolbar input { flex: 1; width: 140px; }
+}
