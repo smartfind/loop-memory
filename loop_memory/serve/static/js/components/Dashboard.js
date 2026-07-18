@@ -532,121 +532,133 @@ export const Dashboard = defineComponent({
       </div>
     </div>
 
-    <!-- 3. Pulse + Compression -->
-    <div class="ins-grid-2" v-if="insights">
-      <div class="ins-section">
-        <div class="ins-section-title">
-          <span class="ico">⚡</span>
-          <span>{{ t('dash.pulse.title') }}</span>
-          <span class="bar"></span>
-          <span class="right">{{ t('dash.pulse.sub') }}</span>
-        </div>
-        <div class="ins-pulse" v-if="insights.pulse">
-          <div class="ins-pulse-card">
-            <div class="ins-pulse-head">
-              <span class="ins-pulse-title">⚠ {{ t('dash.pulse.contradict') }}</span>
-              <span class="ins-pulse-count">{{ (insights.pulse.contradictions || []).length }} {{ t('dash.pulse.pairs') }}</span>
-            </div>
-            <div v-if="!(insights.pulse.contradictions || []).length" class="ins-pulse-empty">
-              {{ t('dash.pulse.noConflicts') }}
-            </div>
-            <div v-else class="ins-citem-list">
-              <div v-for="pair in (insights.pulse.contradictions || []).slice(0, 4)" :key="(pair.a && pair.a.id || '') + '|' + (pair.b && pair.b.id || '')" class="ins-citem">
-                <div class="ins-citem-a"><b>A</b> · {{ truncate(pair.a && pair.a.text, 50) }}</div>
-                <div class="ins-citem-b"><b>B</b> · {{ truncate(pair.b && pair.b.text, 50) }}</div>
-                <div class="ins-citem-meta">
-                  <span class="ins-citem-sim">sim {{ ((pair.similarity || 0) * 100).toFixed(0) }}%</span>
-                  <div class="ins-citem-actions">
-                    <button class="btn xs" @click="resolvePair(pair, 'merge')" :disabled="resolvingId === ((pair.a && pair.a.id)+'|'+(pair.b && pair.b.id)+'|merge')">{{ t('dash.pulse.merge') }}</button>
-                    <button class="btn xs ghost" @click="resolvePair(pair, 'keepA')">{{ t('dash.pulse.keepA') }}</button>
-                    <button class="btn xs ghost" @click="resolvePair(pair, 'keepB')">{{ t('dash.pulse.keepB') }}</button>
-                    <button class="btn xs ghost" @click="resolvePair(pair, 'ignore')">{{ t('dash.pulse.ignore') }}</button>
-                  </div>
+    <!-- 3. Self-improvement Pulse -->
+    <div class="ins-section" v-if="insights && insights.pulse">
+      <div class="ins-section-title">
+        <span class="ico">🧬</span>
+        <span>{{ t('dash.pulse.title') }}</span>
+        <span class="bar"></span>
+        <span class="right">{{ t('dash.pulse.sub') }}</span>
+      </div>
+      <div class="ins-pulse">
+        <div class="ins-pulse-card">
+          <div class="ins-pulse-head">
+            <span class="ins-pulse-title">⚠ {{ t('dash.pulse.contradict') }}</span>
+            <span class="ins-pulse-count">{{ (insights.pulse.contradictions || []).length }} {{ t('dash.pulse.pairs') }}</span>
+          </div>
+          <div v-if="!(insights.pulse.contradictions || []).length" class="ins-pulse-empty">
+            {{ t('dash.pulse.noConflicts') }}
+          </div>
+          <div v-else class="ins-citem-list">
+            <div v-for="pair in (insights.pulse.contradictions || []).slice(0, 4)" :key="(pair.a && pair.a.id || '') + '|' + (pair.b && pair.b.id || '')" class="ins-citem">
+              <div class="ins-citem-a"><b>A</b> · {{ truncate(pair.a && pair.a.text, 50) }}</div>
+              <div class="ins-citem-b"><b>B</b> · {{ truncate(pair.b && pair.b.text, 50) }}</div>
+              <div class="ins-citem-meta">
+                <span class="ins-citem-sim">sim {{ ((pair.similarity || 0) * 100).toFixed(0) }}%</span>
+                <div class="ins-citem-actions">
+                  <button class="btn xs" @click="resolvePair(pair, 'merge')" :disabled="resolvingId === ((pair.a && pair.a.id)+'|'+(pair.b && pair.b.id)+'|merge')">{{ t('dash.pulse.merge') }}</button>
+                  <button class="btn xs ghost" @click="resolvePair(pair, 'keepA')">{{ t('dash.pulse.keepA') }}</button>
+                  <button class="btn xs ghost" @click="resolvePair(pair, 'keepB')">{{ t('dash.pulse.keepB') }}</button>
+                  <button class="btn xs ghost" @click="resolvePair(pair, 'ignore')">{{ t('dash.pulse.ignore') }}</button>
                 </div>
               </div>
             </div>
           </div>
-          <div class="ins-pulse-card">
-            <div class="ins-pulse-head">
-              <span class="ins-pulse-title">📊 {{ t('dash.pulse.decayDist') }}</span>
-            </div>
-            <svg class="ins-decay-svg" viewBox="0 0 320 140" preserveAspectRatio="none" v-if="(insights.pulse.score_distribution || []).length">
-              <g v-for="(b, i) in barsFor(insights.pulse.score_distribution)" :key="i">
-                <rect :x="b.x" :y="b.y" :width="b.w" :height="b.h" class="ins-decay-bar" rx="2"></rect>
-                <text :x="b.x + b.w / 2" y="138" class="ins-decay-label">{{ b.label }}</text>
-              </g>
-            </svg>
-            <div v-else class="ins-pulse-empty">—</div>
+        </div>
+        <div class="ins-pulse-card">
+          <div class="ins-pulse-head">
+            <span class="ins-pulse-title">📊 {{ t('dash.pulse.decayDist') }}</span>
           </div>
+          <svg class="ins-decay-svg" viewBox="0 0 320 140" preserveAspectRatio="none" v-if="(insights.pulse.score_distribution || []).length">
+            <g v-for="(b, i) in barsFor(insights.pulse.score_distribution)" :key="i">
+              <rect :x="b.x" :y="b.y" :width="b.w" :height="b.h" class="ins-decay-bar" rx="2"></rect>
+              <text :x="b.x + b.w / 2" y="138" class="ins-decay-label">{{ b.label }}</text>
+            </g>
+          </svg>
+          <div v-else class="ins-pulse-empty">—</div>
         </div>
-      </div>
-
-      <div class="ins-section">
-        <div class="ins-section-title">
-          <span class="ico">🗜️</span>
-          <span>{{ t('dash.cmp.title') }}</span>
-        </div>
-        <div v-if="insights.compression" class="ins-cmp-summary">
-          <div><b>{{ fmtNum(insights.compression.compressible_count) }}</b> <span class="muted">{{ t('dash.cmp.compressible') }}</span></div>
-          <div><b>{{ fmtNum(insights.compression.avg_length) }}</b> <span class="muted">{{ t('dash.cmp.avgLen') }}</span></div>
-        </div>
-        <div v-if="(insights.compression && insights.compression.items || []).length" class="ins-cmp-list">
-          <div v-for="item in (insights.compression.items || []).slice(0, 5)" :key="item.id" class="ins-cmp-item">
-            <span class="ins-kind" :class="'kind-' + (item.kind || 'episode')">{{ item.kind || 'episode' }}</span>
-            <span class="ins-cmp-text">{{ truncate(item.text, 60) }}</span>
-            <span class="ins-cmp-meta">
-              <span class="ins-cmp-imp">{{ Math.round((item.importance || 0) * 100) }}%</span>
-              <span v-if="item.in_wiki" class="ins-cmp-wiki">{{ t('dash.cmp.inWiki') }}</span>
-            </span>
-          </div>
-        </div>
-        <div v-else class="ins-pulse-empty">{{ t('dash.cmp.empty') }}</div>
       </div>
     </div>
 
-    <!-- 4. Granularity -->
-    <div class="ins-section" v-if="insights && insights.granularity">
+    <!-- 4. Compression + Granularity -->
+    <div class="ins-section" v-if="insights">
       <div class="ins-section-title">
-        <span class="ico">🔬</span>
-        <span>{{ t('dash.gran.title') }}</span>
+        <span class="ico">🗜</span>
+        <span>{{ t('dash.cmp.title') }}</span>
+        <span class="bar"></span>
+        <span class="right">{{ t('dash.cmp.sub') }}</span>
       </div>
-      <div class="ins-gran-cols">
-        <div class="ins-gran-col" data-tone="rose">
-          <div class="ins-gran-col-head">
-            <div class="ins-gran-col-title">🧠 {{ t('dash.gran.core') }}</div>
-            <div class="ins-gran-col-count">{{ fmtNum(insights.granularity.core_count) }}</div>
-          </div>
-          <div v-for="r in (insights.granularity.core || []).slice(0, 4)" :key="r.id" class="ins-gran-card">
-            <div class="ins-gran-card-text">{{ truncate(r.text, 50) }}</div>
-            <div class="ins-gran-card-meta">
-              <span class="ins-gran-chip k-imp">i {{ (r.importance || 0).toFixed(2) }}</span>
-              <span class="ins-gran-chip k-score">s {{ (r.score || 0).toFixed(2) }}</span>
+      <div class="ins-grid-2">
+        <div class="ins-compression">
+          <div class="ins-pulse-title" style="margin-bottom:8px;">{{ t('dash.cmp.memComp') }}</div>
+          <div v-if="insights.compression" class="ins-cmp-stat-row">
+            <div class="ins-cmp-stat">
+              <div class="ins-cmp-stat-val">{{ fmtNum(insights.compression.compressible_count) }}</div>
+              <div class="ins-cmp-stat-lbl">{{ t('dash.cmp.compressible') }}</div>
+            </div>
+            <div class="ins-cmp-stat">
+              <div class="ins-cmp-stat-val">{{ fmtNum(insights.compression.avg_length) }}</div>
+              <div class="ins-cmp-stat-lbl">{{ t('dash.cmp.avgLen') }}</div>
+            </div>
+            <div class="ins-cmp-stat">
+              <div class="ins-cmp-stat-val">{{ Math.round(insights.compression.compression_progress || 0) }}%</div>
+              <div class="ins-cmp-stat-lbl">{{ t('dash.cmp.prog') }}</div>
             </div>
           </div>
-        </div>
-        <div class="ins-gran-col" data-tone="amber">
-          <div class="ins-gran-col-head">
-            <div class="ins-gran-col-title">📋 {{ t('dash.gran.working') }}</div>
-            <div class="ins-gran-col-count">{{ fmtNum(insights.granularity.working_count) }}</div>
-          </div>
-          <div v-for="r in (insights.granularity.working || []).slice(0, 4)" :key="r.id" class="ins-gran-card">
-            <div class="ins-gran-card-text">{{ truncate(r.text, 50) }}</div>
-            <div class="ins-gran-card-meta">
-              <span class="ins-gran-chip k-imp">i {{ (r.importance || 0).toFixed(2) }}</span>
-              <span class="ins-gran-chip k-score">s {{ (r.score || 0).toFixed(2) }}</span>
+          <div v-if="(insights.compression && insights.compression.items || []).length" class="ins-cmp-list">
+            <div v-for="item in (insights.compression.items || []).slice(0, 5)" :key="item.id" class="ins-cmp-item">
+              <span class="ins-kind" :class="'kind-' + (item.kind || 'episode')">{{ item.kind || 'episode' }}</span>
+              <span class="ins-cmp-text">{{ truncate(item.text, 60) }}</span>
+              <span class="ins-cmp-meta">
+                <span class="ins-cmp-imp">{{ Math.round((item.importance || 0) * 100) }}%</span>
+                <span v-if="item.in_wiki" class="ins-cmp-wiki">{{ t('dash.cmp.inWiki') }}</span>
+              </span>
             </div>
           </div>
+          <div v-else class="ins-pulse-empty">{{ t('dash.cmp.empty') }}</div>
         </div>
-        <div class="ins-gran-col" data-tone="cyan">
-          <div class="ins-gran-col-head">
-            <div class="ins-gran-col-title">📝 {{ t('dash.gran.scratch') }}</div>
-            <div class="ins-gran-col-count">{{ fmtNum(insights.granularity.scratch_count) }}</div>
-          </div>
-          <div v-for="r in (insights.granularity.scratch || []).slice(0, 4)" :key="r.id" class="ins-gran-card">
-            <div class="ins-gran-card-text">{{ truncate(r.text, 50) }}</div>
-            <div class="ins-gran-card-meta">
-              <span class="ins-gran-chip k-imp">i {{ (r.importance || 0).toFixed(2) }}</span>
-              <span class="ins-gran-chip k-score">s {{ (r.score || 0).toFixed(2) }}</span>
+
+        <div class="ins-gran" v-if="insights.granularity">
+          <div class="ins-pulse-title" style="margin-bottom:8px;">{{ t('dash.gran.title') }}</div>
+          <div class="ins-gran-cols">
+            <div class="ins-gran-col" data-tone="rose">
+              <div class="ins-gran-col-head">
+                <div class="ins-gran-col-title">🧠 {{ t('dash.gran.core') }}</div>
+                <div class="ins-gran-col-count">{{ fmtNum(insights.granularity.core_count) }}</div>
+              </div>
+              <div v-for="r in (insights.granularity.core || []).slice(0, 4)" :key="r.id" class="ins-gran-card">
+                <div class="ins-gran-card-text">{{ truncate(r.text, 50) }}</div>
+                <div class="ins-gran-card-meta">
+                  <span class="ins-gran-chip k-imp">i {{ (r.importance || 0).toFixed(2) }}</span>
+                  <span class="ins-gran-chip k-score">s {{ (r.score || 0).toFixed(2) }}</span>
+                </div>
+              </div>
+            </div>
+            <div class="ins-gran-col" data-tone="amber">
+              <div class="ins-gran-col-head">
+                <div class="ins-gran-col-title">📋 {{ t('dash.gran.working') }}</div>
+                <div class="ins-gran-col-count">{{ fmtNum(insights.granularity.working_count) }}</div>
+              </div>
+              <div v-for="r in (insights.granularity.working || []).slice(0, 4)" :key="r.id" class="ins-gran-card">
+                <div class="ins-gran-card-text">{{ truncate(r.text, 50) }}</div>
+                <div class="ins-gran-card-meta">
+                  <span class="ins-gran-chip k-imp">i {{ (r.importance || 0).toFixed(2) }}</span>
+                  <span class="ins-gran-chip k-score">s {{ (r.score || 0).toFixed(2) }}</span>
+                </div>
+              </div>
+            </div>
+            <div class="ins-gran-col" data-tone="cyan">
+              <div class="ins-gran-col-head">
+                <div class="ins-gran-col-title">📝 {{ t('dash.gran.scratch') }}</div>
+                <div class="ins-gran-col-count">{{ fmtNum(insights.granularity.scratch_count) }}</div>
+              </div>
+              <div v-for="r in (insights.granularity.scratch || []).slice(0, 4)" :key="r.id" class="ins-gran-card">
+                <div class="ins-gran-card-text">{{ truncate(r.text, 50) }}</div>
+                <div class="ins-gran-card-meta">
+                  <span class="ins-gran-chip k-imp">i {{ (r.importance || 0).toFixed(2) }}</span>
+                  <span class="ins-gran-chip k-score">s {{ (r.score || 0).toFixed(2) }}</span>
+                </div>
+              </div>
             </div>
           </div>
         </div>
