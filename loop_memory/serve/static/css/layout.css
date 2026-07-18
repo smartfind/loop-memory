@@ -547,11 +547,11 @@ section > h3 { font-size: 12px; text-transform: uppercase; color: var(--text-fai
   border-radius: 50%;
   font-size: 17px; font-weight: 700;
   color: var(--stage-color);
-  background: color-mix(in srgb, var(--stage-color) 9%, var(--surface));
-  border: 1px solid color-mix(in srgb, var(--stage-color) 34%, var(--border));
-  box-shadow: 0 0 0 5px color-mix(in srgb, var(--stage-color) 7%, transparent);
+  background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--stage-color) 40%, var(--border));
+  box-shadow: 0 0 0 5px color-mix(in srgb, var(--stage-color) 10%, transparent);
   position: relative;
-  z-index: 2;
+  z-index: 3;
 }
 .ins-lc-stage.active .ins-lc-icon { animation: lc-node-breathe 3.2s ease-in-out infinite; }
 .ins-lc-val { margin-top: 5px; font-size: 17px; line-height: 1; font-weight: 750; color: var(--text); font-variant-numeric: tabular-nums; }
@@ -560,43 +560,66 @@ section > h3 { font-size: 12px; text-transform: uppercase; color: var(--text-fai
 .ins-lc-flow {
   position: absolute;
   z-index: 1;
-  top: 20px;
-  left: calc(50% + 25px);
-  width: calc(100% - 50px);
-  height: 10px;
+  top: 26px;
+  left: calc(50% + 22px);
+  width: calc(100% - 44px);
+  height: 12px;
   pointer-events: none;
 }
+/* Marching-ants dashed connector between stages. We use a linear-gradient
+ * pattern of dot/dash segments and animate background-position so the line
+ * appears to flow continuously toward the next stage. */
 .ins-lc-flow::before {
   content: "";
   position: absolute;
-  top: 4px;
+  top: 5px;
   left: 0;
   right: 0;
-  border-top: 1px dashed color-mix(in srgb, var(--stage-color) 38%, var(--border));
+  height: 2px;
+  border-radius: 999px;
+  background-image: linear-gradient(
+    to right,
+    color-mix(in srgb, var(--stage-color) 50%, transparent) 0,
+    color-mix(in srgb, var(--stage-color) 50%, transparent) 6px,
+    transparent 6px,
+    transparent 12px
+  );
+  background-size: 12px 100%;
+  background-repeat: repeat-x;
+  background-position: 0 0;
+  opacity: .85;
+  animation: lc-flow-dash 1.4s linear infinite;
 }
 .ins-lc-particle {
   position: absolute;
-  top: 2px;
+  top: 3px;
   left: 0;
-  width: 5px;
-  height: 5px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: var(--stage-color);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--stage-color) 65%, transparent);
+  box-shadow:
+    0 0 6px color-mix(in srgb, var(--stage-color) 80%, transparent),
+    0 0 14px color-mix(in srgb, var(--stage-color) 50%, transparent);
   opacity: 0;
   animation: lc-particle-flow 3.4s linear infinite;
+  will-change: transform, opacity;
 }
-.ins-lc-particle.p2 { animation-delay: 1.1s; }
-.ins-lc-particle.p3 { animation-delay: 2.2s; }
+.ins-lc-particle.p2 { animation-delay: 1.13s; }
+.ins-lc-particle.p3 { animation-delay: 2.27s; }
 @keyframes lc-particle-flow {
-  0% { transform: translateX(0) scale(.7); opacity: 0; }
-  12% { opacity: .9; }
-  82% { opacity: .9; }
-  100% { transform: translateX(calc(100% - 5px)) scale(1); opacity: 0; }
+  0%   { transform: translateX(0) scale(.65); opacity: 0; }
+  10%  { opacity: 1; }
+  85%  { opacity: 1; }
+  100% { transform: translateX(calc(100% - 8px)) scale(1); opacity: 0; }
+}
+@keyframes lc-flow-dash {
+  0%   { background-position: 0 0; }
+  100% { background-position: -24px 0; }
 }
 @keyframes lc-node-breathe {
   0%, 100% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--stage-color) 7%, transparent); }
-  50% { box-shadow: 0 0 0 8px color-mix(in srgb, var(--stage-color) 2%, transparent); }
+  50%      { box-shadow: 0 0 0 9px color-mix(in srgb, var(--stage-color) 2%, transparent); }
 }
 @media (max-width: 900px) {
   .ins-lc-stage:nth-child(3) .ins-lc-flow { display: none; }
@@ -669,12 +692,15 @@ section > h3 { font-size: 12px; text-transform: uppercase; color: var(--text-fai
 .decay-card { display: flex; flex-direction: column; min-height: 360px; }
 .ins-decay-meta { display: flex; justify-content: space-between; gap: 12px; color: var(--text-faint); font-size: 10.5px; margin: 0 0 2px; }
 .ins-decay-meta b { color: var(--text-mute); font-weight: 700; }
-.ins-decay-svg { width: 100%; min-height: 260px; height: 100%; flex: 1; overflow: visible; }
+.ins-decay-svg { width: 100%; min-height: 246px; height: 100%; flex: 1; overflow: visible; }
 .ins-decay-grid { stroke: var(--border); stroke-width: 1; stroke-dasharray: 3 5; opacity: .7; }
-.ins-decay-bar { fill: url(#decay-bar-grad); opacity: 0.9; transition: opacity .15s ease, filter .15s ease; }
-.ins-decay-bar[data-empty="true"] { opacity: .18; }
+.ins-decay-bar { fill: url(#decay-bar-grad); opacity: 0.92; transition: opacity .15s ease, filter .15s ease, transform .15s ease; }
+.ins-decay-bar[data-empty="true"] { opacity: .16; }
 .ins-decay-bar:hover { opacity: 1; filter: brightness(1.05); }
-.ins-decay-label { fill: var(--text-mute); font-size: 8.5px; font-weight: 600; text-anchor: middle; }
+.ins-decay-bar.peak { fill: var(--accent); filter: drop-shadow(0 0 4px color-mix(in srgb, var(--accent) 70%, transparent)); }
+.ins-decay-axis { stroke: var(--border); stroke-width: 1; opacity: .55; }
+.ins-decay-tick { fill: var(--text-faint); opacity: .85; }
+.ins-decay-label { fill: var(--text-faint); font-size: 8.5px; font-weight: 700; text-anchor: middle; letter-spacing: .02em; opacity: .85; }
 .ins-decay-value { fill: var(--text); font-size: 9px; font-weight: 700; text-anchor: middle; }
 
 /* --- Compression card --- */
@@ -792,8 +818,19 @@ section > h3 { font-size: 12px; text-transform: uppercase; color: var(--text-fai
 .ins-wiki-bar-track { height: 6px; background: var(--surface); border-radius: 4px; overflow: hidden; margin-bottom: 4px; border: 1px solid var(--border); }
 .ins-wiki-bar-fill { height: 100%; background: linear-gradient(90deg, #10b981 0%, #059669 100%); border-radius: 4px; transition: width .4s ease; }
 .ins-wiki-coverage-lbl { font-size: 10.5px; color: var(--text-faint); display: flex; justify-content: space-between; }
-.ins-ingest-svg { width: 100%; height: 100px; }
-.ins-ingest-total { margin-top: 4px; font-size: 11px; color: var(--text-faint); display: flex; justify-content: space-between; }
+.ins-ingest-svg { width: 100%; height: 124px; display: block; }
+.ins-ingest-grid { stroke: var(--border); stroke-width: 1; stroke-dasharray: 3 5; opacity: .55; }
+.ins-ingest-axis { stroke: var(--border); stroke-width: 1; opacity: .6; }
+.ins-ingest-tick { fill: var(--text-faint); opacity: .65; }
+.ins-ingest-bar { fill: url(#ins-ingest-grad); transition: opacity .15s ease, filter .15s ease; }
+.ins-ingest-bar.idle { opacity: .25; }
+.ins-ingest-bar.peak { fill: var(--accent); filter: drop-shadow(0 0 4px color-mix(in srgb, var(--accent) 70%, transparent)); }
+.ins-ingest-bar:hover { opacity: 1; filter: brightness(1.08); }
+.ins-ingest-lbl { fill: var(--text-faint); font-size: 8.5px; font-weight: 700; text-anchor: middle; opacity: .85; }
+.ins-ingest-total { margin-top: 6px; font-size: 11px; color: var(--text-faint); display: flex; justify-content: space-between; }
+.ins-ingest-total b { color: var(--accent); font-variant-numeric: tabular-nums; font-weight: 700; }
+.ins-src-title { display: flex; align-items: center; gap: 8px; }
+.ins-src-peak { margin-left: auto; font-size: 10.5px; font-weight: 700; color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); padding: 2px 7px; border-radius: 999px; letter-spacing: .02em; }
 
 /* --- Pipeline latency table --- */
 .ins-pipe { display: flex; flex-direction: column; gap: 8px; }
