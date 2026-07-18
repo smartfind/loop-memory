@@ -114,6 +114,9 @@ export const Wiki = defineComponent({
       window.removeEventListener('loop-memory:open-wiki', onOpenWiki);
     });
     watch(() => store.stats.wiki_pages, refresh);
+    // When the user navigates back to the wiki tab, refresh in case the
+    // list went stale (distillation may have added/removed pages).
+    watch(() => store.activeTab, (id) => { if (id === 'wiki') refresh(); });
 
     return {
       store, t, pages, q, sort, loading, visible, expanded, editing, bulletsOf,
