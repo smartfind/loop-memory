@@ -232,6 +232,5 @@ export const Settings = defineComponent({
       </section>
     </div>
   </aside>
-</transition>
   `,
 });
