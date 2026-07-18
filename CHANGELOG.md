@@ -1,3 +1,34 @@
+## [Unreleased]
+
+### Distillation policy v2 — completeness over compactness
+- **Stage 3 (`_CLUSTER_SYSTEM`) and Stage 4 (`_WIKI_SYSTEM`) prompts no
+  longer hard-cap title / summary / body / distill lengths.** The previous
+  `<= 60 / 180 / 200 chars` and `3-8 bullets` limits were truncating
+  distillates mid-fact. The new prompt explicitly tells the LLM that
+  "losing a fact is much worse than a longer page" and to surface every
+  decision, number, name, constraint, error, and workaround in at least
+  one bullet.
+- **Default token budget raised**: `max_text_chars` 1200 → 4000,
+  `max_output_tokens` 800 → 4096, validator ceiling 4096 → 8192. Per-call
+  cap on stage 3 distillation raised from 900 → 4096 tokens; legacy
+  consolidator call sites raised from 800 → 4096.
+- **Wiki card rendering**: `bulletsOf()` no longer slices the first 6
+  bullets; the card now shows every atomic bullet the LLM produced so
+  freshly-distilled pages no longer look truncated in the grid. The
+  dead `bodyPreview()` helper was removed.
+
+### Docs (open-source release prep)
+- `CONTRIBUTING.md` rewritten: pytest instead of unittest, accurate
+  subpackage layout, secrets-storage guidance, the new LLM-provider
+  registration procedure, and the distillation-policy "completeness
+  over compactness" rule.
+- New `docs/api.md`: canonical, hand-curated HTTP API reference
+  covering every route the UI consumes (read + write surface).
+- New `docs/providers.md`: built-in providers table, default models,
+  base URLs, token-limit guidance, and the API-key storage story.
+- `README.md` now links the docs in a single table so newcomers can
+  find everything without grepping the repo.
+
 ## [0.3.0] — 2026-07-11
 
 ### Wiki fallback (v0.3.0)

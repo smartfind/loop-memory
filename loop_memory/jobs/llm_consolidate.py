@@ -314,7 +314,7 @@ class LLMConsolidator:
         stats = ConsolidateStats()
         cfg = self.config
         batch_size = max(1, int(cfg.get("batch_size") or 50))
-        max(80, int(cfg.get("max_text_chars") or 1200))
+        max(200, int(cfg.get("max_text_chars") or 4000))
         enable_filter = bool(cfg.get("enable_filter", True))
         enable_score = bool(cfg.get("enable_score", True))
         enable_summarize = bool(cfg.get("enable_summarize", True))
@@ -508,7 +508,7 @@ class LLMConsolidator:
                 reply = self.provider.complete(
                     history,
                     temperature=float(cfg.get("temperature") or 0.3),
-                    max_tokens=min(int(cfg.get("max_output_tokens") or 800), 2000),
+                    max_tokens=min(int(cfg.get("max_output_tokens") or 4096), 8192),
                 ) or ""
                 self._cache[cache_key] = reply
                 self._cache_ts[cache_key] = now
@@ -648,7 +648,7 @@ class LLMConsolidator:
         stats: ConsolidateStats,
     ) -> None:
         cfg = self.config
-        max_chars = int(cfg.get("max_text_chars") or 1200)
+        max_chars = int(cfg.get("max_text_chars") or 4000)
 
         # Build the user prompt - the LLM is the only place we apply
         # semantically-aware filtering; the rule-based pass above was
@@ -694,7 +694,7 @@ class LLMConsolidator:
                 reply = self.provider.complete(
                     history,
                     temperature=float(cfg.get("temperature") or 0.3),
-                    max_tokens=int(cfg.get("max_output_tokens") or 800),
+                    max_tokens=int(cfg.get("max_output_tokens") or 4096),
                 ) or ""
                 stats.llm_calls += 1
                 self._cache[cache_key] = reply

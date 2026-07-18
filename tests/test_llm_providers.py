@@ -195,7 +195,9 @@ class ValidateConfigTests(unittest.TestCase):
             "behaviour": {"temperature": 5.0, "max_output_tokens": 9999, "batch_size": -1},
         })
         self.assertLessEqual(cfg["behaviour"]["temperature"], 2.0)
-        self.assertLessEqual(cfg["behaviour"]["max_output_tokens"], 4096)
+        # Validator ceiling raised 4096 -> 8192 in v2 to match the
+        # "completeness over compactness" distillation policy.
+        self.assertLessEqual(cfg["behaviour"]["max_output_tokens"], 8192)
         self.assertEqual(cfg["behaviour"]["batch_size"], 1)
 
     def test_warns_on_unknown_provider(self) -> None:

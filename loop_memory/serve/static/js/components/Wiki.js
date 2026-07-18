@@ -53,9 +53,16 @@ export const Wiki = defineComponent({
       return [...rows].sort(cmp);
     });
 
+    /**
+     * Extract every bullet ("- ...") from a wiki body so the card can show the
+     * full list. Previously this was capped at the first 6 lines, which made
+     * freshly-distilled pages look truncated. The new distillation policy is
+     * "completeness over compactness", so the card needs to surface every
+     * atomic fact the LLM produced.
+     */
     function bulletsOf(p) {
       const lines = (p.body || '').split('\n');
-      return lines.filter(l => l.startsWith('- ')).slice(0, 6);
+      return lines.filter(l => l.startsWith('- '));
     }
 
     function expand(id) { expanded.value = expanded.value === id ? null : id; }
@@ -161,12 +168,6 @@ export const Wiki = defineComponent({
       }
     }
 
-    function bodyPreview(p) {
-      const lines = (p.body || '').split('\n').filter(l => l.startsWith('- '));
-      if (lines.length === 0) return p.body || '';
-      return lines.slice(0, 3).join('\n');
-    }
-
     async function openWikiBySlug(slug) {
       if (!slug) return;
       try {
@@ -194,7 +195,7 @@ export const Wiki = defineComponent({
 
     return {
       store, t, pages, q, sort, loading, visible, expanded, editing, bulletsOf,
-      refresh, expand, edit, onNew, onExport, onImportClick, importing, exporting, saveEdit, removePage, bodyPreview, fmtTime,
+      refresh, expand, edit, onNew, onExport, onImportClick, importing, exporting, saveEdit, removePage, fmtTime,
     };
   },
   template: /* html */ `
