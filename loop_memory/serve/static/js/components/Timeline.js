@@ -8,8 +8,12 @@
  *   visual score-bar, importance %, tags, and a copy-to-clipboard
  *   action button.
  * - Search uses /api/recall so Chinese tokenisation + importance
- *   ranking both apply. Filters (kind, score, date range) live in
- *   component-local state.
+ *   ranking both apply.
+ *
+ * Sidebar integration: when the user picks a session in the left rail
+ * the timeline re-fetches with that session_id filter, and a banner at
+ * the top makes the active scope obvious. Clearing the filter (banner
+ * or sidebar) restores the all-session view.
  */
 import { defineComponent, ref, computed, onMounted, watch } from 'https://unpkg.com/vue@3.4.38/dist/vue.esm-browser.prod.js';
 import { store, t, escapeHtml, timeAgo, fmtTime, toast } from '../store.js';
@@ -38,29 +42,56 @@ export const Timeline = defineComponent({
     const minScore = ref(0);
     const since = ref('');
     const until = ref('');
+    const activeSessionInfo = ref(null);   // session label when filter is on
 
     async function refresh() {
       loading.value = true;
       recallMeta.value = null;
       try {
         let rows;
+        const sessionId = store.activeSession || '';
         if (q.value.trim()) {
-          const r = await api.recall(q.value.trim(), 50);
+          // Recall API does its own ranking; we still keep the active
+          // session in scope if one is selected.
+          const r = await api.recall(q.value.trim(), 100);
           rows = (r.memories || []).map(m => ({ ...m, recall_score: m.score }));
+          if (sessionId) rows = rows.filter(m => m.session_id === sessionId);
           recallMeta.value = { wiki: r.wiki, entities: r.entities, tokens: r.tokens };
         } else {
-          const data = await api.listMemories({
+          const params = {
             kind: kind.value,
             min_score: minScore.value || undefined,
             since: since.value ? new Date(since.value).getTime() / 1000 : undefined,
             until: until.value ? new Date(until.value).getTime() / 1000 : undefined,
+            session_id: sessionId || undefined,
             limit: 200,
-          });
+          };
+          const data = await api.listMemories(params);
           rows = Array.isArray(data) ? data : (data.memories || data.items || []);
         }
         if (kind.value) rows = rows.filter(r => r.kind === kind.value);
         if (minScore.value) rows = rows.filter(r => (r.score || r.importance || 0) >= Number(minScore.value));
         memories.value = rows;
+
+        // Resolve the active session's display label via the sessions
+        // endpoint so the banner can show the original chat title.
+        if (sessionId) {
+          try {
+            const list = await api.listSessions({ limit: 500 });
+            const arr = Array.isArray(list) ? list : (list.sessions || []);
+            const found = arr.find(s => s.id === sessionId);
+            if (found) {
+              const t = (found.title || '').replace(/^\[cron:[^\]]+\]\s*/, '');
+              activeSessionInfo.value = { id: sessionId, label: (t || found.id).slice(0, 60), source: found.source, message_count: found.message_count };
+            } else {
+              activeSessionInfo.value = { id: sessionId, label: sessionId.slice(0, 12), source: null };
+            }
+          } catch (e) {
+            activeSessionInfo.value = { id: sessionId, label: sessionId.slice(0, 12) };
+          }
+        } else {
+          activeSessionInfo.value = null;
+        }
       } catch (e) {
         memories.value = [];
       } finally {
@@ -70,6 +101,12 @@ export const Timeline = defineComponent({
 
     function resetFilters() {
       q.value = ''; kind.value = ''; minScore.value = 0; since.value = ''; until.value = '';
+      store.activeSession = '';
+      refresh();
+    }
+
+    function onClearSession() {
+      store.activeSession = '';
       refresh();
     }
 
@@ -86,7 +123,6 @@ export const Timeline = defineComponent({
     function kindIcon(k) { return KIND_ICON[k] || '·'; }
 
     function isPolished(m) {
-      // AI-distilled if the memory was rewritten after creation
       return m && m.updated_at && m.created_at && (m.updated_at - m.created_at) > 1;
     }
 
@@ -102,12 +138,17 @@ export const Timeline = defineComponent({
     }
 
     onMounted(() => refresh());
+    // Re-fetch when the active session changes.
+    watch(() => store.activeSession, refresh);
+    // Re-fetch when a new memory is recorded.
     watch(() => store.stats.memories, refresh);
 
     return {
       store, t, memories, recallMeta, loading, q, kind, minScore, since, until,
-      refresh, resetFilters, onSearchSubmit, scoreFmt, kindIcon, isPolished,
+      activeSessionInfo,
+      refresh, resetFilters, onClearSession, onSearchSubmit, scoreFmt, kindIcon, isPolished,
       onCopy, onClickMemory, timeAgo, fmtTime, KIND_ICON,
+      escapeHtml,
     };
   },
   template: /* html */ `
@@ -129,6 +170,16 @@ export const Timeline = defineComponent({
       <button type="button" class="tl-btn ghost" @click="resetFilters">{{ t('timeline.reset') }}</button>
     </form>
 
+      <div v-if="store.activeSession" class="tl-scope-banner">
+        <span class="dot"></span>
+        <span class="lbl">
+          <b>{{ t('timeline.sessionScope') }}</b>
+          <span class="src-tag" v-if="activeSessionInfo && activeSessionInfo.source">{{ activeSessionInfo.source }}</span>
+          <span class="title">{{ activeSessionInfo ? activeSessionInfo.label : store.activeSession.slice(0, 12) }}</span>
+        </span>
+        <button type="button" class="x" :title="t('timeline.clearScope')" @click="onClearSession">×</button>
+      </div>
+
     <div v-if="recallMeta" class="recall-meta">
       <span v-if="recallMeta.wiki && recallMeta.wiki.length" class="recall-hint">
         {{ t('recall.wikiMatches', { n: recallMeta.wiki.length }) }}
@@ -136,6 +187,11 @@ export const Timeline = defineComponent({
       <span v-if="recallMeta.entities && recallMeta.entities.length" class="recall-hint">
         {{ t('recall.entityMatches', { n: recallMeta.entities.length }) }}
       </span>
+    </div>
+
+    <div class="tl-summary" v-if="!loading || memories.length">
+      <span class="count-pill">{{ memories.length }} {{ t('timeline.memories') }}</span>
+      <span class="range" v-if="memories.length">{{ fmtTime(memories[memories.length-1].created_at) }} → {{ fmtTime(memories[0].created_at) }}</span>
     </div>
 
     <div class="tl-list" v-if="memories.length">
@@ -146,14 +202,13 @@ export const Timeline = defineComponent({
                @click="onClickMemory(m)">
         <div class="head">
           <span class="kind-icon">{{ kindIcon(m.kind) }}</span>
-          <span style="font-weight:600;color:var(--text-mute);">{{ t('kind.' + (m.kind || 'episode')) }}</span>
+          <span class="kind-lbl">{{ t('kind.' + (m.kind || 'episode')) }}</span>
           <span v-if="isPolished(m)" class="polish-spark">✨ {{ store.lang === 'zh' ? '已浓缩' : 'AI' }}</span>
-          <span>·</span>
+          <span class="dot-sep" v-if="isPolished(m)">·</span>
           <span :title="fmtTime(m.created_at)">{{ timeAgo(m.created_at) }}</span>
-          <span v-if="m.source">·</span>
           <span v-if="m.source" class="src-chip" :class="m.source">{{ m.source }}</span>
           <span style="flex:1"></span>
-          <span>{{ scoreFmt(m.score ?? m.importance) }}</span>
+          <span class="score-val">{{ scoreFmt(m.score ?? m.importance) }}</span>
         </div>
         <div class="text">{{ m.text }}</div>
         <div class="score-bar"><span :style="{ width: scoreFmt(m.score ?? m.importance) }"></span></div>
@@ -169,7 +224,10 @@ export const Timeline = defineComponent({
         </div>
       </article>
     </div>
-    <div class="empty" v-else-if="!loading">{{ t('timeline.empty') }}</div>
+    <div class="empty" v-else-if="!loading">
+      <div class="empty-icon">◌</div>
+      <div class="empty-text">{{ store.activeSession ? t('timeline.emptyForSession') : t('timeline.empty') }}</div>
+    </div>
     <div class="loading" v-else>{{ t('common.loading') }}</div>
   </div>
 </div>

@@ -77,7 +77,7 @@ export class ApiError extends Error {
 /** Domain endpoints — short, named functions for clarity. */
 export const api = {
   // Generic
-  health:         () => fetchJSON('/api/health'),
+  diag:           () => fetchJSON('/api/diag'),
   stats:          () => fetchJSON('/api/stats'),
 
   // Memories
@@ -111,9 +111,9 @@ export const api = {
   llmSchedule:    (payload) => fetchJSON('/api/admin/llm/schedule', { method: 'POST', body: payload }),
 
   // Ingest / score
-  rescore:        () => fetchJSON('/api/rescore', { method: 'POST' }),
-  rebuildGraph:   () => fetchJSON('/api/graph/rebuild', { method: 'POST' }),
-  ingest:         (payload) => fetchJSON('/api/ingest', { method: 'POST', body: payload }),
+  rescore:        () => fetchJSON('/api/admin/rescore', { method: 'POST' }),
+  rebuildGraph:   () => fetchJSON('/api/admin/graph/rebuild', { method: 'POST' }),
+  ingest:         (source, path) => fetchJSON('/api/admin/ingest', { method: 'POST', params: { source, path } }),
 
   // Audit / runs
   llmAudit:       () => fetchJSON('/api/llm-audit'),

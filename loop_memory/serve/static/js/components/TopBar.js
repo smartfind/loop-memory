@@ -11,14 +11,17 @@
  */
 import { defineComponent, computed, ref, onMounted, onUnmounted } from 'https://unpkg.com/vue@3.4.38/dist/vue.esm-browser.prod.js';
 import { store, patchPrefs, toast, t, timeAgo, fmtTime } from '../store.js';
+import { IngestPopover } from './IngestPopover.js';
 import { api, ApiError } from '../api.js';
 
 export const TopBar = defineComponent({
   name: 'TopBar',
+  components: { IngestPopover },
   emits: ['ingest', 'rescore', 'llm-run', 'run-now', 'open-settings', 'open-stats', 'open-diag', 'rebuild-graph', 'consolidate'],
   setup(props, { emit }) {
     const statsOpen = ref(false);
     const toolsOpen = ref(false);
+    const ingestOpen = ref(false);
 
     const runLabel = computed(() => {
       if (store.runStatus && store.runStatus.is_running) {
@@ -31,9 +34,10 @@ export const TopBar = defineComponent({
 
     const runState = computed(() => store.runStatus && store.runStatus.is_running ? 'running' : 'idle');
 
-    function toggleStats() { statsOpen.value = !statsOpen.value; toolsOpen.value = false; }
-    function toggleTools() { toolsOpen.value = !toolsOpen.value; statsOpen.value = false; }
-    function closeAll() { statsOpen.value = false; toolsOpen.value = false; }
+    function toggleStats() { statsOpen.value = !statsOpen.value; toolsOpen.value = false; ingestOpen.value = false; }
+    function toggleTools() { toolsOpen.value = !toolsOpen.value; statsOpen.value = false; ingestOpen.value = false; }
+    function toggleIngest() { ingestOpen.value = !ingestOpen.value; statsOpen.value = false; toolsOpen.value = false; }
+    function closeAll() { statsOpen.value = false; toolsOpen.value = false; ingestOpen.value = false; }
 
     function setLang(l) { patchPrefs({ lang: l }); closeAll(); }
     function setTheme(th) { patchPrefs({ theme: th }); closeAll(); }
@@ -41,16 +45,17 @@ export const TopBar = defineComponent({
     function onDocClick(e) {
       if (!e.target.closest('#stats-chip') && !e.target.closest('#stats-pop')) statsOpen.value = false;
       if (!e.target.closest('.tb-tools') && !e.target.closest('.tb-tools-menu')) toolsOpen.value = false;
+      if (!e.target.closest('.tb-ingest') && !e.target.closest('.tb-ingest-menu')) ingestOpen.value = false;
     }
     onMounted(() => document.addEventListener('click', onDocClick));
     onUnmounted(() => document.removeEventListener('click', onDocClick));
 
     return {
       store, t, runLabel, runState,
-      statsOpen, toolsOpen,
-      toggleStats, toggleTools, closeAll,
+      statsOpen, toolsOpen, ingestOpen,
+      toggleStats, toggleTools, toggleIngest, closeAll,
       setLang, setTheme,
-      onIngest:      () => { closeAll(); emit('ingest'); },
+      onIngest:      () => { closeAll(); toggleIngest(); },
       onRescore:     () => { closeAll(); emit('rescore'); },
       onLlmRun:      () => { closeAll(); emit('llm-run'); },
       onRunNow:      () => { closeAll(); emit('run-now'); },
@@ -115,10 +120,15 @@ export const TopBar = defineComponent({
     </span>
 
     <div class="tb-command-group">
-      <button class="tb-action" :title="t('action.ingestTip')" @click="onIngest">
-        <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1l3.5 4H9v6H7V5H4.5L8 1zM2 13h12v1.5H2z"/></svg>
-        <span>{{ t('action.ingest') }}</span>
-      </button>
+      <div class="tb-ingest">
+        <button class="tb-action tb-ingest-trigger" :class="{ active: ingestOpen }"
+                :title="t('action.ingestTip')" @click.stop="toggleIngest">
+          <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1l3.5 4H9v6H7V5H4.5L8 1zM2 13h12v1.5H2z"/></svg>
+          <span>{{ t('action.ingest') }}</span>
+          <svg class="caret" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 6.5L8 9.5l3-3"/></svg>
+        </button>
+        <IngestPopover v-show="ingestOpen" @close="ingestOpen=false" />
+      </div>
       <button class="tb-action primary" :title="t('action.llmRunTip')" @click="onLlmRun">
         <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1l2.2 4.6L15 6.3l-3.5 3.4.8 4.8L8 12.4 3.7 14.5l.8-4.8L1 6.3l4.8-.7L8 1z"/></svg>
         <span>{{ t('action.llmRun') }}</span>
