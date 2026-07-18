@@ -710,14 +710,22 @@ section > h3 { font-size: 12px; text-transform: uppercase; color: var(--text-fai
 .ins-lc-label { font-size: 11px; color: var(--text-mute); font-weight: 600; }
 .ins-lc-pct { font-size: 10px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
 
-/* Rail — positioned so its vertical center matches the icon center.
- * Icon top y = 22 (stage padding-top) + 0 = 22; center y = 22+16 = 38.
- * Flow height = 4 → flow top = 38 - 2 = 36. Distance from icon center
- * to flow mid: 0. (Was 10px below.) */
+/* Rail — vertically centered through the icon's vertical midpoint.
+ *
+ * The flow is absolutely positioned inside `.ins-lc-stage` (NOT inside
+ * `.ins-lifecycle`), so the lifecycle's 22px outer padding doesn't
+ * shift it. The stage itself has padding-top:0, the icon is the
+ * first flex child at y=0, icon height 32 → icon center y = 16.
+ * Flow height 4 → flow top = 16 - 2 = 14.
+ *
+ * Previous fix used top:36, which mistakenly applied the lifecycle's
+ * 22px outer padding to a flow that's actually scoped to the stage.
+ * Headless measurement confirms flow was rendering 22px below the icon
+ * center (e.g. icon cy=764.5, flow cy=786.5). */
 .ins-lc-flow {
   position: absolute;
   z-index: 1;
-  top: 36px;
+  top: 14px;
   left: calc(50% + 16px);
   width: calc(100% - 32px);
   height: 4px;
