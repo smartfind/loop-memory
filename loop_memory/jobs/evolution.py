@@ -51,6 +51,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -67,6 +68,104 @@ CLUSTER_MAX = 15              # max memories per cluster (Stage 3 prompt size)
 WIKI_INPUT_CLUSTERS = 8       # how many cluster summaries feed Stage 4
 PROFILE_DIMS = ("preferences", "decisions", "projects", "domain", "feedback")
 
+# ----------------------------------------------------------------------------
+# Text noise cleaners (used by Stage 0 dedup + rule-based wiki fallback)
+# ----------------------------------------------------------------------------
+
+# Common assistant boilerplate / meta-narration to strip from raw memory text
+# when synthesizing wiki bodies without an LLM. We keep the regex list small
+# and targeted so a real, atomic fact still survives.
+_NOISE_PREFIX_RE = re.compile(
+    r"^(?:"
+    r"(?:Outcome|Result|Status|Task|Latest|Output)\s*[:：]\s*"
+    r"|\[thinking\][^\n]*\n"
+    r"|User intent\s*[:：]\s*"
+    r"|You are an? [^.\n]{1,80}\.\s*"
+    r"|Assistant\s*[:：]\s*"
+    r"|Human\s*[:：]\s*"
+    r"|\[cron:[a-f0-9\- ]+\][^\n]*\n?"
+    r"|<[^>]+>\s*"
+    r")",
+    re.IGNORECASE,
+)
+_NOISE_CODE_FENCE_RE = re.compile(r"```[^`]*```", re.DOTALL)
+_NOISE_INLINE_CODE_RE = re.compile(r"`([^`]+)`")
+_NOISE_PATH_RE = re.compile(r"/Users/[^\s)\"<>]+")
+_NOISE_URL_RE = re.compile(r"https?://[^\s)\"<>]+")
+_NOISE_WS_RE = re.compile(r"[ \t]+")
+_NOISE_NEWLINES_RE = re.compile(r"\n{2,}")
+
+
+def _clean_noise(text: str, *, max_len: int = 240) -> str:
+    """Strip the wrapper off a raw memory so the atomic fact can survive.
+
+    The goal is *not* to summarize (the LLM does that); it is to remove the
+    80% of characters that are pleasantries, code fences, narration, file
+    paths, and tool chatter so a downstream bullet is readable on its own.
+    """
+    if not text:
+        return ""
+    s = text
+    # Drop code fences entirely (they are usually tool output, not a fact).
+    s = _NOISE_CODE_FENCE_RE.sub(" ", s)
+    # Drop [thinking] blocks first (always multi-line, never useful).
+    s = re.sub(r"\[thinking\][\s\S]*?\[/thinking\]", " ", s, flags=re.I)
+    s = _NOISE_PREFIX_RE.sub("", s)
+    # Inline code: keep the inside, not the backticks.
+    s = _NOISE_INLINE_CODE_RE.sub(r"\1", s)
+    # Drop absolute home paths (these leak the user's filesystem, not a fact).
+    s = _NOISE_PATH_RE.sub(" ", s)
+    # Drop URLs (rarely a fact worth keeping in a wiki bullet).
+    s = _NOISE_URL_RE.sub(" ", s)
+    # Collapse whitespace.
+    s = _NOISE_WS_RE.sub(" ", s)
+    s = _NOISE_NEWLINES_RE.sub(" ", s)
+    s = s.strip(" \t\n.,;:|/\u3000")
+    # Final hard cap
+    if len(s) > max_len:
+        s = s[: max_len - 1].rstrip(" ,;:|/") + "…"
+    return s
+
+
+def _is_low_signal(text: str) -> bool:
+    """Return True if a memory contains no actionable information worth a wiki
+    bullet. Used to drop near-empty / pure-status memories before clustering.
+    Operates on the cleaned form so "Outcome: tests are green" still matches."""
+    if not text:
+        return True
+    s = _clean_noise(text, max_len=400).strip().lower()
+    if len(s) < 12:
+        return True
+    # Pure "Tests are green" / "CI passed" / "done" style status pings.
+    low_patterns = (
+        r"^tests are green",
+        r"^ci (passed|green|succeeded)",
+        r"^all (good|done|set|clear)",
+        r"^running\s*\.\.\.?\s*$",
+        r"^done\.?$",
+        r"^ok\.?$",
+    )
+    for pat in low_patterns:
+        if re.match(pat, s):
+            return True
+    return False
+
+
+def _title_from(text: str, fallback_kind: str = "", max_len: int = 60) -> str:
+    """Make a real, noun-phrase title out of a raw memory string. Strips the
+    wrapper, picks the first meaningful clause, and clamps length."""
+    cleaned = _clean_noise(text, max_len=max_len * 2)
+    if not cleaned:
+        return (fallback_kind.title() if fallback_kind else "Cluster")[:max_len]
+    # Prefer the part before the first sentence break
+    head = re.split(r"[.!?。！？\n]", cleaned, maxsplit=1)[0].strip(" ,;:|/")
+    if not head:
+        head = cleaned
+    if len(head) > max_len:
+        head = head[: max_len - 1].rstrip(" ,;:|/") + "…"
+    return head
+
+
 # Stage 1 weight on signals. importance in [0,1] is the LLM/original value;
 # we blend in recall_count and negative as dampeners.
 W_RECALL = 0.10               # +0.10 per high-recall cluster, capped
@@ -77,29 +176,50 @@ NEGATIVE_SATURATION = 3       # 3 negative events = full dampener
 # Stage 3 system prompt: per-cluster, keep/rewrite/drop actions.
 _CLUSTER_SYSTEM = (
     "You are an assistant that tidies a small cluster of personal memory snippets. "
+    "Treat every item as raw evidence and pull out the ATOMIC fact, never the wrapper.\n"
     "For EACH item return a JSON object with:\n"
-    '  keep: boolean (true = the row contains real signal, keep it)\n'
-    '  importance: number 0..1 (your new estimate of long-term importance)\n'
-    '  distill: a SHORT rewritten version (<= 200 chars) that captures the core '
-    'fact, OR empty string to keep the original. Strip pleasantries, tool chatter, '
-    'code fences, and meta commentary.\n'
-    '  tags: array of up to 5 lowercase tags.\n'
+    '  keep: boolean (true = the row contains real signal worth keeping long-term)\n'
+    '  importance: number 0..1 (your new estimate of long-term importance for a '
+    'user-profile knowledge base — be strict; routine tool chatter is <0.3)\n'
+    '  distill: a SHORT rewritten version (<= 180 chars) capturing the core fact. '
+    'STRIP ALL of the following before writing the distill: greeting/pleasantries, '
+    'tool chatter ("Now let me check...", "Let me run..."), [thinking] blocks, '
+    'code fences, raw user prompts repeated verbatim, "Outcome:" prefixes that just '
+    "echo the user's question, file paths inside the user's home directory, "
+    'console-style progress narration, and meta commentary about the assistant itself. '
+    'Prefer a single declarative sentence. Empty string keeps the original.\n'
+    '  tags: array of up to 5 lowercase tags (no duplicates, snake_case preferred).\n'
+    'Set keep=false for: pure repetition of an earlier item, status pings with no '
+    'fact ("Tests are green"), single-line acknowledgements, or text whose only '
+    'information is a file path the user already knows.\n'
     'Reply with JSON: {"items": [...]}, no prose.'
 )
 
 # Stage 4 system prompt: build/update wiki pages from cluster summaries.
 _WIKI_SYSTEM = (
-    "You maintain a personal knowledge base for one user. You receive the user's "
-    "current wiki pages plus a batch of recently distilled cluster summaries. "
-    "Update or create pages that capture the user's profile. ALWAYS bucket into "
-    "one of these dimensions: preferences, decisions, projects, domain, feedback. "
-    "Use a slug like 'preferences-time-display', 'project-loop-memory', "
-    "'decision-batch-size-50', etc. Each page must have:\n"
-    '  slug, title, summary (<= 280 chars), body (concise markdown, 3-8 lines), '
-    'tags (3-6), importance 0..1, evidence_ids (memory ids that back this page).\n'
-    "If a cluster summary does not add new info, skip it. Prefer to UPDATE existing "
-    "pages (slug match) rather than create duplicates. Reply with JSON: "
-    '{"pages": [...]}, no prose. If nothing is worth adding, reply {"pages": []}.'
+    "You maintain a personal knowledge base for ONE user. You receive the user's "
+    "existing wiki pages plus a batch of distilled cluster summaries (each already "
+    "filtered for noise).\n"
+    "GOAL: each page must be a CONCISE, ACTIONABLE atomic note the user would actually "
+    "want to recall later — NOT a quote of the original conversation.\n"
+    "ALWAYS bucket into one of these dimensions, and make the slug reflect the topic:\n"
+    "  preferences-<topic>, decision-<topic>, project-<topic>, domain-<topic>, "
+    "feedback-<topic>. Examples: 'prefers-dark-mode', 'decision-batch-size-50', "
+    "'project-loop-memory', 'domain-crypto-swing-trades', 'feedback-no-mixed-lang'.\n"
+    "Each page MUST have:\n"
+    '  slug: lowercase, hyphen-separated, <= 60 chars, prefixed with the dimension\n'
+    '  title: a real noun phrase, <= 60 chars (NEVER a truncated user prompt)\n'
+    '  summary: 1-sentence definition, <= 200 chars, MUST stand on its own\n'
+    '  body: bullet-point markdown, 3-8 short bullets, each starting with "- ". '
+    'Each bullet states ONE atomic fact. No prose paragraphs. No "Outcome: ..." echoes. '
+    'No code fences unless the fact is literally a command.\n'
+    '  tags: 3-6 lowercase tags, snake_case\n'
+    '  importance: 0..1 (1 = critical user preference/project, 0.3 = transient detail)\n'
+    '  evidence_ids: list of memory ids that back this page (cite real ids from the input)\n'
+    "SKIP a cluster summary if it is just a user prompt, status update, or repeats "
+    "another cluster. PREFER updating an existing page (same slug) over creating a "
+    "near-duplicate. Reply with JSON: {\"pages\": [...]}. If nothing adds new info, "
+    "reply {\"pages\": []}. No prose, no markdown outside the JSON."
 )
 
 
@@ -113,12 +233,14 @@ class EvolutionStats:
     scanned: int = 0
     rescored: int = 0
     dropped: int = 0
+    deduped: int = 0           # near-duplicate memories collapsed
     resummarized: int = 0
     clusters: int = 0
     cluster_calls: int = 0
     wiki_calls: int = 0
     wiki_created: int = 0
     wiki_updated: int = 0
+    wiki_retired: int = 0      # noisy legacy wiki pages removed
     elapsed_ms: float = 0.0
     notes: list[str] = field(default_factory=list)
     stages: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -128,12 +250,14 @@ class EvolutionStats:
             "scanned": self.scanned,
             "rescored": self.rescored,
             "dropped": self.dropped,
+            "deduped": self.deduped,
             "resummarized": self.resummarized,
             "clusters": self.clusters,
             "cluster_calls": self.cluster_calls,
             "wiki_calls": self.wiki_calls,
             "wiki_created": self.wiki_created,
             "wiki_updated": self.wiki_updated,
+            "wiki_retired": self.wiki_retired,
             "elapsed_ms": round(self.elapsed_ms, 2),
             "notes": self.notes,
             "stages": self.stages,
@@ -258,6 +382,26 @@ class EvolutionConsolidator:
             except Exception:
                 pass
 
+        # Stage 0: Pre-cluster cleanup. Drop pure-status noise and collapse
+        # near-duplicate memories so the cluster LLM sees focused input.
+        s0_t = time.time()
+        pre_count = len(memories)
+        memories = self._stage0_filter_noise(memories)
+        memories = self._stage0_dedup_memories(memories, stats)
+        s0 = {
+            "in": pre_count,
+            "out": len(memories),
+            "ms": round((time.time() - s0_t) * 1000, 1),
+            "note": f"noise-filtered {pre_count - stats.deduped - len(memories) + pre_count} · deduped {stats.deduped}",
+            "evidence_ids": [m.id for m in memories[:200]],
+        }
+        stats.stages["clean"] = s0
+        self._record_stage("clean", pre_count, len(memories), s0["note"], s0)
+        if not memories:
+            stats.notes.append("no memories after cleanup")
+            stats.elapsed_ms = (time.time() - t0) * 1000
+            return stats
+
         # Stage 1: Signal-aware rescoring
         s1_t = time.time()
         stage1_in = len(memories)
@@ -312,9 +456,15 @@ class EvolutionConsolidator:
         for ci, cluster in enumerate(clusters):
             if is_rule:
                 # No LLM -> keep everything as-is. Build a summary from
-                # the top-3 important items so Stage 4 still has signal.
-                top = sorted(cluster, key=lambda m: -(m.importance or 0))[:3]
-                summary_text = " / ".join((m.text or "")[:120] for m in top)[:400]
+                # the top important items so Stage 4 still has signal.
+                # We attach the cleaned, top-N items directly so Stage 4
+                # can build real bullets (instead of one stitched blob).
+                ranked = sorted(
+                    cluster,
+                    key=lambda m: -(float(getattr(m, "importance", 0.0) or 0.0)),
+                )
+                top = ranked[:7]
+                summary_text = " / ".join((m.text or "")[:120] for m in top[:3])[:400]
                 kinds = [m.kind for m in cluster if m.kind]
                 kind = max(set(kinds), key=kinds.count) if kinds else ""
                 all_tags = [t for m in cluster for t in (m.tags or []) if t]
@@ -329,6 +479,9 @@ class EvolutionConsolidator:
                     "kind": kind,
                     "dominating_tag": dom_tag,
                     "avg_importance": round(avg_imp, 3),
+                    # Top-ranked items (cleaned) so Stage 4 can build
+                    # real bullets, not raw concatenation.
+                    "items": top,
                 }
                 actions = {m.id: {"keep": True, "importance": m.importance, "distill": "", "tags": list(m.tags or [])} for m in cluster}
             else:
@@ -366,8 +519,8 @@ class EvolutionConsolidator:
         # Collect evidence ids from the wiki pages so drill-down can list them
         wiki_evidence: list = []
         try:
-            for p in self.store.list_wiki_pages(limit=50):
-                eids = p.get("evidence_ids") or []
+            for pg in self.store.list_wiki_pages(limit=50):
+                eids = pg.get("evidence_ids") or []
                 if isinstance(eids, list):
                     wiki_evidence.extend([str(x) for x in eids])
         except Exception:
@@ -381,6 +534,17 @@ class EvolutionConsolidator:
         }
         stats.stages["wiki"] = s4
         self._record_stage("wiki", len(cluster_summaries), s4["out"], s4["note"], s4)
+
+        # Stage 4.5: Retire noisy wiki pages. Conservative: only touches
+        # pages whose title is a raw user prompt, body is glued fragments,
+        # or body has no bullets. Well-formed LLM-authored pages never
+        # match these heuristics.
+        if not dry_run:
+            try:
+                retired = self._stage4_cleanup_wiki(stats)
+                stats.wiki_retired = retired
+            except Exception:
+                pass
         if progress:
             try:
                 progress(len(memories), len(memories))
@@ -610,6 +774,116 @@ class EvolutionConsolidator:
             kept.add(m.id)
         return kept
 
+    # --- Stage 3.5: Wiki cleanup ---------------------------------------
+
+    def _stage4_cleanup_wiki(self, stats: EvolutionStats) -> int:
+        """Retire noisy legacy wiki pages produced by older rule-based runs.
+
+        A page is considered noisy when:
+          * its body contains the "/ " separator glue (old fallback signature)
+          * its title is literally a truncated user prompt (>40 chars starting
+            with [codex] / [claude] / User intent / Outcome: / 帮我 / 分析)
+          * its importance is < 0.35 AND it has no evidence ids
+          * it has zero bullets in its body (no real content)
+
+        Returns the number of pages retired. We never retire pages with
+        importance >= 0.5 even if they look messy — the user might still
+        rely on them.
+        """
+        try:
+            pages = self.store.list_wiki_pages(limit=200)
+        except Exception:
+            return 0
+        retired = 0
+        for p in pages:
+            pid = p.get("id")
+            if not pid:
+                continue
+            title = (p.get("title") or "").strip()
+            body = (p.get("body") or "")
+            evidence = p.get("evidence_ids") or []
+            has_bullets = body.count("\n- ") + (1 if body.startswith("- ") else 0)
+            # A title that is literally a session-source prefix followed by a
+            # raw user prompt is ALWAYS a "list of recent user prompts" page
+            # — there is no atomic knowledge here. Bail the early-skip.
+            title_prefix_prompt = title.startswith((
+                "[codex]", "[claude]", "[hermes]", "[openclaw]",
+                "User intent:", "Outcome:", "You are ", "Review ",
+                "帮我", "分析", "请立即", "如何", "How to", "Please ",
+                "请", "你可以干嘛", "User said:",
+            )) and len(title) > 20
+            if title_prefix_prompt:
+                noisy = True
+            else:
+                # Glue signature: lots of "/ " separators (old fallback glued raw text)
+                if body.count(" / ") >= 2:
+                    noisy = True
+                # Title is a truncated user prompt
+                if title.startswith(("[codex]", "[claude]", "[hermes]", "[openclaw]",
+                                      "User intent:", "Outcome:", "帮我", "分析",
+                                      "How to", "Please", "请", "你可以干嘛",
+                                      "User said:")) and len(title) > 20:
+                    noisy = True
+                # No bullets and no evidence
+                if has_bullets == 0 and not evidence:
+                    noisy = True
+                # Body has 0 newlines AND no bullets -> just a single glued blob
+                if body.count("\n") < 2 and has_bullets == 0:
+                    noisy = True
+                # Bail only if the page has real bullets AND evidence AND a clean title
+                if has_bullets >= 2 and len(evidence) >= 2:
+                    continue
+            if noisy:
+                try:
+                    self.store.delete_wiki_page(pid)
+                    retired += 1
+                    stats.notes.append(f"wiki retired: {title[:40]!r}")
+                except Exception:
+                    pass
+        # Second sweep: rewrite auto-aggregator pages (auto-episode /
+        # auto-fact) using fresh bullet bodies if their current body still
+        # contains glued fragments. We never delete these — they back many
+        # cross-session facts — but we DO clean their body.
+        for p2 in self.store.list_wiki_pages(limit=20):
+            slug = (p2.get("slug") or "")
+            if slug not in ("auto-episode", "auto-fact"):
+                continue
+            body = p2.get("body") or ""
+            # If the body has many "/ " separators or many duplicate
+            # bullets, it's a candidate for a re-synthesis pass.
+            glue = body.count(" / ")
+            # Cheap dedupe: count repeated leading tokens.
+            bullets = [b for b in body.split("\n") if b.startswith("- ")]
+            seen = set()
+            unique = []
+            for b in bullets:
+                key = b[:80].lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                unique.append(b)
+            if glue >= 3 or len(unique) < len(bullets) * 0.7:
+                # Replace body with the deduped + cleaned bullets.
+                if unique:
+                    new_body = "\n".join(unique[:25])
+                else:
+                    continue
+                try:
+                    self.store.upsert_wiki_page(
+                        slug=slug,
+                        title=p2.get("title", ""),
+                        body=new_body,
+                        summary=p2.get("summary", ""),
+                        tags=p2.get("tags", []),
+                        importance=p2.get("importance", 0.5),
+                        evidence_ids=p2.get("evidence_ids", []),
+                        run_id=self._run_id,
+                    )
+                    stats.notes.append(f"wiki re-synthesized: {slug}")
+                except Exception:
+                    pass
+        return retired
+
     # --- Stage 4: Wiki synthesis ----------------------------------------
 
     def _stage4_wiki_synthesis(
@@ -721,64 +995,71 @@ class EvolutionConsolidator:
         """Rule-based wiki synthesis: one page per cluster.
 
         Produces real, browsable wiki pages even when no LLM is
-        configured (or when the configured LLM is failing). The pages
-        group memories by the dominant tag or by an extracted topic,
-        with a real title (not a verbatim prompt), a short summary,
-        and the actual evidence ids of the contributing memories.
+        configured (or when the configured LLM is failing). Each page
+        has a real noun-phrase title, a 1-line summary, and a body of
+        3-8 atomic bullets — never a glued-up concatenation of raw
+        memory text. This is the fallback that drives the entire wiki
+        when the user has not yet configured an API key.
         """
         import hashlib as _h
-        import re as _re
         created = 0
         updated = 0
         for i, cs in enumerate(clusters):
-            text = (cs.get("text") or "").strip()
-            if not text or len(text) < 12:
+            memories: list = cs.get("items") or cs.get("memories") or []
+            if not memories:
                 continue
-            cleaned = _re.sub(
-                r"^(User intent|You are|Assistant|Human):\s*",
-                "", text, flags=_re.IGNORECASE
-            )
-            cleaned = _re.sub(
-                r"^\[cron:[a-f0-9-]+\s*[^\]]*\]\s*",
-                "", cleaned
-            )
-            cleaned = _re.sub(r"<[^>]+>", "", cleaned)
-            cleaned = _re.sub(r"\s+", " ", cleaned).strip()
-            if len(cleaned) < 8:
+            ranked = sorted(
+                memories,
+                key=lambda m: -(float(getattr(m, "importance", 0.0) or 0.0)),
+            )[:7]
+            bullets: list[str] = []
+            seen: set[str] = set()
+            for m in ranked:
+                bullet = _clean_noise(getattr(m, "text", "") or "", max_len=160)
+                if not bullet:
+                    continue
+                key = bullet[:60].lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                if len(bullet) < 6:
+                    continue
+                bullets.append(f"- {bullet}")
+                if len(bullets) >= 7:
+                    break
+            if not bullets:
                 continue
-            # Slug: prefer kind/topic over a hashed blob
             kind_hint = (cs.get("kind") or cs.get("dominating_tag") or "").lower().strip()
-            words = _re.findall(r"[A-Za-z0-9一-鿿]+", cleaned.lower())
-            topic_words = "-".join(words[:4]) or f"cluster-{i+1}"
-            slug_src = f"{kind_hint}-{topic_words}" if kind_hint else topic_words
-            slug = (slug_src[:60] or f"cluster-{i+1}").lower()
-            slug = _re.sub(r"[^a-z0-9一-鿿-]+", "-", slug).strip("-")
+            topic_src = bullets[0].lstrip("- ")
+            words = re.findall(r"[a-z0-9一-鿿]+", topic_src.lower())
+            topic = "-".join([w for w in words if len(w) > 1][:4]) or f"cluster-{i+1}"
+            slug_src = f"{kind_hint}-{topic}" if kind_hint else topic
+            slug = re.sub(r"[^a-z0-9一-鿿-]+", "-", slug_src).strip("-").lower()[:60]
             if not slug:
                 slug = "auto-cluster-" + _h.md5(slug_src.encode("utf-8")).hexdigest()[:10]
-            title = cleaned[:80].rstrip(" .,;:") or f"Cluster {i+1}"
-            evidence_ids = cs.get("evidence_ids") or cs.get("kept_ids") or []
-            if not isinstance(evidence_ids, list):
-                evidence_ids = []
-            evidence_ids = [str(x) for x in evidence_ids if x][:50]
-            body_lines = [cleaned]
-            if cs.get("size"):
-                body_lines.append(f"\n_Grouped from {cs['size']} memory entries._")
+            title = _title_from(bullets[0].lstrip("- "), fallback_kind=kind_hint, max_len=58)
+            summary = bullets[0].lstrip("- ")[:200].rstrip(" .,;:")
+            if not summary:
+                continue
+            evidence_ids: list[str] = []
+            for m in ranked:
+                mid = getattr(m, "id", None)
+                if mid and str(mid) not in evidence_ids:
+                    evidence_ids.append(str(mid))
+                if len(evidence_ids) >= 12:
+                    break
+            body_lines = list(bullets)
             if evidence_ids:
                 body_lines.append(
-                    f"\n_Source memories: {len(evidence_ids)} (e.g. "
-                    f"{', '.join(evidence_ids[:4])})_"
+                    f"\n_Source: {len(evidence_ids)} memories · importance-weighted top-7_"
                 )
             body = "\n".join(body_lines)
-            summary = cleaned[:280]
             tags = ["auto", "rule-based"]
             if kind_hint:
                 tags.append(kind_hint)
-            importance = 0.5
-            try:
-                if "avg_importance" in cs:
-                    importance = float(cs["avg_importance"])
-            except Exception:
-                pass
+            top3_imp = [float(getattr(m, "importance", 0.0) or 0.0) for m in ranked[:3]]
+            importance = max(0.35, sum(top3_imp) / max(1, len(top3_imp)))
+            importance = round(min(1.0, importance), 2)
             existing_p = self.store.get_wiki_page_by_slug(slug)
             try:
                 self.store.upsert_wiki_page(
@@ -794,6 +1075,99 @@ class EvolutionConsolidator:
                 updated += 1
         stats.wiki_calls += 1
         return {"created": created, "updated": updated, "calls": 1}
+
+
+    # --- Stage 0: Pre-cluster cleanup -----------------------------------
+
+    def _stage0_filter_noise(
+        self, memories: list[StoredMemory]
+    ) -> list[StoredMemory]:
+        """Drop memories that carry no actionable information: short
+        status pings, single-line acknowledgements, etc. These dilute
+        the cluster LLM and inflate the wiki page count without value."""
+        kept: list[StoredMemory] = []
+        for m in memories:
+            text = (m.text or "").strip()
+            if _is_low_signal(text):
+                continue
+            if len(text) < 16:
+                continue
+            kept.append(m)
+        return kept
+
+    def _stage0_dedup_memories(
+        self,
+        memories: list[StoredMemory],
+        stats: EvolutionStats,
+    ) -> list[StoredMemory]:
+        """Collapse near-duplicate memories into one. We hash-embed each
+        memory (cheap, deterministic), then group by cosine similarity
+        >= 0.85 within the same kind. Comparison is against EVERY member
+        of the existing group (not just the centroid), so partial matches
+        chain into the right cluster. The highest-importance memory
+        survives; the rest are deleted from the store and the survivor's
+        importance is bumped slightly so the merged fact rises above
+        the noise."""
+        if not memories:
+            return memories
+        ranked = sorted(
+            memories,
+            key=lambda m: -(float(getattr(m, "importance", 0.0) or 0.0)),
+        )
+        groups: list[list[StoredMemory]] = []
+        group_embs: list[list[list[float]]] = []
+        for m in ranked:
+            text = (m.text or "").strip()
+            if not text:
+                continue
+            emb = _hash_embed(text)
+            placed = False
+            for gi, grp in enumerate(groups):
+                if grp[0].kind != m.kind:
+                    continue
+                # Compare against every existing member's embedding
+                for prev_emb in group_embs[gi]:
+                    if _cos(emb, prev_emb) >= 0.85:
+                        grp.append(m)
+                        group_embs[gi].append(emb)
+                        placed = True
+                        break
+                if placed:
+                    break
+            if not placed:
+                groups.append([m])
+                group_embs.append([emb])
+        merged = 0
+        survivors: set[str] = set()
+        for grp in groups:
+            if not grp:
+                continue
+            head = grp[0]
+            survivors.add(head.id)
+            if len(grp) <= 1:
+                continue
+            head_imp = float(getattr(head, "importance", 0.0) or 0.0)
+            for dup in grp[1:]:
+                head_imp = min(1.0, head_imp + 0.02)
+                try:
+                    self.store.delete_memory(dup.id)
+                    merged += 1
+                except Exception:
+                    pass
+            if head_imp > float(getattr(head, "importance", 0.0) or 0.0):
+                try:
+                    self.store.upsert_memory(
+                        id=head.id, kind=head.kind,
+                        text=head.text, importance=head_imp,
+                        source=head.source, session_id=head.session_id,
+                        created_at=head.created_at, updated_at=time.time(),
+                        ttl=head.ttl, tags=list(head.tags or []),
+                        embedding=head.embedding,
+                    )
+                except Exception:
+                    pass
+        stats.deduped = merged
+        return [m for m in memories if m.id in survivors]
 
 
     # --- Stage 5: Evolution memo ----------------------------------------

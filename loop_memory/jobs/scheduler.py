@@ -26,7 +26,8 @@ from typing import Any
 
 from ..llm.providers import build_provider, default_config, validate_config
 from ..storage.sqlite_store import MemoryStore
-from .llm_consolidate import ConsolidateStats, LLMConsolidator
+from .evolution import EvolutionConsolidator
+from .llm_consolidate import ConsolidateStats, LLMConsolidator  # noqa: F401  (kept for backward-compat)
 
 log = logging.getLogger(__name__)
 
@@ -272,9 +273,19 @@ class ConsolidatorScheduler:
 
         stats: ConsolidateStats
         try:
-            cons = LLMConsolidator(self.store, provider, cfg.get("behaviour") or {})
-            cons.set_run_id(run_id)
-            stats = cons.run(progress=_progress)
+            # Prefer the new EvolutionConsolidator: it adds memory dedup,
+            # noisy wiki cleanup, and bullet-style wiki synthesis. Fall back
+            # to the legacy single-pass LLMConsolidator if anything goes
+            # wrong during construction (e.g. provider mismatch).
+            try:
+                cons = EvolutionConsolidator(self.store, provider, cfg.get("behaviour") or {})
+                cons.set_run_id(run_id)
+                stats = cons.run(progress=_progress)
+            except Exception:
+                log.warning("EvolutionConsolidator unavailable; falling back to LLMConsolidator", exc_info=True)
+                cons = LLMConsolidator(self.store, provider, cfg.get("behaviour") or {})
+                cons.set_run_id(run_id)
+                stats = cons.run(progress=_progress)
         except Exception as e:
             log.exception("consolidator failed: %s", e)
             self.store.finish_consolidation_run(run_id, "error", stats=None, error=str(e))
@@ -294,7 +305,11 @@ class ConsolidatorScheduler:
         # knowledge graph from the new distilled knowledge so the
         # graph tab stays in sync with the wiki.
         try:
-            if (d.get("wiki_pages_created") or 0) + (d.get("wiki_pages_updated") or 0) > 0:
+            # Tolerate both EvolutionStats (wiki_created / wiki_updated)
+            # and legacy LLMConsolidator.stats (wiki_pages_created / wiki_pages_updated).
+            wpc = (d.get("wiki_pages_created") or 0) + (d.get("wiki_created") or 0)
+            wpu = (d.get("wiki_pages_updated") or 0) + (d.get("wiki_updated") or 0)
+            if wpc + wpu > 0:
                 from ..graph.build import KnowledgeGraph
                 report = KnowledgeGraph(self.store).rebuild_from_wiki(clear=True)
                 log.info(
