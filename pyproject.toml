@@ -5,13 +5,13 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "loop-memory"
 version = "0.3.0"
-description = "A Loop Engineering memory system for large language models, with a local web UI and auto-ingest from Codex / Claude / Hermes transcripts."
+description = "A general-purpose, local memory system for every AI agent you run. Loop Memory auto-captures conversations from Codex / Claude / Hermes / OpenClaw, scores them by importance × recency × usage × feedback, distils them into a curated wiki, and serves everything from a single web UI."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Loop Memory contributors <loop-memory@users.noreply.github.com>" }]
-keywords = ["llm", "memory", "agent", "rag", "long-term-memory", "loop-engineering"]
+keywords = ["llm", "memory", "agent", "agents", "rag", "long-term-memory", "memory-system", "codex", "claude", "hermes", "openclaw", "clawx"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",

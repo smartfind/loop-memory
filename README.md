@@ -1,4 +1,14 @@
+<div align="center">
+  <img src="docs/assets/logo.svg" alt="Loop Memory" width="360"/>
+</div>
+
 # Loop Memory
+
+> **A general-purpose memory system for every AI agent you run locally.**
+>
+> Auto-captures every Codex / Claude / Hermes / OpenClaw conversation,
+> distils them into a tight wiki of stable knowledge, and lets the
+> agent recall what matters on demand.
 
 [![CI](https://img.shields.io/github/actions/workflow/status/smartfind/loop-memory/tests.yml?branch=main&style=flat-square)](https://github.com/smartfind/loop-memory/actions)
 [![PyPI](https://img.shields.io/pypi/v/loop-memory.svg?style=flat-square)](https://pypi.org/project/loop-memory/)
@@ -6,33 +16,46 @@
 [![Python](https://img.shields.io/pypi/pyversions/loop-memory?style=flat-square)](https://pypi.org/project/loop-memory/)
 [![Zero deps](https://img.shields.io/badge/dependencies-0-success.svg?style=flat-square)](pyproject.toml)
 
-> A local **Loop Engineering** memory system for any LLM. Auto-captures
-> conversations from Codex / Claude / Hermes, scores them by time, lets
-> you browse and consolidate everything from a single web page.
-
 ---
 
 ## What it does
 
-Loop Memory gives you **a persistent memory loop for every local LLM
-tool you use**, not just one product. Conversations end, transcripts
-land on disk, Loop Memory pulls them into a SQLite-backed store, scores
-each memory by *importance × recency*, lets a background job dedupe +
-GC + rescore, and shows the lot in a small local web UI.
+**Loop Memory** gives every agent you use a single, persistent brain
+that outlives any one conversation. Each agent (Codex CLI, Claude
+Code, Hermes, OpenClaw / clawx, …) drops its transcripts onto disk;
+Loop Memory quietly catches them, scores every fragment by *importance
+× recency × usage × feedback*, distils the long tail into a curated
+wiki, and re-injects the relevant pieces into the next session.
 
+```mermaid
+flowchart LR
+    subgraph Capture
+        A1[Codex CLI] --> Store
+        A2[Claude Code] --> Store
+        A3[Hermes] --> Store
+        A4[OpenClaw / clawx] --> Store
+        A5[Any watcher] --> Store
+    end
+    Store[(SQLite
+sessions + memories)]
+    Store --> Score[Signal-aware
+scoring]
+    Score --> Cluster[Semantic
+clustering]
+    Cluster --> Distill[Per-cluster
+distillation]
+    Distill --> Wiki[(Curated wiki
+preferences / decisions /
+projects / domain)]
+    Wiki --> Recall[Next-session recall
+via MCP / hooks]
+    Recall --> A1
+    Recall --> A2
+    Recall --> A3
+    Recall --> A4
 ```
-   Claude Code ─┐
-   Codex CLI   ─┼──►  loop-memory ingest / watcher  ──►  SQLite store
-   Hermes      ─┘                                       (sessions + memories)
-                                                         │
-                                                         ▼
-                          search, time filter, score filter, ranking
-                                                         │
-                         ┌───────────────────────────────┴────────────────┐
-                         ▼                                                ▼
-                  loop-memory serve                          loop-memory consolidate
-                  (web UI on :7767)                          (rescore + GC + dedupe)
-```
+
+*One loop, many agents, one evolving wiki.*
 
 ---
 

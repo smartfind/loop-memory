@@ -421,6 +421,18 @@ export const Dashboard = defineComponent({
       return `${peak.hour} · ${peak.count} (${Math.round(((peak.count || 0) / total) * 100)}%)`;
     }
 
+    /* Per-tone RGB hex table — used by the lifecycle beads for
+     * colour interpolation between adjacent stages. Keep in sync
+     * with .ins-lc-stage[data-tone='*'] in layout.css. */
+    const LC_TONE_HEX = {
+      blue:   '#3b82f6',
+      green:  '#10b981',
+      amber:  '#f59e0b',
+      purple: '#8b5cf6',
+      slate:  '#64748b',
+      rose:   '#f43f5e',
+    };
+
     function lifecycleSegments(stages) {
       const stg = stages || {};
       const labels = {
@@ -440,7 +452,11 @@ export const Dashboard = defineComponent({
       let acc = 0;
       return order.map(k => {
         const pct = ((stg[k] || 0) / total) * 100;
-        const seg = { key: k, label: labels[k], tone: tones[k], icon: icons[k], count: stg[k] || 0, pct, x: acc };
+        const seg = {
+          key: k, label: labels[k], tone: tones[k],
+          toneColor: LC_TONE_HEX[tones[k]],
+          icon: icons[k], count: stg[k] || 0, pct, x: acc,
+        };
         acc += pct;
         return seg;
       });
@@ -630,10 +646,16 @@ export const Dashboard = defineComponent({
           <div class="ins-lc-val">{{ fmtNum(seg.count) }}</div>
           <div class="ins-lc-label">{{ seg.label }}</div>
           <div class="ins-lc-pct">{{ seg.pct.toFixed(0) }}%</div>
-          <div v-if="index < 5" class="ins-lc-flow" aria-hidden="true">
-            <span class="ins-lc-particle p1"></span>
-            <span class="ins-lc-particle p2"></span>
-            <span class="ins-lc-particle p3"></span>
+          <div v-if="index < 5"
+               class="ins-lc-flow"
+               :style="{
+                 '--from-tone': seg.toneColor,
+                 '--to-tone': lifecycleSegments(insights.stages)[index + 1].toneColor
+               }"
+               aria-hidden="true">
+            <span class="ins-lc-ball p1"></span>
+            <span class="ins-lc-ball p2"></span>
+            <span class="ins-lc-ball p3"></span>
           </div>
         </div>
       </div>

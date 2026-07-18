@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="lm-card-l" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#f5f3ff"/>
+    </linearGradient>
+    <linearGradient id="lm-arc-active-l" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0891b2"/>
+      <stop offset="100%" stop-color="#4f46e5"/>
+    </linearGradient>
+    <linearGradient id="lm-arc-decay-l" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#be123c"/>
+      <stop offset="100%" stop-color="#a16207"/>
+    </linearGradient>
+    <radialGradient id="lm-core-l" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="1"/>
+      <stop offset="50%" stop-color="#a78bfa" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#7c3aed" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="lm-halo-l" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#4f46e5" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#4f46e5" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="64" height="64" rx="16" fill="url(#lm-card-l)"/>
+  <rect x="0.5" y="0.5" width="63" height="63" rx="15.5" fill="none" stroke="rgba(79,70,229,0.18)"/>
+  <circle cx="32" cy="32" r="26" fill="url(#lm-halo-l)"/>
+  <g transform="translate(32 32)" fill="none" stroke-linecap="round">
+    <path d="M -20,-3 A 20,20 0 1 1 20,-3" stroke="url(#lm-arc-active-l)" stroke-width="3"/>
+    <path d="M 20,3 A 20,20 0 1 1 -20,3" stroke="url(#lm-arc-decay-l)" stroke-width="3"/>
+    <circle cx="0" cy="0" r="13" stroke="rgba(124,58,237,0.4)" stroke-width="1.4" stroke-dasharray="2 2.5"/>
+  </g>
+  <circle cx="32" cy="32" r="11" fill="url(#lm-core-l)"/>
+  <circle cx="32" cy="32" r="4" fill="#4f46e5"/>
+  <circle cx="32" cy="32" r="2.2" fill="#ffffff"/>
+  <circle cx="12" cy="29" r="2.4" fill="#0891b2"/>
+  <circle cx="52" cy="35" r="2.4" fill="#a16207"/>
+</svg>
