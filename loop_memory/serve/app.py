@@ -1057,6 +1057,7 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
     @app.get("/api/memories")
     def memories(
         source: str | None = None,
+        session_id: str | None = None,
         kind: str | None = None,
         min_score: float | None = None,
         since: float | None = None,
@@ -1077,6 +1078,7 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
             rows = rows[:limit]
         else:
             rows = store.list_memories(
+                session_id=session_id,
                 kind=kind,
                 min_score=min_score,
                 since=since,
@@ -1084,6 +1086,12 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
                 query=q,
                 limit=limit,
             )
+        # If a session_id was passed, drop the source-coded full scan and
+        # apply the session filter on top of either branch (catches the
+        # ``source=`` branch where list_memories was called without
+        # session_id so the filter didn't propagate).
+        if session_id:
+            rows = [r for r in rows if r.session_id == session_id]
         return [_memory_to_dict(m) for m in rows]
 
     @app.post("/api/memories/{mid}/feedback")

@@ -9,7 +9,7 @@
   "action.edit": "编辑",
   "action.ingest": "导入",
   "action.ingestStarted": "已采集 {n} 条记忆",
-  "action.ingestTip": "导入本地对话记录",
+  "action.ingestTip": "勾选要导入的对话来源（可多选）",
   "action.llmRun": "AI 整理",
   "action.llmRunQueued": "已加入 AI 整理队列",
   "action.llmRunTip": "执行一次 AI 记忆整理",
@@ -536,5 +536,18 @@
   "topbar.themeAuto": "跟随系统",
   "topbar.themeLight": "浅色模式",
   "topbar.themeDark": "深色模式",
-  "common.close": "关闭"
+  "common.close": "关闭",
+  "action.ingestNoSource": "请先选择至少一个数据源",
+  "action.ingestAll": "全选",
+  "action.ingestNone": "清空",
+  "action.ingestRun": "开始导入",
+  "sidebar.turns": "条",
+  "sidebar.memoryCount": "会话内的记忆条数",
+  "sidebar.emptyHint": "点击右上角\"导入\"扫描 ~/.codex 和 ~/.openclaw",
+  "sidebar.filteringBySession": "已选中该会话，时间线仅展示此会话的内容",
+  "sidebar.clearFilter": "清除会话筛选",
+  "timeline.memories": "条记忆",
+  "timeline.sessionScope": "正在查看会话：",
+  "timeline.clearScope": "清除会话筛选，查看全部记忆",
+  "timeline.emptyForSession": "这个会话暂未提取到记忆，尝试重新导入或者运行\"AI 整理\"。"
 }

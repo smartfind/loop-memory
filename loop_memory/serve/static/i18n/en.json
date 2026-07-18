@@ -9,7 +9,7 @@
   "action.edit": "Edit",
   "action.ingest": "Ingest",
   "action.ingestStarted": "Ingested {n} memories",
-  "action.ingestTip": "Import local conversation transcripts",
+  "action.ingestTip": "Tick the conversation sources to import (multi-select)",
   "action.llmRun": "AI Consolidate",
   "action.llmRunQueued": "AI consolidation queued",
   "action.llmRunTip": "Run the AI consolidator once",
@@ -536,5 +536,18 @@
   "topbar.themeAuto": "Follow system",
   "topbar.themeLight": "Light mode",
   "topbar.themeDark": "Dark mode",
-  "common.close": "Close"
+  "common.close": "Close",
+  "action.ingestNoSource": "Pick at least one source first",
+  "action.ingestAll": "All",
+  "action.ingestNone": "None",
+  "action.ingestRun": "Ingest now",
+  "sidebar.turns": "msgs",
+  "sidebar.memoryCount": "Messages in this session",
+  "sidebar.emptyHint": "Click \"Import\" in the top-right to scan ~/.codex and ~/.openclaw.",
+  "sidebar.filteringBySession": "Showing only this session in the timeline.",
+  "sidebar.clearFilter": "Clear session filter",
+  "timeline.memories": "memories",
+  "timeline.sessionScope": "Viewing session:",
+  "timeline.clearScope": "Clear session filter, show all memories",
+  "timeline.emptyForSession": "No memories have been extracted for this session yet. Try running \"AI Run\" or re-importing."
 }
