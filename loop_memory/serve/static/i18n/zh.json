@@ -583,5 +583,6 @@
   "action.forceSource": "数据源",
   "action.forceNoActive": "当前没有活跃会话",
   "action.forceRunning": "摄入中…",
-  "action.forceTip": "跳过 idle 等待，立即把当前活跃会话的更新摄入"
+  "action.forceTip": "跳过 idle 等待，立即把当前活跃会话的更新摄入",
+  "dash.health.thinkSummary": "🧠 推理过程（{n} 字符）"
 }

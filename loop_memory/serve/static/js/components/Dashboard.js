@@ -16,7 +16,7 @@
  * - WriteGuard header shows uptime (time since first audit record).
  */
 import { defineComponent, ref, computed, onMounted, onUnmounted } from 'https://unpkg.com/vue@3.4.38/dist/vue.esm-browser.prod.js';
-import { store, t, timeAgo, toast } from '../store.js';
+import { store, t, timeAgo, toast, escapeHtml } from '../store.js';
 import { api } from '../api.js';
 
 const SVGNS = 'http://www.w3.org/2000/svg';
@@ -271,6 +271,120 @@ export const Dashboard = defineComponent({
       try { await navigator.clipboard?.writeText(md); } catch (e) { /* ignore */ }
     }
 
+    // Tiny inline Markdown renderer for the weekly report card.
+    //
+    // The weekly digest comes back from the LLM as plain Markdown, but the
+    // UI was previously rendering it as a literal string — bullets showed
+    // up as `1. xxx` and bold/headings leaked through as raw asterisks.
+    // This renderer is intentionally tiny (no external deps) and only
+    // handles the subset that MiniMax-M2.7 actually emits:
+    //   # h1..h6               → <h1>..<h6>
+    //   ## h2 / ### h3         → <h2> / <h3>
+    //   **bold** / *italic*    → <strong> / <em>
+    //   `code`                 → <code>
+    //   - foo / 1. foo         → <ul><li> / <ol><li>
+    //   ```fences```           → <pre><code>
+    //   blank lines            → paragraph break
+    //
+    // We tokenize line-by-line, then render each token. Each token's text
+    // is HTML-escaped *before* the inline rules run, so an adversarial
+    // markdown string can never smuggle markup through.
+    function _tokenizeWeeklyMarkdown(md) {
+      if (!md) return [];
+      const lines = String(md).split(/\n/);
+      const tokens = [];
+      let i = 0;
+      while (i < lines.length) {
+        const line = lines[i];
+        if (/^```/.test(line)) {
+          const lang = line.replace(/^```\s*/, '').trim();
+          const body = [];
+          i++;
+          while (i < lines.length && !/^```/.test(lines[i])) {
+            body.push(lines[i]); i++;
+          }
+          i++; // skip closing fence
+          tokens.push({ kind: 'fence', lang, body: body.join('\n') });
+          continue;
+        }
+        const h = line.match(/^(#{1,6})\s+(.+)$/);
+        if (h) { tokens.push({ kind: 'heading', level: h[1].length, text: h[2] }); i++; continue; }
+        if (/^[-*]\s+/.test(line)) {
+          const items = [];
+          while (i < lines.length && /^[-*]\s+/.test(lines[i])) {
+            items.push(lines[i].replace(/^[-*]\s+/, ''));
+            i++;
+          }
+          tokens.push({ kind: 'ul', items });
+          continue;
+        }
+        if (/^\d+\.\s+/.test(line)) {
+          const items = [];
+          while (i < lines.length && /^\d+\.\s+/.test(lines[i])) {
+            items.push(lines[i].replace(/^\d+\.\s+/, ''));
+            i++;
+          }
+          tokens.push({ kind: 'ol', items });
+          continue;
+        }
+        if (!line.trim()) { i++; continue; }
+        const para = [];
+        while (i < lines.length && lines[i].trim()
+               && !/^(#{1,6}\s|[-*]\s|\d+\.\s|```)/.test(lines[i])) {
+          para.push(lines[i]); i++;
+        }
+        tokens.push({ kind: 'p', text: para.join('\n') });
+      }
+      return tokens;
+    }
+
+    function _applyInline(s) {
+      return s
+        .replace(/`([^`]+)`/g, '<code>$1</code>')
+        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+        .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+    }
+
+    function renderWeeklyMarkdown(md) {
+      const tokens = _tokenizeWeeklyMarkdown(md);
+      return tokens.map(tok => {
+        if (tok.kind === 'heading') {
+          const safe = escapeHtml(tok.text);
+          return `<h${tok.level}>${_applyInline(safe)}</h${tok.level}>`;
+        }
+        if (tok.kind === 'fence') {
+          const lang = tok.lang ? ` data-lang="${escapeHtml(tok.lang)}"` : '';
+          return `<pre class="md-fence"${lang}><code>${escapeHtml(tok.body)}</code></pre>`;
+        }
+        if (tok.kind === 'ul') {
+          return '<ul>' + tok.items.map(it => '<li>' + _applyInline(escapeHtml(it)) + '</li>').join('') + '</ul>';
+        }
+        if (tok.kind === 'ol') {
+          return '<ol>' + tok.items.map(it => '<li>' + _applyInline(escapeHtml(it)) + '</li>').join('') + '</ol>';
+        }
+        if (tok.kind === 'p') {
+          return '<p>' + _applyInline(escapeHtml(tok.text)).replace(/\n/g, '<br>') + '</p>';
+        }
+        return '';
+      }).join('\n');
+    }
+
+    // Render the model chain-of-thought block as a collapsed <details>.
+    function renderWeeklyThinking(think) {
+      if (!think || !think.trim()) return '';
+      const escaped = escapeHtml(think);
+      const len = think.length;
+      const summary = t('dash.health.thinkSummary', { n: len });
+      return `<details class="md-think"><summary>${summary}</summary><pre class="md-think-body">${escaped}</pre></details>`;
+    }
+
+    const weeklyMarkdownHtml = computed(() => {
+      if (!weeklyReport.value) return '';
+      const think = renderWeeklyThinking(weeklyReport.value.thinking);
+      const body = renderWeeklyMarkdown(weeklyReport.value.markdown);
+      return think + body;
+    });
+
     onMounted(() => {
       refresh();
       pollHandle = setInterval(refresh, 6000);
@@ -488,6 +602,7 @@ export const Dashboard = defineComponent({
     return {
       store, t, insights, loading, live, lastRefresh, lastRefreshLabel,
       weeklyReport, weeklyLoading, weeklyError, weeklyDays, loadWeekly, copyWeekly,
+      weeklyMarkdownHtml,
       llmAudit, writeGuard, sourceHealth,
       resolvingId, resolvePair, contradictionKey,
       KIND_TONE, STATUS_TONE, SOURCE_COLORS, STAGE_DEFS, SVGNS, ARCH,
@@ -1028,7 +1143,7 @@ export const Dashboard = defineComponent({
           </div>
           <div v-if="weeklyError" class="ins-wreport-error">⚠ {{ weeklyError }}</div>
           <div v-else-if="weeklyLoading" class="ins-wreport-loading">{{ t('dash.health.weeklyLoading') }}</div>
-          <div v-else-if="weeklyReport" class="ins-wreport-md">{{ weeklyReport.markdown }}</div>
+          <div v-else-if="weeklyReport" class="ins-wreport-md" v-html="weeklyMarkdownHtml"></div>
           <div v-else class="ins-wreport-md muted">—</div>
         </div>
       </div>
