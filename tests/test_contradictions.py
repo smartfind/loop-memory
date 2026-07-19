@@ -247,7 +247,10 @@ class WeeklyReportErrorClassificationTests(unittest.TestCase):
         self.store.set_setting("llm_consolidator", {"provider": "echo", "model": "rules", "api_key_set": False})
         app = create_app(self.store)
         with TestClient(app) as c:
-            r = c.get("/api/weekly-report?days=7")
+            # force=true bypasses the per-ISO-week cache so the test
+            # actually exercises the no-provider path; otherwise a stale
+            # cache hit would mask the error classification.
+            r = c.get("/api/weekly-report?days=7&force=true")
             self.assertEqual(r.status_code, 200)
             data = r.json()
             self.assertIn("llm_error_kind", data)

@@ -615,5 +615,8 @@
   "action.forceRunning": "Ingesting…",
   "action.forceTip": "Skip the idle wait and ingest the most-recently-modified session now",
   "dash.health.thinkSummary": "🧠 Reasoning ({n} chars)",
-  "settings.schedule.offHint": "「Off (manual only)」= never auto-run. Pick any other mode to schedule automatic consolidation."
+  "settings.schedule.offHint": "「Off (manual only)」= never auto-run. Pick any other mode to schedule automatic consolidation.",
+  "dash.health.weeklyRefresh": "Force-regenerate the weekly report (bypass cache)",
+  "dash.health.weeklyCached": "cached",
+  "dash.health.weeklyFresh": "freshly generated"
 }

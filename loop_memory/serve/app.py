@@ -486,14 +486,49 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
         max_facts: int = 60,
         use_llm: bool = True,
         lang: str = "zh",
+        force: bool = False,
     ):
-        """Build a Markdown weekly report covering the last ``days`` days."""
+        """Build a Markdown weekly report covering the last ``days`` days.
+
+        The full LLM-backed report is heavy (several seconds + 600+ tokens
+        of output) and the user only needs a new digest when the week
+        rolls over. We therefore cache the rendered response to disk
+        under ``~/.loop_memory/cache/weekly/{lang}-{days}-{week_start}.json``
+        and serve it as-is on subsequent calls within the same ISO week.
+
+        Pass ``?force=true`` to bypass the cache and regenerate now
+        (this is what the manual refresh button wires up).
+        """
         import datetime as _dt
         from ..llm.providers import build_provider, default_config
         from ..llm.base import ChatHistory, Message
         from ..storage.sqlite_store import LLMAuditStore
 
         lang = "en" if str(lang).lower().startswith("en") else "zh"
+
+        # ---- weekly report cache ----------------------------------------
+        # The cache key is intentionally simple: same language + same
+        # window + same ISO week (Monday 00:00 in the user's local
+        # timezone) = same report. When Monday rolls around the key
+        # changes and a fresh report is generated.
+        cache_dir = Path.home() / ".loop_memory" / "cache" / "weekly"
+        _now_local = _dt.datetime.now().astimezone()
+        _iso_week = _now_local.isocalendar()  # (year, week, weekday)
+        _week_start = (_now_local - _dt.timedelta(days=_iso_week.weekday - 1)
+                       ).replace(hour=0, minute=0, second=0, microsecond=0)
+        _cache_key = f"{lang}-{days}-{_iso_week.year}-W{_iso_week.week:02d}"
+        _cache_path = cache_dir / f"{_cache_key}.json"
+        if not force and use_llm:
+            try:
+                if _cache_path.exists():
+                    cached = json.loads(_cache_path.read_text(encoding="utf-8"))
+                    cached["from_cache"] = True
+                    cached["cache_key"] = _cache_key
+                    return cached
+            except Exception:
+                # Corrupt cache file: fall through and regenerate.
+                pass
+
         now = time.time()
         since = now - days * 86400
         with store._conn() as c:
@@ -625,7 +660,7 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
                     messages=[Message(role="user", content=user_prompt)],
                 )
                 try:
-                    reply = provider.complete(history, temperature=0.4, max_tokens=600) or ""
+                    reply = provider.complete(history, temperature=0.3, max_tokens=1200) or ""
                 except Exception as e:
                     reply = ""
                     raw = f"{type(e).__name__}: {e}"
@@ -718,7 +753,7 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
         else:
             kp = ""
             klen = 0
-        return {
+        result = {
             "markdown": summary_md,
             "stats": stats,
             "highlights": highlights[:5],
@@ -734,7 +769,24 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
             "llm_key_len": klen,
             "thinking": thinking_md,
             "generated_at": now,
+            "cache_key": _cache_key,
+            "week_start": _week_start.isoformat(),
+            "from_cache": False,
         }
+        # Persist for next call within the same ISO week. Only cache
+        # the LLM-backed reports — the templated fallback is cheap to
+        # recompute and changes on every memory write, so caching it
+        # would actually make the report go stale.
+        if use_llm and llm_used:
+            try:
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                _cache_path.write_text(
+                    json.dumps(result, ensure_ascii=False, default=str),
+                    encoding="utf-8",
+                )
+            except Exception:
+                pass
+        return result
 
     # ====================================================================
     # /api/llm-audit — surface the LLM audit log

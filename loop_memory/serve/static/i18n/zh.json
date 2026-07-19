@@ -615,5 +615,8 @@
   "action.forceRunning": "摄入中…",
   "action.forceTip": "跳过 idle 等待，立即把当前活跃会话的更新摄入",
   "dash.health.thinkSummary": "🧠 推理过程（{n} 字符）",
-  "settings.schedule.offHint": "「关闭（仅手动）」= 不自动跑；选其它模式后将按所选节奏自动触发。"
+  "settings.schedule.offHint": "「关闭（仅手动）」= 不自动跑；选其它模式后将按所选节奏自动触发。",
+  "dash.health.weeklyRefresh": "强制重新生成周报（忽略缓存）",
+  "dash.health.weeklyCached": "已缓存",
+  "dash.health.weeklyFresh": "刚刚生成"
 }

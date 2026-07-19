@@ -209,13 +209,15 @@ export const Dashboard = defineComponent({
       finally { loading.value = false; }
     }
 
-    async function loadWeekly(days = 7) {
+    async function loadWeekly(days = 7, force = false) {
       weeklyLoading.value = true;
       weeklyError.value = '';
       try {
-        const res = await fetch(`/api/weekly-report?days=${days}&nocache=${Date.now()}`);
+        const url = `/api/weekly-report?days=${days}&_=${Date.now()}` + (force ? '&force=true' : '');
+        const res = await fetch(url);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        weeklyReport.value = await res.json();
+        const data = await res.json();
+        weeklyReport.value = data;
         weeklyDays.value = days;
       } catch (e) { weeklyError.value = e?.message || 'failed'; }
       finally { weeklyLoading.value = false; }
@@ -1303,11 +1305,20 @@ export const Dashboard = defineComponent({
                 @click="loadWeekly(d)">{{ d }}d</button>
             </span>
             <button class="btn xs ghost" @click="copyWeekly" :disabled="!weeklyReport">{{ t('dash.health.copy') }}</button>
-            <button class="btn xs ghost" @click="loadWeekly(weeklyDays)">↻</button>
+            <button class="btn xs ghost" @click="loadWeekly(weeklyDays, true)" :title="t('dash.health.weeklyRefresh')">↻</button>
           </div>
           <div v-if="weeklyError" class="ins-wreport-error">⚠ {{ weeklyError }}</div>
           <div v-else-if="weeklyLoading" class="ins-wreport-loading">{{ t('dash.health.weeklyLoading') }}</div>
           <div v-else-if="weeklyReport" class="ins-wreport-md" v-html="weeklyMarkdownHtml"></div>
+          <div v-if="weeklyReport && weeklyReport.cache_key" class="ins-wreport-meta">
+            <span class="ins-wreport-cache">
+              {{ weeklyReport.from_cache ? t('dash.health.weeklyCached') : t('dash.health.weeklyFresh') }}
+              · {{ weeklyReport.cache_key }}
+            </span>
+            <span v-if="weeklyReport.generated_at" class="ins-wreport-ts">
+              {{ new Date(weeklyReport.generated_at * 1000).toLocaleString() }}
+            </span>
+          </div>
           <div v-else class="ins-wreport-md muted">—</div>
         </div>
       </div>
