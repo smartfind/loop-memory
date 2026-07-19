@@ -965,7 +965,7 @@ export const Dashboard = defineComponent({
               </rect>
               <text v-if="b.count" :x="b.x + b.w / 2" :y="b.countY" class="ins-decay-value">{{ b.count }}</text>
               <text v-if="b.showShortLabel" :y="b.labelY" class="ins-decay-label">
-                <tspan :x="b.tickX" text-anchor="end">{{ b.labelPrefix }}</tspan><tspan :x="b.tickX" text-anchor="start" dx="-1.5">{{ b.labelSuffix }}</tspan>
+                <tspan :x="b.tickX" text-anchor="end">{{ b.labelPrefix }}</tspan><tspan :x="b.tickX" text-anchor="start">{{ b.labelSuffix }}</tspan>
               </text>
             </g>
           </svg>
