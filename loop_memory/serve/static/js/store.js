@@ -62,6 +62,23 @@ export const store = reactive({
   lastRunId:      null,
 });
 
+// ---- shared actions ----
+// Lightweight event-bus: App.js registers the implementation that opens
+// drawers (settings / diagnostic). Other components call these helpers
+// without having to bubble events through the Vue tree.
+const _actions = {
+  openSettings: () => { /* set by App.js */ },
+  openDiag:     () => { /* set by App.js */ },
+};
+export function registerActions(map) { Object.assign(_actions, map); }
+export function callAction(name, ...args) {
+  const fn = _actions[name];
+  if (typeof fn === 'function') {
+    try { return fn(...args); } catch (_e) { return undefined; }
+  }
+  return undefined;
+}
+
 // Persist prefs whenever they change.
 watch(() => [store.lang, store.theme, store.showZh], () => {
   savePrefs({ lang: store.lang, theme: store.theme, showZh: store.showZh });
