@@ -2515,6 +2515,17 @@
   .ins-citem-actions button.merge:hover { color: #8b5cf6; border-color: #8b5cf655; }
 
   .ins-decay-svg { width: 100%; height: 220px; }
+  .ins-decay-svg .ins-decay-axis  { stroke: var(--border); stroke-width: 1; }
+  .ins-decay-svg .ins-decay-grid  { stroke: var(--border); stroke-dasharray: 2 4; opacity: 0.6; }
+  .ins-decay-svg .ins-decay-tick  { fill: var(--text-faint); }
+  .ins-decay-svg .ins-decay-bar   { fill: var(--accent); opacity: 0.85; transition: opacity .15s; }
+  .ins-decay-svg .ins-decay-bar:hover { opacity: 1; }
+  .ins-decay-svg .ins-decay-bar[data-empty="true"] { opacity: 0.25; }
+  .ins-decay-svg .ins-decay-bar.peak { fill: var(--accent-strong, var(--accent)); opacity: 1; }
+  .ins-decay-svg .ins-decay-value { fill: var(--text); font-size: 10px; text-anchor: middle; font-weight: 600; }
+  .ins-decay-svg .ins-decay-label { fill: var(--text-faint); font-size: 10px; }
+  .ins-decay-svg .ins-decay-label.anchor-start { text-anchor: start; }
+  .ins-decay-svg .ins-decay-label.anchor-end   { text-anchor: end; }
   .ins-decay-svg .hist-bar { fill: var(--accent); opacity: 0.85; transition: opacity .15s; }
   .ins-decay-svg .hist-bar:hover { opacity: 1; }
   .ins-decay-svg .hist-axis { stroke: var(--border); stroke-width: 1; }
