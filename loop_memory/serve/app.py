@@ -1026,24 +1026,37 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
 
     @app.get("/api/recall")
     def recall(query: str, limit: int = 10, include: str = "memories,wiki,entities",
-              bump: int = 1):
+              bump: int = 1, source: str | None = None,
+              mode: str = "hybrid"):
         """Unified recall — wiki + memories + entities in one ranked stream.
 
-        Powers the CLI `recall`/`ask`/`inject` and the web UI Timeline.
-        ``include`` is a comma-separated subset of {memories, wiki, entities}.
-        ``bump=0`` skips the recall_count bump (useful for preview-only
-        queries). Returns ``{query, tokens, memories, wiki, entities}``.
+        ``mode`` is 'hybrid' (default) for BM25+semantic+entity RRF,
+        or 'legacy' for the old LIKE-based recall. Hybrid is what the
+        dashboard Timeline + MCP + CLI use; legacy is kept for
+        benchmarking and for skipping the FTS5 rebuild on huge DBs.
+
+        ``source`` enables per-source knowledge scope: only wiki pages
+        whose scope is 'global' OR contains this source are returned,
+        and memories whose source matches this token are boosted. The
+        dashboard passes the currently-active client (codex/claude/
+        hermes/openclaw); the MCP/CLI tools pass the calling client.
         """
         wanted = tuple(s.strip() for s in include.split(",") if s.strip())
         if not wanted:
             wanted = ("memories", "wiki", "entities")
-        r = store.recall(query, limit=limit, include=wanted, bump_signals=bool(bump))
+        if mode == "legacy" or not hasattr(store, "recall_hybrid"):
+            r = store.recall(query, limit=limit, include=wanted, bump_signals=bool(bump))
+        else:
+            r = store.recall_hybrid(query, limit=limit, include=wanted,
+                                    bump_signals=bool(bump), source=source)
         return {
             "query": query,
             "tokens": r.get("tokens", []),
             "memories": r.get("memories", []),
             "wiki": r.get("wiki", []),
             "entities": r.get("entities", []),
+            "mode": mode,
+            "source": source,
         }
 
     @app.get("/api/pipeline")

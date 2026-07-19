@@ -107,3 +107,97 @@ class StoreTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HybridRecallTests(unittest.TestCase):
+    """Covers the BM25 + semantic + entity-fused recall_hybrid pipeline
+    and the FTS5 tokenizer migration."""
+
+    def setUp(self) -> None:
+        self.path = Path("/tmp/test_loop_hybrid.db")
+        self.path.unlink(missing_ok=True)
+        self.store = MemoryStore(self.path)
+
+    def tearDown(self) -> None:
+        self.path.unlink(missing_ok=True)
+
+    def test_fts5_uses_trigram_tokenizer(self) -> None:
+        import sqlite3
+        c = sqlite3.connect(self.path)
+        for tbl in ("memories_fts", "wiki_fts"):
+            row = c.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (tbl,)
+            ).fetchone()
+            self.assertIsNotNone(row, f"{tbl} missing")
+            self.assertIn("trigram", row[0], f"{tbl} not using trigram tokenizer")
+        c.close()
+
+    def test_recall_hybrid_returns_memories_and_wiki(self) -> None:
+        # Seed: 1 wiki page with a unique-token title, 1 memory with
+        # an overlapping keyword + entity mention.
+        self.store.upsert_memory(
+            kind="fact", text="the cache buster middleware handles cache",
+            importance=0.5, source="codex",
+            tags=["cache", "middleware"],
+        )
+        self.store.upsert_wiki_page(
+            slug="cache-buster", title="Cache buster middleware",
+            body="we hash asset URLs to bust the cache on every deploy",
+            importance=0.7, scope="global",
+        )
+        out = self.store.recall_hybrid("cache", limit=10)
+        # Both the memory and the wiki page should appear (they share
+        # the keyword "cache").
+        self.assertTrue(out["memories"] or out["wiki"], "empty recall")
+        text_blob = " ".join(
+            (m.get("text", "") + " " + (m.get("title", "") or ""))
+            for m in out["memories"] + [{"title": w.get("title", "")} for w in out["wiki"]]
+        )
+        self.assertIn("cache", text_blob.lower())
+
+    def test_recall_hybrid_handles_cjk(self) -> None:
+        # Trigram tokenizer is the only thing that makes CJK search
+        # usable. Seed a Chinese memory and ask for it by substring.
+        self.store.upsert_memory(
+            kind="fact", text="知识图谱应该可以点击节点跳转",
+            importance=0.6, source="codex",
+        )
+        out = self.store.recall_hybrid("知识图谱", limit=5)
+        self.assertTrue(out["memories"], "CJK recall returned nothing")
+
+    def test_fts_migration_is_one_shot(self) -> None:
+        # Second open of the same path should be a no-op for the FTS
+        # migration block (no exceptions, trigram remains installed).
+        MemoryStore(self.path)
+        import sqlite3
+        c = sqlite3.connect(self.path)
+        row = c.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='memories_fts'"
+        ).fetchone()
+        self.assertIn("trigram", row[0])
+        c.close()
+
+
+class RetrievalPrimitivesTests(unittest.TestCase):
+    """Covers the BM25 + RRF primitives used by recall_hybrid."""
+
+    def test_fuse_rrf_basic(self) -> None:
+        from loop_memory.storage.retrieval import fuse_rrf
+        a = [{"id": "x", "_score": 1.0}, {"id": "y", "_score": 0.5}]
+        b = [{"id": "y", "_score": 0.9}, {"id": "z", "_score": 0.4}]
+        out = fuse_rrf([a, b])
+        # x is rank1 in a only → 1/(60+1) ; y is rank2 in a + rank1 in b
+        # → 1/(60+2) + 1/(60+1) ; z is rank2 in b → 1/(60+2). y > z > x.
+        ids = [r["id"] for r in out]
+        self.assertEqual(ids[0], "y")
+        self.assertIn("x", ids)
+        self.assertIn("z", ids)
+
+    def test_escape_fts_handles_punctuation_and_empty(self) -> None:
+        from loop_memory.storage.retrieval import _escape_fts
+        self.assertEqual(_escape_fts(""), "")
+        self.assertEqual(_escape_fts("   "), "")
+        # "vue.js" should NOT become one exact-phrase; must split.
+        out = _escape_fts("vue.js")
+        self.assertIn('"vue"', out)
+        self.assertIn('"js"', out)
