@@ -506,6 +506,7 @@ export const Dashboard = defineComponent({
         const lower = r.range ? r.range[0] : null;
         const bucketLeft  = plot.left + i * bw;
         const bucketRight = plot.left + (i + 1) * bw;
+        const bucketCenter = bucketLeft + bw / 2;
         return {
           // Bar — slightly inset inside its bucket for visual breathing room.
           x: bucketLeft + (bw > 18 ? 4 : 1),
@@ -514,19 +515,28 @@ export const Dashboard = defineComponent({
           h: Math.max(2, ((r.count || 0) / max) * innerH),
           baseline,
           countY: baseline - Math.max(2, ((r.count || 0) / max) * innerH) - 7,
-          // Tick + label both sit on the bucket's right edge (= upper-bound
-          // of the score range). For the very last bucket that's the chart's
-          // right edge; for others it's the boundary with the next bucket.
+          // Tick sits on the bucket BOUNDARY (right edge) — that is the
+          // standard histogram convention. Label sits on the bucket CENTER
+          // so the value reads as belonging to the bar above it, not to
+          // the divider between two bars. With 10 evenly-spaced centers
+          // (each ~34px apart) every bucket can carry a label without
+          // crowding, so we show them all.
           tickX:  bucketRight,
-          labelX: bucketRight,
+          labelX: bucketCenter,
           tickY:  baseline + 6,
           labelY: baseline + 20,
-          // short label: just the upper boundary, displayed for every other
-          // bucket to keep the axis readable at narrow widths.
-          shortLabel: upper != null ? fmtShort(upper) : '',
+          // short label: midpoint of the bucket, rounded to 0.1 so it
+          // reads as the bar's representative value (0.1, 0.2, …, 1.0).
+          // We round the midpoint to 2 decimal places first because
+          // (0.6 + 0.7) / 2 evaluates to 0.6499999999999999 in
+          // IEEE-754, which Math.round then drops to 0.6 instead of
+          // the intended 0.7.
+          shortLabel: (lower != null && upper != null)
+            ? fmtShort(Math.round(((lower + upper) / 2) * 100) / 100)
+            : (upper != null ? fmtShort(upper) : ''),
           // full range label kept for the (rare) tooltip/full view use
           label: (lower != null && upper != null) ? `${lower.toFixed(1).replace(/\b0\.0\b/g, '0')}–${upper.toFixed(1).replace(/\b1\.0\b/g, '1')}` : '',
-          showShortLabel: i % 2 === 1, // 0, 2, 4... hide; 1, 3, 5... show
+          showShortLabel: true,
           peak: r.count > 0 && r.count === max,
           count: r.count,
         };
@@ -949,7 +959,7 @@ export const Dashboard = defineComponent({
               <text v-if="b.count" :x="b.x + b.w / 2" :y="b.countY" class="ins-decay-value">{{ b.count }}</text>
               <text v-if="b.showShortLabel"
                     :x="b.labelX" :y="b.labelY"
-                    :class="['ins-decay-label', i === scoreBars.length - 1 ? 'anchor-end' : 'anchor-start']">{{ b.shortLabel }}</text>
+                    class="ins-decay-label anchor-middle">{{ b.shortLabel }}</text>
             </g>
           </svg>
           <div v-else class="ins-pulse-empty">—</div>
