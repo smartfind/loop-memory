@@ -600,8 +600,6 @@
   "model.dot.fail": "连通失败",
   "model.dot.unset": "未配置",
   "topbar.settingsTip": "配置大模型、整理任务、知识图谱等",
-  "action.consolidateNow": "立即整理",
-  "action.consolidateNowTip": "立即使用已配置的模型执行整理任务",
   "wiki.export": "导出全部",
   "wiki.exportTip": "将所有知识导出为 Markdown 文件",
   "wiki.import": "导入",

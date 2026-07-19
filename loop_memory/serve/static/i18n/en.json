@@ -600,8 +600,6 @@
   "model.dot.fail": "Unreachable",
   "model.dot.unset": "Unset",
   "topbar.settingsTip": "Configure LLM, consolidation schedule, knowledge graph, and more",
-  "action.consolidateNow": "Consolidate now",
-  "action.consolidateNowTip": "Run the consolidation job immediately with the configured model",
   "wiki.export": "Export all",
   "wiki.exportTip": "Download all knowledge as a Markdown file",
   "wiki.import": "Import",
