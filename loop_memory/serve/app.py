@@ -1027,7 +1027,7 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
     @app.get("/api/recall")
     def recall(query: str, limit: int = 10, include: str = "memories,wiki,entities",
               bump: int = 1, source: str | None = None,
-              mode: str = "hybrid"):
+              mode: str = "hybrid", level: int = 1):
         """Unified recall — wiki + memories + entities in one ranked stream.
 
         ``mode`` is 'hybrid' (default) for BM25+semantic+entity RRF,
@@ -1047,8 +1047,10 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
         if mode == "legacy" or not hasattr(store, "recall_hybrid"):
             r = store.recall(query, limit=limit, include=wanted, bump_signals=bool(bump))
         else:
-            r = store.recall_hybrid(query, limit=limit, include=wanted,
-                                    bump_signals=bool(bump), source=source)
+            r = store.recall_hybrid(
+                query, limit=limit, include=wanted,
+                bump_signals=bool(bump), source=source, level=level,
+            )
         return {
             "query": query,
             "tokens": r.get("tokens", []),
@@ -1057,7 +1059,10 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
             "entities": r.get("entities", []),
             "mode": mode,
             "source": source,
+            "level": level,
         }
+
+
 
     @app.get("/api/pipeline")
     def pipeline_dashboard_route():
@@ -1904,6 +1909,25 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
 
 
     # ---- wiki pages -----------------------------------------------------
+
+    @app.get("/api/memories/{mid}", name="memory_drill_down")
+    def memory_drill_down(mid: str):
+        """L2 drill-down for a single memory row (full text)."""
+        mem = store.get_memory(mid)
+        if not mem:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail="memory not found")
+        return {
+            "id": mem.id,
+            "kind": "memory",
+            "text": mem.text,
+            "importance": mem.importance,
+            "score": mem.score,
+            "source": mem.source,
+            "tags": mem.tags,
+            "created_at": mem.created_at,
+            "updated_at": mem.updated_at,
+        }
 
     @app.get("/api/wiki/export")
     def wiki_export(format: str = "markdown", limit: int = 500,
