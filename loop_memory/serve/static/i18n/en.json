@@ -583,5 +583,6 @@
   "action.forceSource": "Source",
   "action.forceNoActive": "No active session",
   "action.forceRunning": "Ingesting…",
-  "action.forceTip": "Skip the idle wait and ingest the most-recently-modified session now"
+  "action.forceTip": "Skip the idle wait and ingest the most-recently-modified session now",
+  "dash.health.thinkSummary": "🧠 Reasoning ({n} chars)"
 }

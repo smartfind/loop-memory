@@ -2886,10 +2886,15 @@
   /* ============================================================
      v5 — Source Health, Weekly Report, LLM Audit, WriteGuard
      ============================================================ */
+  /* align-items: start keeps the shorter card (usually the source-health
+     card on the left) from stretching to match the weekly-report card
+     on the right, which previously left a giant blank area below the
+     launchd hook strip. */
   .ins-health-row {
     display: grid;
     grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
     gap: 12px;
+    align-items: start;
   }
   .ins-health-card,
   .ins-wreport-card,
@@ -3072,9 +3077,71 @@
   .ins-wreport-md h1 { font-size: 13px; }
   .ins-wreport-md h2 { font-size: 12px; }
   .ins-wreport-md h3 { font-size: 11.5px; }
-  .ins-wreport-md ul { padding-left: 18px; margin: 4px 0; }
+  .ins-wreport-md ul,
+  .ins-wreport-md ol { padding-left: 18px; margin: 4px 0; }
   .ins-wreport-md li { margin: 2px 0; }
+  .ins-wreport-md p { margin: 4px 0; }
   .ins-wreport-md strong { color: var(--text); font-weight: 600; }
+  .ins-wreport-md em { color: var(--text); font-style: italic; }
+  .ins-wreport-md code {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    padding: 0 4px;
+    border-radius: 3px;
+    font-size: 10.5px;
+    color: var(--accent-strong);
+  }
+  .ins-wreport-md .md-fence {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 8px;
+    margin: 6px 0;
+    overflow-x: auto;
+    white-space: pre;
+  }
+  .ins-wreport-md .md-fence code {
+    background: transparent;
+    border: none;
+    padding: 0;
+    color: var(--text);
+  }
+  /* Chain-of-thought block — collapsed by default so the visible report
+     stays compact but power users can still peek at the reasoning. */
+  .ins-wreport-md .md-think {
+    margin: 0 0 8px;
+    border: 1px dashed var(--border);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--surface) 70%, transparent);
+    font-family: inherit;
+  }
+  .ins-wreport-md .md-think > summary {
+    cursor: pointer;
+    padding: 5px 10px;
+    font-size: 10.5px;
+    color: var(--text-faint);
+    list-style: none;
+    user-select: none;
+  }
+  .ins-wreport-md .md-think > summary::-webkit-details-marker { display: none; }
+  .ins-wreport-md .md-think > summary::before {
+    content: "▸ ";
+    display: inline-block;
+    transition: transform .15s;
+  }
+  .ins-wreport-md .md-think[open] > summary::before {
+    content: "▾ ";
+  }
+  .ins-wreport-md .md-think-body {
+    margin: 0;
+    padding: 0 10px 8px;
+    font-size: 10.5px;
+    color: var(--text-mute);
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 220px;
+    overflow-y: auto;
+  }
 
 
 

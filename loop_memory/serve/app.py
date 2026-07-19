@@ -48,6 +48,25 @@ def _hint_for_llm_error(provider: str, status: int, code: str, msg: str) -> str:
     return _impl(provider, status, code, msg)
 
 
+_THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+
+
+def _split_think(text: str) -> tuple[str, str]:
+    """Pull ``<think>...</think>`` blocks out of an LLM reply.
+
+    Some models (notably MiniMax-M2.7) emit a thinking trace before the
+    user-visible answer. We expose it under a separate field so the UI
+    can render the visible report as Markdown while still letting power
+    users peek at the chain-of-thought in a collapsed <details>.
+    """
+    if not text:
+        return "", ""
+    thinking_parts = _THINK_RE.findall(text)
+    cleaned = _THINK_RE.sub("", text).strip()
+    thinking = "\n\n".join(p.strip() for p in thinking_parts if p.strip())
+    return cleaned, thinking
+
+
 def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=None):
     """Build a FastAPI app wired to the given ``MemoryStore``.
 
@@ -524,6 +543,7 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
 
         llm_used = False
         summary_md = ""
+        thinking_md = ""
         prov_name = "none"
         provider = None
         llm_error = None
@@ -635,7 +655,7 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
                     log.warning("weekly-report LLM call failed [kind=%s, status=%s, code=%s]: %s",
                                 llm_error_kind, status, pcode, raw)
                 llm_used = bool(reply.strip())
-                summary_md = reply.strip()
+                summary_md, thinking_md = _split_think(reply.strip())
                 # Audit
                 try:
                     LLMAuditStore(store).record(
@@ -712,6 +732,7 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
             "llm_hint": llm_hint,
             "llm_key_prefix": kp,
             "llm_key_len": klen,
+            "thinking": thinking_md,
             "generated_at": now,
         }
 
