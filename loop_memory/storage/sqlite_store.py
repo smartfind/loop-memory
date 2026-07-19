@@ -374,15 +374,21 @@ class MemoryStore:
             )
 
     def list_sessions(self, limit: int = 100, source: str | None = None) -> list[StoredSession]:
+        # Sort by last-activity time so an active but long-running session
+        # (its started_at is from days ago, its ended_at keeps advancing)
+        # bubbles to the top instead of being buried under newer short-lived
+        # sessions like cron reports.
         with self._conn() as c:
             if source:
                 rows = c.execute(
-                    "SELECT * FROM sessions WHERE source=? ORDER BY started_at DESC LIMIT ?",
+                    "SELECT * FROM sessions WHERE source=? "
+                    "ORDER BY COALESCE(ended_at, started_at) DESC LIMIT ?",
                     (source, limit),
                 ).fetchall()
             else:
                 rows = c.execute(
-                    "SELECT * FROM sessions ORDER BY started_at DESC LIMIT ?",
+                    "SELECT * FROM sessions "
+                    "ORDER BY COALESCE(ended_at, started_at) DESC LIMIT ?",
                     (limit,),
                 ).fetchall()
             return [self._row_to_session(r) for r in rows]
