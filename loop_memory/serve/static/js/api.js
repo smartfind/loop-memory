@@ -23,7 +23,7 @@ function buildUrl(path, params) {
 }
 
 export async function fetchJSON(path, opts = {}) {
-  const { method = 'GET', params, body, headers = {}, timeoutMs = 30000 } = opts;
+  const { method = 'GET', params, body, headers = {}, timeoutMs = 30000, cache } = opts;
   const url = buildUrl(path, params);
   const ctrl = new AbortController();
   const tid = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -33,14 +33,19 @@ export async function fetchJSON(path, opts = {}) {
   }
   let res;
   try {
-    res = await fetch(url, {
+    // Pass ``cache`` straight through to the underlying fetch() call so
+    // callers can override the default cache mode (e.g. ``'no-store'``
+    // for high-volatility read endpoints like /api/sessions/counts).
+    const fetchOpts = {
       method,
       headers: finalHeaders,
       body: body === undefined ? undefined
             : body instanceof FormData ? body
             : JSON.stringify(body),
       signal: ctrl.signal,
-    });
+    };
+    if (cache) fetchOpts.cache = cache;
+    res = await fetch(url, fetchOpts);
   } catch (e) {
     clearTimeout(tid);
     if (e.name === 'AbortError') {
@@ -76,7 +81,10 @@ export class ApiError extends Error {
 
 /** Domain endpoints — short, named functions for clarity. */
 export const api = {
-  // Generic
+  // Generic — also re-export the raw fetchJSON helper for the few
+  // components that need to call a route the api object doesn't
+  // wrap (e.g. Sidebar's /api/sessions/counts).
+  fetchJSON,
   diag:           () => fetchJSON('/api/diag'),
   stats:          () => fetchJSON('/api/stats'),
 
