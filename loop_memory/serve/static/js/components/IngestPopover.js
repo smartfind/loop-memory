@@ -6,7 +6,7 @@
  * pick one or more of the registered loaders (codex / claude / hermes /
  * openclaw) and runs them, surfacing per-source results.
  */
-import { defineComponent, ref, computed, onMounted, watch } from 'https://unpkg.com/vue@3.4.38/dist/vue.esm-browser.prod.js';
+import { defineComponent, ref, computed, onMounted, onUnmounted, watch } from 'https://unpkg.com/vue@3.4.38/dist/vue.esm-browser.prod.js';
 import { store, t, toast } from '../store.js';
 import { api } from '../api.js';
 
@@ -26,50 +26,61 @@ export const IngestPopover = defineComponent({
     const running = ref(false);
     const progress = ref('');     // human-readable status
     const results = ref(null);    // last batch results {source: {files, root, error}}
-    const activeSource = ref('codex');   // source for the force-ingest button
-    const activeInfo = ref(null);        // {name, size, mtime, age_seconds, ...} or null
-    const forceRunning = ref(false);
-    const forceResult = ref(null);
 
-    async function refreshActive() {
-      try {
-        const r = await api.activeSession(activeSource.value);
-        activeInfo.value = r && r.active ? r.active : null;
-      } catch (e) {
-        activeInfo.value = null;
-      }
+    // Per-source active-session cache. The "⚡ ingest now" affordance
+    // is per-source rather than a separate dropdown, so the layout
+    // stays one coherent checklist instead of two competing panels.
+    const activeBySource = ref({});     // { codex: {name,size,mtime,age_seconds,path} | null, ... }
+    const forcePending = ref(new Set()); // source ids currently being force-ingested
+
+    async function refreshAllActive() {
+      const out = {};
+      await Promise.all(SOURCES.map(async (s) => {
+        try {
+          const r = await api.activeSession(s.id);
+          out[s.id] = (r && r.active) || null;
+        } catch (_e) { out[s.id] = null; }
+      }));
+      activeBySource.value = out;
     }
 
-    async function forceActive() {
-      if (forceRunning.value) return;
-      forceRunning.value = true;
-      forceResult.value = null;
+    async function forceActive(sourceId) {
+      if (forcePending.value.has(sourceId)) return;
+      const next = new Set(forcePending.value);
+      next.add(sourceId); forcePending.value = next;
       try {
         const r = await api.forceIngest({
-          source: activeSource.value,
+          source: sourceId,
           active_only: 'true',
         });
-        forceResult.value = r;
         const ok = r && r.ingested ? r.ingested : 0;
         const err = r && r.errors ? r.errors : 0;
         toast(
           ok > 0
-            ? `立即摄入完成 · ${ok} 个会话 · ${r.files && r.files[0] && r.files[0].summary_items || 0} 条记忆`
+            ? `立即摄入完成 · ${SOURCES.find(s=>s.id===sourceId)?.label || sourceId} · ${ok} 个会话`
             : (err > 0 ? `摄入失败: ${err} 个错误` : '当前活跃会话暂无新内容'),
           2800,
         );
         window.dispatchEvent(new CustomEvent('loop-memory:ingest-done', { detail: r }));
         store._refreshStats = (store._refreshStats || 0) + 1;
-        await refreshActive();
+        await refreshAllActive();
       } catch (e) {
         toast(`摄入失败: ${e.message || e}`, 3500);
       } finally {
-        forceRunning.value = false;
+        const m = new Set(forcePending.value); m.delete(sourceId); forcePending.value = m;
       }
     }
 
-    onMounted(refreshActive);
-    watch(activeSource, refreshActive);
+    onMounted(() => {
+      refreshAllActive();
+      // Re-poll every 30s so the active badge stays accurate while
+      // the popover stays open.
+      const t = setInterval(refreshAllActive, 30000);
+      // Clean up when component unmounts.
+      _cleanupTimer = t;
+    });
+    let _cleanupTimer = null;
+    onUnmounted(() => { if (_cleanupTimer) clearInterval(_cleanupTimer); });
 
     function toggle(id) {
       const s = new Set(selected.value);
@@ -120,13 +131,26 @@ export const IngestPopover = defineComponent({
       }
     }
 
+    function formatSize(bytes) {
+      if (!bytes && bytes !== 0) return '—';
+      if (bytes < 1024) return bytes + ' B';
+      if (bytes < 1024*1024) return (bytes/1024).toFixed(0) + ' KB';
+      return (bytes/1024/1024).toFixed(1) + ' MB';
+    }
+    function formatAge(seconds) {
+      if (seconds == null) return '—';
+      if (seconds < 60) return Math.round(seconds) + 's 前';
+      if (seconds < 3600) return Math.round(seconds/60) + 'm 前';
+      return Math.round(seconds/3600) + 'h 前';
+    }
+
     return {
       SOURCES, store, t,
       selected, running, progress, results,
-      activeSource, activeInfo, forceRunning, forceResult,
-      refreshActive, forceActive,
+      activeBySource, forcePending, forceActive,
       toggle, selectAll, clearSelection, runAll,
       sourceDisabled,
+      formatSize, formatAge,
     };
   },
   template: /* html */ `
@@ -137,45 +161,38 @@ export const IngestPopover = defineComponent({
   </div>
   <div class="ingest-sub">{{ t('action.ingestTip') }}</div>
 
-  <div class="force-bar">
-    <label class="force-source-label">
-      {{ t('action.forceSource') || '强制摄入源' }}:
-      <select v-model="activeSource" class="force-source-select">
-        <option v-for="src in SOURCES" :key="src.id" :value="src.id">{{ src.label }}</option>
-      </select>
-    </label>
-    <div v-if="activeInfo" class="force-active-info" :title="activeInfo.path">
-      <span class="force-active-name">{{ activeInfo.name }}</span>
-      <span class="force-active-meta">
-        {{ (activeInfo.size/1024).toFixed(0) }} KB ·
-        {{ activeInfo.age_seconds < 60 ? Math.round(activeInfo.age_seconds) + 's 前' : Math.round(activeInfo.age_seconds/60) + 'm 前' }}
-      </span>
-    </div>
-    <div v-else class="force-active-info dim">
-      {{ t('action.forceNoActive') || '当前没有活跃会话' }}
-    </div>
-    <button type="button" class="force-run"
-            :disabled="forceRunning || !activeInfo"
-            @click="forceActive"
-            :title="t('action.forceTip') || '跳过 idle 等待，立即把当前活跃会话的更新摄入'">
-      <span v-if="forceRunning">{{ t('action.forceRunning') || '摄入中…' }}</span>
-      <span v-else>{{ t('action.forceIngest') || '⚡ 立即摄入活跃会话' }}</span>
-    </button>
-  </div>
-
   <div class="ingest-list">
-    <label v-for="src in SOURCES" :key="src.id"
-           class="ingest-row" :class="{ dim: sourceDisabled(src.id) }">
-      <input type="checkbox"
-             :checked="selected.has(src.id)"
-             :disabled="sourceDisabled(src.id)"
-             @change="toggle(src.id)" />
-      <span class="ingest-ico">{{ src.icon }}</span>
-      <span class="ingest-name">{{ src.label }}</span>
-      <span class="ingest-path">{{ src.desc }}</span>
-      <span v-if="results && results[src.id] && results[src.id].error" class="ingest-status err">×</span>
-      <span v-else-if="results && results[src.id]" class="ingest-status ok">{{ results[src.id].files || 0 }}</span>
-    </label>
+    <div v-for="src in SOURCES" :key="src.id"
+         class="ingest-row" :class="{ dim: sourceDisabled(src.id), active: activeBySource[src.id], sel: selected.has(src.id) }">
+      <label class="ingest-row-main">
+        <input type="checkbox"
+               :checked="selected.has(src.id)"
+               :disabled="sourceDisabled(src.id)"
+               @change="toggle(src.id)" />
+        <span class="ingest-ico">{{ src.icon }}</span>
+        <span class="ingest-name">{{ src.label }}</span>
+        <span class="ingest-path">{{ src.desc }}</span>
+        <span v-if="results && results[src.id] && results[src.id].error" class="ingest-status err">×</span>
+        <span v-else-if="results && results[src.id]" class="ingest-status ok">{{ results[src.id].files || 0 }}</span>
+      </label>
+      <!-- contextual "ingest active now" affordance: only appears when
+           this source has an active session. Lives inline with the row
+           instead of as a separate competing CTA at the top. -->
+      <div v-if="activeBySource[src.id]" class="ingest-active" :title="activeBySource[src.id].path">
+        <span class="ingest-active-name">{{ activeBySource[src.id].name }}</span>
+        <span class="ingest-active-meta">
+          {{ formatSize(activeBySource[src.id].size) }} ·
+          {{ formatAge(activeBySource[src.id].age_seconds) }}
+        </span>
+        <button type="button" class="ingest-active-run"
+                :disabled="forcePending.has(src.id)"
+                @click.stop="forceActive(src.id)"
+                :title="t('action.forceTip') || '立即把当前活跃会话的更新摄入'">
+          <span v-if="forcePending.has(src.id)">…</span>
+          <span v-else>⚡</span>
+        </button>
+      </div>
+    </div>
   </div>
 
   <div class="ingest-bar">

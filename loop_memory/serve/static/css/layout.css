@@ -21,7 +21,7 @@ html, body, #app { height: 100%; }
 }
 
 .app-body > .sidebar {
-  width: 320px;
+  width: min(360px, calc(100vw - 32px));
   flex-shrink: 0;
   border-right: 1px solid var(--border);
   background: var(--surface);
@@ -430,55 +430,89 @@ html, body, #app { height: 100%; }
   letter-spacing: .02em;
 }
 .topbar .tb-ingest-menu .ingest-run:disabled { background: color-mix(in srgb, var(--accent) 50%, var(--surface-2)); cursor: not-allowed; }
-/* Force-ingest panel — sits above the source list in the IngestPopover. */
-.topbar .tb-ingest-menu .force-bar {
-  display: grid; grid-template-columns: 1fr; gap: 6px;
-  padding: 8px 4px 10px;
-  border-bottom: 1px dashed var(--border);
-  margin-bottom: 8px;
-}
-.topbar .tb-ingest-menu .force-source-label {
-  display: inline-flex; align-items: center; gap: 6px;
-  font-size: 11px; color: var(--text-mute); font-weight: 600;
-}
-.topbar .tb-ingest-menu .force-source-select {
-  font-size: 11.5px; padding: 3px 6px;
-  border: 1px solid var(--border); border-radius: 6px;
-  background: var(--surface); color: var(--text);
-  font-family: inherit;
-}
-.topbar .tb-ingest-menu .force-active-info {
-  display: flex; gap: 8px; align-items: baseline;
-  font-size: 11px; color: var(--text-soft);
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-  padding: 6px 8px; border-radius: 7px;
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.topbar .tb-ingest-menu .force-active-info.dim {
-  opacity: .55; background: transparent; color: var(--text-faint);
-  font-family: inherit; font-style: italic;
-}
-.topbar .tb-ingest-menu .force-active-name { color: var(--text); font-weight: 600; flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; }
-.topbar .tb-ingest-menu .force-active-meta { color: var(--text-faint); font-size: 10.5px; flex-shrink: 0; }
-.topbar .tb-ingest-menu .force-run {
-  width: 100%;
-  padding: 8px 12px;
-  border: 0;
+/* Per-row active-session bar. Lives inline with each source row so
+   there's no separate gradient-orange button competing with the bulk
+   "开始导入" CTA below. The ⚡ button stays subtle (matches the rest of
+   the UI's accent palette) and only appears when an active session is
+   actually detected for that source. */
+.topbar .tb-ingest-menu .ingest-row {
+  display: flex; flex-direction: column; gap: 0;
+  padding: 6px 4px 4px;
   border-radius: 8px;
-  background: linear-gradient(135deg, #f59e0b, #f97316);
-  color: white;
-  font-size: 12.5px; font-weight: 700;
-  cursor: pointer;
-  letter-spacing: .02em;
-  box-shadow: 0 2px 8px -3px rgba(245, 158, 11, .55);
-  transition: filter .12s ease, transform .05s ease;
+  border: 1px solid transparent;
+  transition: border-color .15s, background .15s;
 }
-.topbar .tb-ingest-menu .force-run:hover { filter: brightness(1.08); }
-.topbar .tb-ingest-menu .force-run:active { transform: scale(.985); }
-.topbar .tb-ingest-menu .force-run:disabled {
-  background: color-mix(in srgb, var(--accent) 35%, var(--surface-2));
-  cursor: not-allowed; box-shadow: none;
+.topbar .tb-ingest-menu .ingest-row:hover {
+  background: var(--surface-2);
+  border-color: color-mix(in srgb, var(--border) 80%, transparent);
+}
+.topbar .tb-ingest-menu .ingest-row.dim { opacity: .55; }
+.topbar .tb-ingest-menu .ingest-row.sel {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 25%, var(--border));
+}
+.topbar .tb-ingest-menu .ingest-row.active {
+  background: color-mix(in srgb, var(--accent) 4%, var(--surface));
+}
+.topbar .tb-ingest-menu .ingest-row-main {
+  display: grid;
+  grid-template-columns: 18px 20px 1fr auto auto;
+  gap: 8px; align-items: center;
+  cursor: pointer;
+  font-size: 12.5px;
+  margin: 0;
+}
+.topbar .tb-ingest-menu .ingest-row-main input {
+  accent-color: var(--accent);
+  width: 16px; height: 16px;
+  margin: 0;
+}
+.topbar .tb-ingest-menu .ingest-active {
+  display: flex; align-items: center; gap: 8px;
+  margin: 6px 4px 4px 30px;
+  padding: 5px 8px;
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  border: 1px dashed color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 6px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  color: var(--text-soft);
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.topbar .tb-ingest-menu .ingest-active-name {
+  color: var(--text);
+  font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis;
+  flex: 1; min-width: 0;
+  /* Long filenames can wrap; the ⚡ button is positioned at the right
+     end and stays visible at all widths. */
+  word-break: break-all;
+}
+.topbar .tb-ingest-menu .ingest-active-meta {
+  color: var(--text-faint);
+  white-space: nowrap;
+  font-size: 10px;
+}
+.topbar .tb-ingest-menu .ingest-active-run {
+  flex-shrink: 0;
+  width: 22px; height: 22px;
+  border: 0;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 13px;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: background .12s ease, color .12s ease;
+}
+.topbar .tb-ingest-menu .ingest-active-run:hover {
+  background: var(--accent);
+  color: white;
+}
+.topbar .tb-ingest-menu .ingest-active-run:disabled {
+  opacity: 0.55;
+  cursor: wait;
 }
 .topbar .tb-utility-group {
   display: inline-flex;
