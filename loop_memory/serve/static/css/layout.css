@@ -1247,12 +1247,20 @@ section > h3 { font-size: 12px; text-transform: uppercase; color: var(--text-fai
   font-size: 11.5px;
   line-height: 1.55;
   white-space: pre-wrap;
-  max-height: 360px;
-  overflow: auto;
+  /* No fixed cap on height: the report is short enough (<= 1k chars)
+     to fit without scrolling, and a hard cap here was hiding the
+     "下周重点" section when the LLM output pushed past it. */
   font-family: var(--mono);
 }
 .ins-wreport-md.muted { color: var(--text-faint); font-family: inherit; }
 .ins-wreport-loading, .ins-wreport-error { padding: 12px; font-size: 11.5px; color: var(--text-faint); }
+.ins-wreport-meta {
+  display: flex; gap: 10px; align-items: center;
+  margin-top: 6px; font-size: 10.5px; color: var(--text-faint);
+}
+.ins-wreport-cache { font-weight: 600; }
+.ins-wreport-cache::before { content: "\23F1\FE0F\0020"; opacity: .7; }
+.ins-wreport-ts { opacity: .8; }
 .ins-wreport-error { color: #f43f5e; }
 .ins-window-pills { display: inline-flex; gap: 4px; margin-left: auto; }
 .ins-window-pill {
