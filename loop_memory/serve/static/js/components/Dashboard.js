@@ -475,8 +475,18 @@ export const Dashboard = defineComponent({
     // reactive aliases for i18n
     void computed(() => store.lang);
 
+    // Friendly last-refresh label, e.g. "12:34:56"
+    const lastRefreshLabel = computed(() => {
+      if (!lastRefresh.value) return '';
+      const d = new Date(lastRefresh.value);
+      const hh = String(d.getHours()).padStart(2, '0');
+      const mm = String(d.getMinutes()).padStart(2, '0');
+      const ss = String(d.getSeconds()).padStart(2, '0');
+      return `${hh}:${mm}:${ss}`;
+    });
+
     return {
-      store, t, insights, loading, live, lastRefresh,
+      store, t, insights, loading, live, lastRefresh, lastRefreshLabel,
       weeklyReport, weeklyLoading, weeklyError, weeklyDays, loadWeekly, copyWeekly,
       llmAudit, writeGuard, sourceHealth,
       resolvingId, resolvePair, contradictionKey,
@@ -494,15 +504,23 @@ export const Dashboard = defineComponent({
 <div class="tab-pane" id="pane-dashboard">
   <div class="ins-wrap">
     <div class="ins-head">
-      <div>
-        <h2>{{ t('dash.ins.title') }}</h2>
-        <div class="ins-sub">{{ t('dash.ins.sub') }}</div>
+      <div class="ins-title-group">
+        <span class="ins-title-ico" aria-hidden="true">📊</span>
+        <div class="ins-title-text">
+          <h2>{{ t('dash.ins.title') }}</h2>
+          <div class="ins-sub">{{ t('dash.ins.sub') }}</div>
+        </div>
       </div>
-      <div class="ins-actions">
+      <div class="ins-status">
         <span class="pill" :class="live ? 'live' : 'off'">
           <span class="live-dot" v-if="live"></span>
           {{ live ? t('dash.ins.live') : t('dash.ins.offline') }}
         </span>
+        <span class="ins-meta" v-if="lastRefreshLabel" :title="t('dash.ins.refresh')">
+          <span class="ins-meta-ico">⟳</span> {{ lastRefreshLabel }}
+        </span>
+      </div>
+      <div class="ins-actions">
         <button class="btn small ghost" @click="onRefresh">{{ t('dash.ins.refresh') }}</button>
         <button class="btn small primary" @click="onRunEvolution">
           <span class="ev-ico">⚡</span> {{ t('dash.ins.runEvolution') }}
