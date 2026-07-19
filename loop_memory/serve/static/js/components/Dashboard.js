@@ -468,6 +468,12 @@ export const Dashboard = defineComponent({
       //   y[top:28 .. baseline:182] : bars
       //   y[tickY:182 .. labelY:198] : axis tick + short label
       //   y[metaY:214]               : optional per-bar full range (rare)
+      //
+      // Axis tick + short label both sit on the bucket BOUNDARY
+      // (right edge of bucket i = left edge of bucket i+1), which is the
+      // standard histogram layout. Bar geometry uses 4px inner padding so
+      // neighbouring bars don't visually touch, but the axis labels stay
+      // perfectly aligned with the tick lines regardless of that padding.
       const list = safeArr(items);
       const max = Math.max(...list.map(r => r.count || 0), 1);
       const plot = { left: 14, right: 6, top: 28, bottom: 56 };
@@ -479,15 +485,23 @@ export const Dashboard = defineComponent({
       return list.map((r, i) => {
         const upper = r.range ? r.range[1] : null;
         const lower = r.range ? r.range[0] : null;
+        const bucketLeft  = plot.left + i * bw;
+        const bucketRight = plot.left + (i + 1) * bw;
         return {
-          x: plot.left + i * bw + (bw > 18 ? 4 : 1),
+          // Bar — slightly inset inside its bucket for visual breathing room.
+          x: bucketLeft + (bw > 18 ? 4 : 1),
           w: Math.max(6, bw - (bw > 18 ? 8 : 2)),
           y: baseline - Math.max(2, ((r.count || 0) / max) * innerH),
           h: Math.max(2, ((r.count || 0) / max) * innerH),
           baseline,
           countY: baseline - Math.max(2, ((r.count || 0) / max) * innerH) - 7,
-          tickY: baseline + 8,
-          labelY: baseline + 22,
+          // Tick + label both sit on the bucket's right edge (= upper-bound
+          // of the score range). For the very last bucket that's the chart's
+          // right edge; for others it's the boundary with the next bucket.
+          tickX:  bucketRight,
+          labelX: bucketRight,
+          tickY:  baseline + 6,
+          labelY: baseline + 20,
           // short label: just the upper boundary, displayed for every other
           // bucket to keep the axis readable at narrow widths.
           shortLabel: upper != null ? fmtShort(upper) : '',
@@ -503,6 +517,10 @@ export const Dashboard = defineComponent({
     function scoreDistributionTotal(items) {
       return safeArr(items).reduce((sum, item) => sum + (item.count || 0), 0);
     }
+
+    const scoreBars = computed(() => barsFor(
+      (insights.value && insights.value.pulse && insights.value.pulse.score_distribution) || []
+    ));
 
     function peakScoreRange(items) {
       const list = safeArr(items);
@@ -603,7 +621,7 @@ export const Dashboard = defineComponent({
       store, t, insights, loading, live, lastRefresh, lastRefreshLabel,
       weeklyReport, weeklyLoading, weeklyError, weeklyDays, loadWeekly, copyWeekly,
       weeklyMarkdownHtml,
-      llmAudit, writeGuard, sourceHealth,
+      llmAudit, writeGuard, sourceHealth, scoreBars,
       resolvingId, resolvePair, contradictionKey,
       KIND_TONE, STATUS_TONE, SOURCE_COLORS, STAGE_DEFS, SVGNS, ARCH,
       fmtNum, truncate, timeAgo, sparkPath, fmtDuration, shortenPath,
@@ -846,13 +864,15 @@ export const Dashboard = defineComponent({
             </defs>
             <line v-for="y in [60,93,128,165]" :key="y" x1="14" :y1="y" x2="354" :y2="y" class="ins-decay-grid"></line>
             <line x1="14" :y1="174" x2="354" y2="174" class="ins-decay-axis" />
-            <g v-for="(b, i) in barsFor(insights.pulse.score_distribution)" :key="i">
-              <rect :x="b.x - 0.5" :y="b.tickY" width="1" height="4" class="ins-decay-tick" />
+            <g v-for="(b, i) in scoreBars" :key="i">
+              <rect :x="b.tickX - 0.5" :y="b.tickY" width="1" height="5" class="ins-decay-tick" />
               <rect :x="b.x" :y="b.y" :width="b.w" :height="b.h" class="ins-decay-bar" :class="{ peak: b.peak }" :data-empty="!b.count" rx="4">
                 <title v-if="b.label">{{ b.label }} · {{ b.count }}</title>
               </rect>
               <text v-if="b.count" :x="b.x + b.w / 2" :y="b.countY" class="ins-decay-value">{{ b.count }}</text>
-              <text v-if="b.showShortLabel" :x="b.x + b.w / 2" :y="b.labelY" class="ins-decay-label">{{ b.shortLabel }}</text>
+              <text v-if="b.showShortLabel"
+                    :x="b.labelX" :y="b.labelY"
+                    :class="['ins-decay-label', i === scoreBars.length - 1 ? 'anchor-end' : 'anchor-start']">{{ b.shortLabel }}</text>
             </g>
           </svg>
           <div v-else class="ins-pulse-empty">—</div>
