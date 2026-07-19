@@ -64,6 +64,36 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
 
     app = FastAPI(title="Loop Memory", version="0.2.0")
     app.state.scheduler = scheduler
+
+    # Static-asset cache policy. The default Starlette StaticFiles uses
+    # ``Cache-Control: max-age=3600``, which means Safari will happily
+    # serve a stale i18n / JS / CSS file for an hour after we push a
+    # fix — users click "reload", see no change, and report "the fix
+    # didn't take". Override per-extension so:
+    #   * i18n json files: always revalidate (no-cache)
+    #   * js / css / html:  short max-age with revalidate (5 min)
+    # The browser still avoids re-downloading when the file is
+    # unchanged thanks to the ETag / If-Modified-Since 304 path.
+    import re as _re
+    _CACHE_LONG  = {'js', 'css', 'svg', 'png', 'jpg', 'jpeg', 'webp', 'ico', 'woff', 'woff2'}
+    _CACHE_SHORT = {'json', 'html'}
+    _EXT_RE = _re.compile(r"\.([a-z0-9]+)(\?|$)", _re.IGNORECASE)
+
+    @app.middleware("http")
+    async def _static_cache_headers(request, call_next):
+        response = await call_next(request)
+        path = request.url.path
+        if path.startswith("/static/"):
+            m = _EXT_RE.search(path)
+            ext = m.group(1).lower() if m else ""
+            if ext in _CACHE_SHORT:
+                response.headers["Cache-Control"] = "no-cache, must-revalidate"
+            elif ext in _CACHE_LONG:
+                response.headers["Cache-Control"] = "max-age=300, must-revalidate"
+            else:
+                response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
+
     static_dir = static_dir or Path(__file__).parent / "static"
     static_dir.mkdir(parents=True, exist_ok=True)
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")

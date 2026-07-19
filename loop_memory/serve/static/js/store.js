@@ -79,9 +79,13 @@ export async function loadI18n() {
   if (_i18nLoaded) return _i18n;
   // Load in parallel; ignore individual failures so a single missing file
   // doesn't break the whole UI.
+  // ``cache: 'no-store'`` bypasses the browser HTTP cache so that a
+  // user who just edited an i18n string and hit reload actually sees
+  // the new copy — Safari in particular is aggressive about caching
+  // small JSON files served with ``Cache-Control: max-age=3600``.
   const [en, zh] = await Promise.all([
-    fetch('static/i18n/en.json').then(r => r.ok ? r.json() : {}).catch(() => ({})),
-    fetch('static/i18n/zh.json').then(r => r.ok ? r.json() : {}).catch(() => ({})),
+    fetch('static/i18n/en.json', { cache: 'no-store' }).then(r => r.ok ? r.json() : {}).catch(() => ({})),
+    fetch('static/i18n/zh.json', { cache: 'no-store' }).then(r => r.ok ? r.json() : {}).catch(() => ({})),
   ]);
   // Assign into the reactive so subscribers re-render.
   Object.assign(_i18n.en, en);
