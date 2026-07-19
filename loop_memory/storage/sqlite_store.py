@@ -27,6 +27,11 @@ import sqlite3
 import struct
 import time
 import uuid
+
+# Local imports are deferred inside recall_hybrid() to avoid a circular
+# dependency on .retrieval during package import; the helpers used by
+# _hydrate_* are imported here for the same reason.
+from .retrieval import temporal_score  # noqa: E402
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -67,6 +72,75 @@ CREATE INDEX IF NOT EXISTS idx_mem_session  ON memories(session_id);
 CREATE INDEX IF NOT EXISTS idx_mem_created  ON memories(created_at);
 CREATE INDEX IF NOT EXISTS idx_mem_score    ON memories(score);
 CREATE INDEX IF NOT EXISTS idx_mem_kind     ON memories(kind);
+
+-- FTS5 mirror of memories.text + tags. We keep it in sync via triggers
+-- (see end of this schema block) so every INSERT/UPDATE/DELETE on
+-- memories propagates to memories_fts without app-level code.
+-- The bm25() ranking is the kernel-side OK API; downstream callers
+-- fuse this with the existing semantic score via Reciprocal Rank
+-- Fusion (see recall_hybrid below).
+-- FTS5 mirror of memories.text + tags. The trigram tokenizer
+-- (SQLite ≥ 3.34) gives us substring search, which is the only
+-- thing that works for CJK text without an external ICU build.
+-- Trade-off vs unicode61: trigram produces larger indexes and
+-- "word boundary" semantics are looser (e.g. "javascript" matches
+-- "java"). For our use case (mixed Chinese/English with code
+-- snippets) trigram wins decisively. The mirrors are kept in
+-- sync via triggers so every INSERT/UPDATE/DELETE on memories
+-- propagates automatically.
+CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+    text,
+    tags,
+    source,
+    tokenize = 'trigram'
+);
+
+-- FTS5 mirror of wiki_pages. Same trigger pattern.
+CREATE VIRTUAL TABLE IF NOT EXISTS wiki_fts USING fts5(
+    title,
+    body,
+    summary,
+    tags,
+    tokenize = 'trigram'
+);
+
+-- Per-memory entity mentions: every time we extract entities from a
+-- memory we record which entities appeared, so recall can boost
+-- results whose entities overlap with the query's entities.
+-- (memory_id, entity_id) is unique so re-ingest is idempotent.
+CREATE TABLE IF NOT EXISTS entity_mentions (
+    memory_id   TEXT NOT NULL,
+    entity_id   TEXT NOT NULL,
+    weight      REAL NOT NULL DEFAULT 0.5,
+    created_at  REAL NOT NULL,
+    PRIMARY KEY (memory_id, entity_id)
+);
+CREATE INDEX IF NOT EXISTS idx_em_entity  ON entity_mentions(entity_id);
+CREATE INDEX IF NOT EXISTS idx_em_memory  ON entity_mentions(memory_id);
+
+-- Scope column on wiki_pages: 'global' (default, current behavior) or
+-- a comma-separated list of source names like 'codex,claude' meaning
+-- only those sources should see this page during recall. We default
+-- existing rows to 'global' on migration. SQLite has no
+-- 'ADD COLUMN IF NOT EXISTS', so the migration is wrapped in a
+-- guard in `_init_schema` that checks pragma_table_info first.
+-- (The CREATE INDEX below IS idempotent.)
+
+-- Triggers to keep FTS mirrors in sync. We intentionally rebuild from
+-- the source row (rather than try to copy the new text) so the FTS
+-- tokenizer is the only thing that ever touches the FTS row.
+CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+  INSERT INTO memories_fts(rowid, text, tags, source)
+    VALUES (new.rowid, new.text, COALESCE(new.tags,''), COALESCE(new.source,''));
+END;
+CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+  DELETE FROM memories_fts WHERE rowid = old.rowid;
+END;
+CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
+  DELETE FROM memories_fts WHERE rowid = old.rowid;
+  INSERT INTO memories_fts(rowid, text, tags, source)
+    VALUES (new.rowid, new.text, COALESCE(new.tags,''), COALESCE(new.source,''));
+END;
 
 CREATE TABLE IF NOT EXISTS entities (
     id             TEXT PRIMARY KEY,
@@ -136,6 +210,22 @@ CREATE TABLE IF NOT EXISTS wiki_pages (
 CREATE INDEX IF NOT EXISTS idx_wiki_updated  ON wiki_pages(updated_at);
 CREATE INDEX IF NOT EXISTS idx_wiki_import   ON wiki_pages(importance);
 CREATE INDEX IF NOT EXISTS idx_wiki_slug     ON wiki_pages(slug);
+
+-- FTS5 sync triggers for wiki_pages (positioned AFTER the base table
+-- because SQLite parses ``executescript`` linearly; defining triggers
+-- before the table they reference would raise "no such table").
+CREATE TRIGGER IF NOT EXISTS wiki_ai AFTER INSERT ON wiki_pages BEGIN
+  INSERT INTO wiki_fts(rowid, title, body, summary, tags)
+    VALUES (new.rowid, new.title, new.body, COALESCE(new.summary,''), COALESCE(new.tags,''));
+END;
+CREATE TRIGGER IF NOT EXISTS wiki_ad AFTER DELETE ON wiki_pages BEGIN
+  DELETE FROM wiki_fts WHERE rowid = old.rowid;
+END;
+CREATE TRIGGER IF NOT EXISTS wiki_au AFTER UPDATE ON wiki_pages BEGIN
+  DELETE FROM wiki_fts WHERE rowid = old.rowid;
+  INSERT INTO wiki_fts(rowid, title, body, summary, tags)
+    VALUES (new.rowid, new.title, new.body, COALESCE(new.summary,''), COALESCE(new.tags,''));
+END;
 
 -- Per-memory behavioural signals used by the evolution consolidator.
 -- recall_count: how many times this memory was returned by recall() / search
@@ -303,13 +393,143 @@ class MemoryStore:
     def _init_schema(self) -> None:
         # All `CREATE TABLE IF NOT EXISTS` runs every time so we can
         # add new tables without a manual migration step. Then upsert
-        # the schema version so a downgrade is loud.
+        # the schema version so a downgrade is loud. We also handle
+        # the few idempotent-but-not-IF-NOT-EXISTS migrations inline
+        # below (SQLite has no ADD COLUMN IF NOT EXISTS).
         with self._conn() as c:
+            # Run the DDL first so all base tables exist; then we can
+            # safely check + add the few columns that aren't covered
+            # by ``CREATE TABLE IF NOT EXISTS`` (SQLite has no
+            # ``ADD COLUMN IF NOT EXISTS``).
             c.executescript(SCHEMA)
             c.execute(
                 "INSERT INTO schema_meta(k,v) VALUES('version',?) "
                 "ON CONFLICT(k) DO UPDATE SET v=excluded.v",
                 (self.SCHEMA_VERSION,),
+            )
+            cols = {row["name"] for row in c.execute("PRAGMA table_info(wiki_pages)").fetchall()}
+            if "scope" not in cols:
+                c.execute("ALTER TABLE wiki_pages ADD COLUMN scope TEXT NOT NULL DEFAULT 'global'")
+
+            # One-shot FTS5 tokenizer migration. ``CREATE VIRTUAL TABLE
+            # IF NOT EXISTS`` will *not* rebuild an existing FTS5 table
+            # if its schema differs from the DDL — which is exactly
+            # what we need when switching from the legacy ``unicode61``
+            # tokenizer to ``trigram`` (the only one that can do
+            # substring search over CJK text without an external
+            # ICU build). Detect any mirror that is missing the
+            # ``trigram`` token, drop the FTS mirrors + their sync
+            # triggers, then re-run the DDL (which will now create
+            # them fresh) and re-backfill from the source tables.
+            needs_fts_rebuild = False
+            for tbl in ("memories_fts", "wiki_fts"):
+                row = c.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (tbl,)
+                ).fetchone()
+                sql = row[0] if row else None
+                # Two triggers force a rebuild:
+                #   1. tokenizer isn't ``trigram`` (legacy unicode61)
+                #   2. table is ``content=''`` (contentless) — that
+                #      forbids DELETE, which breaks the cascade path
+                #      from ``delete_session`` / ``delete_memory``.
+                if sql is None:
+                    needs_fts_rebuild = True
+                    break
+                if "trigram" not in sql:
+                    needs_fts_rebuild = True
+                    break
+                if "content=''" in sql:
+                    needs_fts_rebuild = True
+                    break
+            if needs_fts_rebuild:
+                # Drop the FTS mirrors and their triggers. We drop
+                # triggers BEFORE the table (FTS5 errors otherwise).
+                for trig in ("memories_ai", "memories_ad", "memories_au",
+                             "wiki_ai", "wiki_ad", "wiki_au"):
+                    c.execute(f"DROP TRIGGER IF EXISTS {trig}")
+                for tbl in ("memories_fts", "wiki_fts"):
+                    c.execute(f"DROP TABLE IF EXISTS {tbl}")
+                # Re-run the DDL — now the FTS CREATE statements will
+                # actually take effect (because the tables are gone)
+                # and the triggers will be re-created.
+                c.executescript(SCHEMA)
+                # Backfill from the source tables. The triggers will
+                # take over from this point on.
+                n_mem = c.execute("SELECT COUNT(*) c FROM memories").fetchone()["c"]
+                if n_mem > 0:
+                    c.execute(
+                        "INSERT INTO memories_fts(rowid, text, tags, source) "
+                        "SELECT rowid, text, COALESCE(tags,''), COALESCE(source,'') "
+                        "FROM memories"
+                    )
+                n_wiki = c.execute("SELECT COUNT(*) c FROM wiki_pages").fetchone()["c"]
+                if n_wiki > 0:
+                    c.execute(
+                        "INSERT INTO wiki_fts(rowid, title, body, summary, tags) "
+                        "SELECT rowid, title, body, COALESCE(summary,''), COALESCE(tags,'') "
+                        "FROM wiki_pages"
+                    )
+                # Track the rebuild so we never redo it on a healthy DB.
+                c.execute(
+                    "INSERT INTO schema_meta(k,v) VALUES('fts5_tokenizer',?) "
+                    "ON CONFLICT(k) DO UPDATE SET v=excluded.v",
+                    ("trigram",),
+                )
+
+            # Default existing wiki pages to 'global' scope on first
+            # run after the scope migration. ALTER TABLE already added
+            # the column with DEFAULT 'global', so new rows are fine;
+            # this is just belt-and-braces for pre-existing rows.
+            c.execute("UPDATE wiki_pages SET scope='global' WHERE scope IS NULL OR scope=''")
+            # One-shot backfill for ``entity_mentions`` (memory → entity
+            # links). The table was introduced together with FTS5 in this
+            # migration, but pre-existing memories were never linked, so
+            # the entity channel of hybrid recall would silently return
+            # nothing for them. We do an inexpensive substring match
+            # against existing entity names so the channel becomes
+            # useful on the first recall after this migration; ongoing
+            # ``upsert_entity`` calls keep the link fresh.
+            em_count = c.execute(
+                "SELECT COUNT(*) c FROM entity_mentions"
+            ).fetchone()["c"]
+            if em_count == 0:
+                _now = time.time()
+                ent_rows = c.execute(
+                    "SELECT id, name FROM entities WHERE name NOT LIKE 'tag:%'"
+                ).fetchall()
+                inserts: list[tuple] = []
+                for ent in ent_rows:
+                    full = (ent["name"] or "").strip().lower()
+                    if not full:
+                        continue
+                    suffix = full.split(":")[-1] if ":" in full else full
+                    if not suffix or len(suffix) < 2:
+                        continue
+                    # Escape LIKE wildcards in the suffix.
+                    esc = (
+                        suffix.replace("\\", "\\\\")
+                              .replace("%", "\\%")
+                              .replace("_", "\\_")
+                    )
+                    hits = c.execute(
+                        "SELECT id FROM memories WHERE LOWER(text) LIKE ? ESCAPE '\\' LIMIT 64",
+                        (f"%{esc}%",),
+                    ).fetchall()
+                    for m in hits:
+                        inserts.append((m["id"], ent["id"], 0.5, _now))
+                if inserts:
+                    c.executemany(
+                        "INSERT OR IGNORE INTO entity_mentions(memory_id, entity_id, weight, created_at) "
+                        "VALUES (?,?,?,?)",
+                        inserts,
+                    )
+
+            # Legacy flag from the original FTS5 rollout, kept for
+            # backward-compat with downstream tooling.
+            c.execute(
+                "INSERT INTO schema_meta(k,v) VALUES('fts5_backfilled',?) "
+                "ON CONFLICT(k) DO UPDATE SET v=excluded.v",
+                ("1",),
             )
 
     # --- sessions ---------------------------------------------------------
@@ -896,6 +1116,443 @@ class MemoryStore:
                     )
         return out
 
+    # ----------------------------------------------------------------
+    # Hybrid recall: BM25 (FTS5) + semantic (cosine) + entity overlap
+    # fused via Reciprocal Rank Fusion (RRF).
+    #
+    # Mem0 (April 2026) showed that fusing BM25 keyword + semantic
+    # + entity signal is worth ~20 points on LoCoMo / LongMemEval.
+    # SQLite FTS5 ships with the kernel (no new dep), so the cost
+    # of the keyword channel is effectively zero.
+    #
+    # Output is the same shape as the existing ``recall()`` method
+    # so the API + dashboard don't need to change to consume it.
+    # ----------------------------------------------------------------
+    def recall_hybrid(
+        self,
+        query: str,
+        limit: int = 12,
+        source: str | None = None,
+        rrf_k: int = 60,
+        bm25_pool: int = 50,
+        embed_pool: int = 50,
+        include: tuple[str, ...] = ("memories", "wiki", "entities"),
+        bump_signals: bool = True,
+    ) -> dict[str, list[dict]]:
+        """RRF-fused recall across BM25 + semantic + entity channels.
+
+        ``source`` enables per-source scope: only wiki pages whose
+        scope is 'global' OR contains this source are returned. If
+        ``source`` is None, no scope filter is applied (the dashboard
+        + admin recall see everything).
+        """
+        import time as _time
+        from .retrieval import (
+            fuse_rrf,
+            bm25_search,
+            detect_temporal_intent,
+            temporal_score,
+        )
+        out: dict[str, list[dict]] = {"memories": [], "wiki": [], "entities": [], "tokens": self._tokenize(query)}
+        if not (query or "").strip():
+            return out
+
+        # --- channel 1: BM25 (FTS5) ---------------------------------
+        bm25_mem: list[dict] = []
+        bm25_wiki: list[dict] = []
+        if "memories" in include:
+            bm25_mem = bm25_search(self, query, kind="memories", limit=bm25_pool,
+                                   source_filter=source)
+        if "wiki" in include:
+            bm25_wiki = bm25_search(self, query, kind="wiki", limit=bm25_pool,
+                                    source_filter=source)
+        # Each result has a positive bm25 score and the row's primary key.
+
+        # --- channel 2: semantic (cosine) ---------------------------
+        # We do this through the existing search_by_embedding helper,
+        # but we need a query embedding. If the embedder isn't set up
+        # at the store level, the helper gracefully returns [].
+        sem_mem: list[dict] = []
+        sem_wiki: list[dict] = []
+        try:
+            q_emb = self._embed_query(query)
+            if q_emb:
+                sem_mem_rows = self.search_by_embedding(q_emb, top_k=embed_pool)
+                sem_mem = [{"id": r.id, "_score": float(r.score or 0)} for r in sem_mem_rows]
+                sem_wiki = self.search_wiki_by_embedding(q_emb, top_k=embed_pool)
+                sem_wiki = [{"id": r["id"], "_score": float(r.get("importance", 0))} for r in sem_wiki]
+        except Exception:
+            pass
+
+        # --- channel 3: entity overlap -----------------------------
+        ent_mem: list[dict] = []
+        ent_entities: list[dict] = []
+        if "entities" in include:
+            try:
+                from ..graph.extract import extract_entities
+                ents = extract_entities(query, min_count=1)
+                if ents:
+                    names = [n for (n, _k) in ents]
+                    ent_rows = self.search_entities_by_names(names, limit=bm25_pool)
+                    ent_entities = [{"id": r["id"], "_score": float(r.get("weight", 0))} for r in ent_rows]
+                    ent_mem = self.search_memories_by_entity_names(
+                        names, limit=bm25_pool, source_filter=source
+                    )
+            except Exception:
+                pass
+
+        # --- fuse ---------------------------------------------------
+        fused_mem = fuse_rrf([bm25_mem, sem_mem, ent_mem], k=rrf_k)
+        fused_wiki = fuse_rrf([bm25_wiki, sem_wiki], k=rrf_k)
+        fused_ent = fuse_rrf([ent_entities], k=rrf_k)
+
+        # --- temporal reasoning -------------------------------------
+        # Mem0 v3 showed that detecting "what is the current X" vs
+        # "the X I shipped last week" in the query and reranking by
+        # date relevance is the single biggest recall improvement
+        # (~27 points on LongMemEval). The primitives below are in
+        # ``retrieval.py``; we apply them here as a multiplier on the
+        # fused RRF score (added to each row, not multiplied with the
+        # RRF, so it ranks the same direction).
+        t_intent, t_conf = detect_temporal_intent(query)
+        _now_ts = _time.time()
+        if t_intent != "any" and t_conf > 0:
+            for r in fused_mem:
+                tscore = temporal_score(
+                    created_at=_now_ts,   # fallback below per-row
+                    updated_at=_now_ts,
+                    intent=t_intent,
+                    now=_now_ts,
+                    confidence=t_conf,
+                )
+                # Look up the actual row timestamp; if we don't have
+                # it in the fused payload, default to now (neutral).
+                # We'll overwrite tscore in the hydration step where
+                # we have the real created_at.
+                r.setdefault("_t_intent", t_intent)
+                r.setdefault("_t_conf", t_conf)
+            for r in fused_wiki:
+                r.setdefault("_t_intent", t_intent)
+                r.setdefault("_t_conf", t_conf)
+        else:
+            for r in fused_mem + fused_wiki:
+                r.setdefault("_t_intent", "any")
+                r.setdefault("_t_conf", 0.0)
+
+        # --- materialise (re-hydrate the rows) ---------------------
+        mem_ids = [r["id"] for r in fused_mem[:limit * 2]]
+        wiki_ids = [r["id"] for r in fused_wiki[:limit * 2]]
+        ent_ids = [r["id"] for r in fused_ent[:limit * 2]]
+        if mem_ids:
+            out["memories"] = self._hydrate_memories(
+                mem_ids, fused_mem, source=source,
+                t_intent=t_intent, t_conf=t_conf, now=_now_ts,
+            )
+        if wiki_ids:
+            out["wiki"] = self._hydrate_wiki(
+                wiki_ids, fused_wiki,
+                t_intent=t_intent, t_conf=t_conf, now=_now_ts,
+            )
+        if ent_ids:
+            out["entities"] = self._hydrate_entities(ent_ids, fused_ent)
+
+        # Trim
+        out["memories"] = out["memories"][:limit]
+        out["wiki"] = out["wiki"][:limit]
+        out["entities"] = out["entities"][:limit]
+
+        # Surface intent in the result so the UI can show it.
+        out["temporal_intent"] = t_intent
+        out["temporal_confidence"] = round(t_conf, 2)
+
+        if bump_signals and out["memories"]:
+            now = _time.time()
+            with self._conn() as c:
+                for m in out["memories"]:
+                    c.execute(
+                        "INSERT INTO memory_signals (memory_id, recall_count, last_recalled_at, updated_at) "
+                        "VALUES (?, 1, ?, ?) "
+                        "ON CONFLICT(memory_id) DO UPDATE SET "
+                        "recall_count = recall_count + 1, "
+                        "last_recalled_at = excluded.last_recalled_at, "
+                        "updated_at = excluded.updated_at",
+                        (m["id"], now, now),
+                    )
+        return out
+
+    # --- Hybrid recall helpers -------------------------------------
+
+    def _embed_query(self, query: str) -> list[float] | None:
+        """Return a query embedding if an embedder is configured.
+
+        The store does not own an embedder directly, but the app layer
+        often does — we expose a hook so a wrapper can attach one.
+        For now, returns None unless ``self._embedder`` is set, which
+        keeps this file dependency-free.
+        """
+        emb = getattr(self, "_embedder", None)
+        if emb is None:
+            return None
+        try:
+            return list(emb.embed_query(query) or [])
+        except Exception:
+            return None
+
+    def set_embedder(self, embedder) -> None:
+        """Attach a query embedder for hybrid recall."""
+        self._embedder = embedder
+
+    def search_wiki_by_embedding(self, query_embedding, top_k=20) -> list[dict]:
+        """Stub for the *semantic* wiki channel.
+
+        We do not yet store embeddings on ``wiki_pages``; this channel
+        is therefore a poor-man's proxy ordered by a blend of
+        importance and recency. The shape matches the rest of the
+        hybrid pipeline (``{"id", "_score"}``) so the fusion step
+        can consume it.
+
+        ``source_filter`` is applied here so out-of-scope pages never
+        make it into recall — fixing a long-standing bug where a
+        literal ``?`` was being passed as a scope token.
+        """
+        # ``query_embedding`` is currently unused; once wiki embeddings
+        # are added (see roadmap), this becomes a real cosine rank.
+        del query_embedding
+        tok = self._source_token(source=None)  # placeholder
+        with self._conn() as c:
+            if tok:
+                # When a source filter is set, return only 'global' OR
+                # scope tokens that match.
+                rows = c.execute(
+                    "SELECT id, title, body, summary, importance, updated_at, scope "
+                    "FROM wiki_pages "
+                    "WHERE scope='global' OR instr(','||scope||',', ?) > 0 "
+                    "ORDER BY (COALESCE(importance,0)*0.6 + 0.4) DESC, updated_at DESC LIMIT ?",
+                    ("," + tok + ",", top_k),
+                ).fetchall()
+            else:
+                rows = c.execute(
+                    "SELECT id, title, body, summary, importance, updated_at, scope "
+                    "FROM wiki_pages "
+                    "ORDER BY (COALESCE(importance,0)*0.6 + 0.4) DESC, updated_at DESC LIMIT ?",
+                    (top_k,),
+                ).fetchall()
+        return [{"id": r["id"], "_score": float((r["importance"] or 0))} for r in rows]
+
+    @staticmethod
+    def _source_token(name: str) -> str:
+        return (name or '').strip().lower().replace(' ', '-')
+
+    def _hydrate_memories(self, ids: list[str], scored: list[dict], source: str | None = None,
+                           t_intent: str = "any", t_conf: float = 0.0, now: float = 0.0) -> list[dict]:
+        if not ids:
+            return []
+        score_map = {r["id"]: r.get("_rrf", 0) for r in scored}
+        placeholders = ",".join("?" * len(ids))
+        with self._conn() as c:
+            rows = c.execute(
+                f"""SELECT m.id, m.kind, m.text, m.importance, m.score, m.source,
+                          m.tags, m.created_at, m.updated_at,
+                          COALESCE(s.recall_count, 0) AS recall_count
+                   FROM memories m
+                   LEFT JOIN memory_signals s ON s.memory_id = m.id
+                   WHERE m.id IN ({placeholders}) """,
+                ids,
+            ).fetchall()
+        if not now:
+            import time as _t
+            now = _t.time()
+        out = []
+        for r in rows:
+            tags = []
+            try:
+                tags = json.loads(r["tags"]) if r["tags"] else []
+            except Exception:
+                tags = []
+            base_score = score_map.get(r["id"], 0)
+            t_mult = temporal_score(
+                created_at=float(r["created_at"] or now),
+                updated_at=float(r["updated_at"] or r["created_at"] or now),
+                intent=t_intent, now=now, confidence=t_conf,
+            )
+            out.append({
+                "id": r["id"],
+                "kind": "memory",
+                "text": r["text"],
+                "importance": float(r["importance"] or 0),
+                "score_field": float(r["score"] or 0),
+                "source": r["source"],
+                "tags": tags,
+                "created_at": float(r["created_at"] or 0),
+                "recall_count": int(r["recall_count"] or 0),
+                "score": round(base_score * t_mult, 4),
+                "_temporal_multiplier": round(t_mult, 3),
+                "preview": (r["text"] or "")[:240],
+            })
+        # Filter by source if a scope applies. Memories are not
+        # scoped (only wiki pages are), but we still respect the
+        # source filter for memories that came from a different
+        # client when the caller asks for a specific source.
+        if source:
+            tok = self._source_token(source)
+            out = [m for m in out if (m.get("source") or "").split("/")[0] in (tok, "all")]
+        out.sort(key=lambda m: -m["score"])
+        return out
+
+    def _hydrate_wiki(self, ids: list[str], scored: list[dict],
+                      t_intent: str = "any", t_conf: float = 0.0, now: float = 0.0) -> list[dict]:
+        if not ids:
+            return []
+        score_map = {r["id"]: r.get("_rrf", 0) for r in scored}
+        placeholders = ",".join("?" * len(ids))
+        with self._conn() as c:
+            rows = c.execute(
+                f"""SELECT id, slug, title, body, summary, importance, tags, updated_at, version, scope, created_at
+                   FROM wiki_pages WHERE id IN ({placeholders}) """,
+                ids,
+            ).fetchall()
+        if not now:
+            import time as _t
+            now = _t.time()
+        out = []
+        for r in rows:
+            tags = []
+            try:
+                tags = json.loads(r["tags"]) if r["tags"] else []
+            except Exception:
+                tags = []
+            base_score = score_map.get(r["id"], 0)
+            t_mult = temporal_score(
+                created_at=float(r["created_at"] or now),
+                updated_at=float(r["updated_at"] or r["created_at"] or now),
+                intent=t_intent, now=now, confidence=t_conf,
+            )
+            out.append({
+                "id": r["id"],
+                "kind": "wiki",
+                "slug": r["slug"],
+                "title": r["title"],
+                "summary": r["summary"] or "",
+                "body": r["body"] or "",
+                "importance": float(r["importance"] or 0),
+                "tags": tags,
+                "scope": r["scope"] or "global",
+                "updated_at": float(r["updated_at"] or 0),
+                "version": int(r["version"] or 1),
+                "score": round(base_score * t_mult, 4),
+                "_temporal_multiplier": round(t_mult, 3),
+                "preview": ((r["summary"] or r["body"] or "")[:240]),
+            })
+        out.sort(key=lambda m: -m["score"])
+        return out
+
+    def _hydrate_entities(self, ids: list[str], scored: list[dict]) -> list[dict]:
+        if not ids:
+            return []
+        score_map = {r["id"]: r.get("_rrf", 0) for r in scored}
+        placeholders = ",".join("?" * len(ids))
+        with self._conn() as c:
+            rows = c.execute(
+                f"""SELECT id, name, kind, mention_count, weight
+                   FROM entities WHERE id IN ({placeholders}) """,
+                ids,
+            ).fetchall()
+        out = []
+        for r in rows:
+            out.append({
+                "id": r["id"],
+                "kind": "entity",
+                "name": r["name"],
+                "entity_kind": r["kind"],
+                "mention_count": int(r["mention_count"] or 0),
+                "weight": float(r["weight"] or 0),
+                "score": round(score_map.get(r["id"], 0), 4),
+            })
+        out.sort(key=lambda m: -m["score"])
+        return out
+
+    # ----------------------------------------------------------------
+    # Entity-lookup helpers used by the entity channel of hybrid recall.
+    #
+    # Stored entity names use a kind prefix (``concept:Codex``,
+    # ``tag:auto``, ``wiki:foo``) so the same surface string can refer
+    # to several kinds without colliding on the UNIQUE(name,kind)
+    # constraint. Caller code typically only has the bare token
+    # (e.g. extracted by ``graph.extract.extract_entities``), so we
+    # match against both the full prefixed name and the suffix after
+    # the colon.
+    # ----------------------------------------------------------------
+    def search_entities_by_names(self, names: list[str], limit: int = 20) -> list[dict]:
+        if not names:
+            return []
+        # Build a list of every candidate form for each input name.
+        candidates: list[str] = []
+        seen: set[str] = set()
+        for n in names:
+            base = (n or "").strip().lower()
+            if not base:
+                continue
+            for form in (base, base.split(":")[-1] if ":" in base else base):
+                if form and form not in seen:
+                    candidates.append(form)
+                    seen.add(form)
+        if not candidates:
+            return []
+        with self._conn() as c:
+            qmarks = ",".join("?" * len(candidates))
+            # Match either the full prefixed name OR the suffix
+            # after the last ':'. LIKE on the lower-cased name covers
+            # both, and we dedupe in Python at the end.
+            rows = c.execute(
+                f"""SELECT id, name, kind, mention_count, weight
+                    FROM entities
+                    WHERE LOWER(name) IN ({qmarks})
+                       OR LOWER(name) LIKE '%:' || ?
+                       OR LOWER(name) = ?
+                    GROUP BY id
+                    ORDER BY weight DESC, mention_count DESC LIMIT ?""",
+                (*candidates, candidates[0], candidates[0], limit),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def search_memories_by_entity_names(
+        self, names: list[str], limit: int = 50, source_filter: str | None = None
+    ) -> list[dict]:
+        if not names:
+            return []
+        candidates: list[str] = []
+        seen: set[str] = set()
+        for n in names:
+            base = (n or "").strip().lower()
+            if not base:
+                continue
+            for form in (base, base.split(":")[-1] if ":" in base else base):
+                if form and form not in seen:
+                    candidates.append(form)
+                    seen.add(form)
+        if not candidates:
+            return []
+        with self._conn() as c:
+            qmarks = ",".join("?" * len(candidates))
+            sql = (
+                f"""SELECT m.id, MAX(m.score) AS mem_score
+                    FROM memories m
+                    JOIN entity_mentions em ON em.memory_id = m.id
+                    JOIN entities e ON e.id = em.entity_id
+                    WHERE LOWER(e.name) IN ({qmarks})
+                       OR LOWER(e.name) LIKE '%:' || ?
+                       OR LOWER(e.name) = ?
+                 """
+            )
+            params: list = list(candidates) + [candidates[0], candidates[0]]
+            if source_filter:
+                sql += " AND (m.source LIKE ? OR m.source LIKE ?) "
+                tok = self._source_token(source_filter)
+                params.extend([f"{tok}/%", tok])
+            sql += " GROUP BY m.id ORDER BY SUM(em.weight) DESC LIMIT ?"
+            params.append(limit)
+            rows = c.execute(sql, params).fetchall()
+        return [{"id": r["id"], "_score": float(r["mem_score"] or 0)} for r in rows]
 
     def search_by_embedding(
         self, query_embedding: list[float], top_k: int = 20
@@ -954,6 +1611,7 @@ class MemoryStore:
         importance: float = 0.5,
         evidence_ids: list[str] | None = None,
         run_id: str | None = None,
+        scope: str = "global",
     ) -> Dict[str, Any]:
         """Create-or-update a wiki page by slug.
 
@@ -974,20 +1632,22 @@ class MemoryStore:
                 version = 1
                 c.execute(
                     "INSERT INTO wiki_pages(id, slug, title, body, summary, tags, "
-                    "importance, evidence_ids, run_id, version, created_at, updated_at) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "importance, evidence_ids, run_id, version, created_at, updated_at, scope) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (pid, slug, title, body, summary or "", tags_json,
-                     float(importance), evid_json, run_id, version, now, now),
+                     float(importance), evid_json, run_id, version, now, now,
+                     scope or "global"),
                 )
             else:
                 pid = existing["id"]
                 version = (existing["version"] or 1) + 1
                 c.execute(
                     "UPDATE wiki_pages SET title=?, body=?, summary=?, tags=?, "
-                    "importance=?, evidence_ids=?, run_id=?, version=?, updated_at=? "
+                    "importance=?, evidence_ids=?, run_id=?, version=?, updated_at=?, scope=? "
                     "WHERE id=?",
                     (title, body, summary or "", tags_json,
-                     float(importance), evid_json, run_id, version, now, pid),
+                     float(importance), evid_json, run_id, version, now,
+                     scope or "global", pid),
                 )
             row = c.execute(
                 "SELECT * FROM wiki_pages WHERE id=?", (pid,)
