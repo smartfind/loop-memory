@@ -56,6 +56,12 @@ export const Sidebar = defineComponent({
         if (filter.value && filter.value !== 'all') params.source = filter.value;
         const data = await api.listSessions(params);
         sessions.value = Array.isArray(data) ? data : (data.sessions || []);
+        // Refresh per-source counts alongside the session list so the
+        // pills on the sidebar reflect what we just fetched. Without
+        // this, the pills could keep showing stale numbers (or 0) if
+        // /api/sessions/counts ever returned empty and only that
+        // endpoint was retried later.
+        await refreshCounts();
       } catch (e) {
         sessions.value = [];
       } finally {
@@ -66,7 +72,10 @@ export const Sidebar = defineComponent({
 
     async function refreshCounts() {
       try {
-        const c = await api.fetchJSON('/api/sessions/counts');
+        // ``cache: 'no-store'`` so the pill counts can never show a
+        // stale snapshot — they're tiny and the user notices when
+        // they're wrong.
+        const c = await api.fetchJSON('/api/sessions/counts', { cache: 'no-store' });
         counts.value = c && c.by_source ? c : { by_source: c || {} };
       } catch (e) {
         // silent — counts are decorative
@@ -144,6 +153,13 @@ export const Sidebar = defineComponent({
       });
     });
 
+    // Expose on window for devtools quick inspection:
+    //   window.__sidebar.counts.value
+    if (typeof window !== 'undefined') {
+      window.__sidebar = window.__sidebar || {};
+      window.__sidebar.counts = counts;
+      window.__sidebar.sessions = sessions;
+    }
     return {
       sessions, counts, filter, loading, sourcePills, lastRefreshedAt,
       onPickSource, onClickSession, onClearSession,
