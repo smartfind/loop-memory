@@ -2167,6 +2167,16 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
         # same slug; if it already exists, route them to PUT instead.
         if store.get_wiki_page_by_slug(slug):
             raise HTTPException(409, "wiki page with this slug already exists")
+        # Scope: 'global' (default, all clients) or a comma-list like
+        # 'codex,claude' meaning only those clients see this page during
+        # recall. Stored verbatim into the wiki_pages.scope column.
+        scope = (body.get("scope") or "global").strip().lower() or "global"
+        # Sanity: each token must be a known source or 'global'.
+        valid_tokens = {"global", "all", "codex", "claude", "hermes", "openclaw"}
+        tokens = [t.strip() for t in scope.split(",") if t.strip()]
+        if not tokens or not all(t in valid_tokens for t in tokens):
+            raise HTTPException(400, f"invalid scope: {scope!r}")
+        normalised = ",".join(dict.fromkeys(tokens))  # dedupe, keep order
         return store.upsert_wiki_page(
             slug=slug.lower().replace(" ", "-")[:80],
             title=title,
@@ -2175,6 +2185,7 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
             tags=body.get("tags") or [],
             importance=float(body.get("importance") or 0.5),
             evidence_ids=body.get("evidence_ids") or [],
+            scope=normalised,
         )
 
     @app.put("/api/wiki/{page_id}")
@@ -2185,6 +2196,16 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
         if not isinstance(body, dict):
             raise HTTPException(400, "body must be an object")
         slug = (body.get("slug") or existing["slug"]).strip()
+        # Resolve scope: explicit in body wins, else preserve existing.
+        valid_tokens = {"global", "all", "codex", "claude", "hermes", "openclaw"}
+        if "scope" in body:
+            raw = (body.get("scope") or "global")
+            tokens = [t.strip().lower() for t in raw.split(",") if t.strip()]
+            if not tokens or not all(t in valid_tokens for t in tokens):
+                raise HTTPException(400, f"invalid scope: {raw!r}")
+            scope_val = ",".join(dict.fromkeys(tokens))
+        else:
+            scope_val = existing.get("scope") or "global"
         return store.upsert_wiki_page(
             slug=slug.lower().replace(" ", "-")[:80],
             title=(body.get("title") or existing["title"]).strip(),
@@ -2195,6 +2216,7 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
                              if "importance" in body else existing.get("importance") or 0.5),
             evidence_ids=body.get("evidence_ids")
                          if "evidence_ids" in body else existing.get("evidence_ids") or [],
+            scope=scope_val,
         )
 
     @app.delete("/api/wiki/{page_id}")

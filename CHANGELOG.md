@@ -29,6 +29,75 @@
 - `README.md` now links the docs in a single table so newcomers can
   find everything without grepping the repo.
 
+### Hybrid recall: BM25 + semantic + entity RRF + temporal reasoning
+- **FTS5 mirror of `memories` + `wiki_pages`** with the `trigram`
+  tokenizer (SQLite ≥ 3.34, ships in the stdlib `sqlite3` module —
+  no new deps). Trigram is the only tokenizer that handles
+  substring search over CJK text without an external ICU build.
+- **One-shot migration**: drops & rebuilds the FTS5 mirrors + sync
+  triggers if the existing DB has the legacy `unicode61` tokenizer
+  or the `content=''` clause (the latter blocks DELETE, which broke
+  `delete_session` / `delete_memory`). Idempotent and self-tracking
+  via `schema_meta`.
+- **Hybrid recall** (`recall_hybrid`): BM25 (FTS5) + semantic
+  (cosine of `embedding` blob) + entity-overlap, fused with
+  Reciprocal Rank Fusion. `wiki_pages.scope` is honoured: pages
+  whose scope doesn't include the calling source are filtered
+  unless their scope is `global`. `/api/recall?mode=hybrid` is the
+  default; `?mode=legacy` keeps the old LIKE path for benchmarking.
+- **CJK-friendly query escaping**: `_escape_fts` emits trigrams for
+  CJK runs (boundary trigrams only when the run is ≥ 5 chars), falls
+  back to a parallel `LIKE` scan, and merges results so short Chinese
+  queries (e.g. `项目` / `图表`) still hit.
+- **Temporal reasoning** (Mem0 v3 insight, +27 pts on LongMemEval):
+  `detect_temporal_intent` classifies the query as `current` /
+  `past` / `future` / `any` from a small CJK + English lexicon;
+  `temporal_score` returns a per-row multiplier in [0.5, 1.5]
+  applied as a final rerank after RRF. Echoed in the response as
+  `temporal_intent`, `temporal_confidence`, `_temporal_multiplier`.
+- **Entity channel fix**: stored entity names are kind-prefixed
+  (`concept:Codex`, `tag:auto`), but the bare token extracted from
+  the query (`Codex`) used to miss them. Lookup now matches both
+  the full prefixed name and the suffix; a one-shot substring
+  backfill against existing memories added 2,623 `entity_mentions`
+  on the live database.
+
+### Tiered loading — L0 / L1 / L2 (OpenViking pattern)
+- `recall_hybrid` and `/api/recall` take a `level` parameter
+  (default `1`):
+  - `0` — L0: titles + tags + preview; body and full text stripped.
+  - `1` — L1: summary + body capped at 800 chars + full memory
+    text. Default for the dashboard timeline.
+  - `2` — L2: full body, full text. Used only after the UI explicitly
+    expands a row.
+- New drill-down endpoints `GET /api/memories/{mid}` (full text) and
+  the existing `GET /api/wiki/{page_id}` (full body) cover L2.
+- Measured on the live DB (10-page recall, query `Loop Memory
+  system`): L0 ≈ 1,178 tokens, L1 ≈ 2,121, L2 ≈ 2,364 — about a 50 %
+  payload drop at L0 vs L2.
+
+### Per-client wiki scope
+- New `wiki_pages.scope` column (default `'global'`). `'codex'`,
+  `'claude'`, `'hermes'`, `'openclaw'`, or any comma-combination
+  like `'codex,claude'`. Pages outside the caller's scope are
+  filtered during recall but pages with scope `'global'` are visible
+  to every client.
+- Web UI: a chip-row selector in the Wiki editor + a colour-coded
+  scope pill on every wiki card + a scope dropdown in the Wiki
+  toolbar to filter the list (`All / Global / Codex / Claude /
+  Hermes / OpenClaw`).
+
+### Dashboard
+- L0/L1/L2 surface in the timeline and wiki cards.
+- Memory and wiki payloads carry `_level`, `_temporal_multiplier`,
+  `temporal_intent` for the dashboard to render.
+
+### Internals
+- `loop_memory/storage/retrieval.py` (new): `_escape_fts`,
+  `bm25_search`, `fuse_rrf`, `detect_temporal_intent`,
+  `temporal_score` — all pure-Python and dependency-free.
+- Tests: 239 pass (`pytest tests/`).
+
 ## [0.3.0] — 2026-07-11
 
 ### Wiki fallback (v0.3.0)
@@ -346,3 +415,5 @@ commands.
   `$LOOP_MEMORY_DB` mid-process and have the next call see the new
   path. Resolves the long-standing `test_inject_emits_wiki_block`
   and `test_cli_ask_prints_block` flakes.
+
+

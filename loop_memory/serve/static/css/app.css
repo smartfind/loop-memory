@@ -3485,3 +3485,81 @@
   margin-right: 4px;
   vertical-align: middle;
 }
+
+/* ====== wiki scope selector + per-card chips =====================
+   Color-coded pills: each known client gets its own hue, plus a
+   neutral 'global' pill. Toggling is exclusive through the editor
+   (per-client click removes 'global'); the chips on each card
+   are read-only.
+   =================================================================*/
+
+.wiki-editor .row-scope {
+  display: flex; flex-direction: column;
+  gap: 6px; margin-top: 4px;
+}
+.wiki-editor .row-scope .sec-hint {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.wiki-editor .scope-chips {
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+.wiki-editor .scope-chip {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  padding: 5px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background .12s ease, color .12s ease, border-color .12s ease;
+  user-select: none;
+}
+.wiki-editor .scope-chip:hover {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+.wiki-editor .scope-chip.active {
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface));
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.wiki-editor .scope-chip.is-global.active {
+  background: color-mix(in srgb, var(--text) 12%, var(--surface));
+  border-color: var(--text-muted);
+  color: var(--text);
+}
+
+/* ----- per-card chips (Wiki.js list view) ----- */
+.wiki-card .wc-scopes {
+  display: flex; flex-wrap: wrap; gap: 5px;
+}
+.wiki-card .scope-pill {
+  font-size: 10.5px;
+  font-weight: 550;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  letter-spacing: .01em;
+}
+.wiki-card .scope-pill-global {
+  /* neutral — visible to everyone */
+  background: color-mix(in srgb, var(--text) 8%, var(--surface));
+  border-color: color-mix(in srgb, var(--text) 30%, var(--border));
+  color: var(--text);
+}
+.wiki-card .scope-pill-codex    { background: rgba( 99, 102, 241, .16); border-color: rgba( 99, 102, 241, .35); color: rgb(67, 56, 202); }
+.wiki-card .scope-pill-claude   { background: rgba(236,  72, 153, .16); border-color: rgba(236,  72, 153, .35); color: rgb(157,  23,  77); }
+.wiki-card .scope-pill-hermes   { background: rgba( 245, 158,  11, .18); border-color: rgba( 245, 158,  11, .40); color: rgb(146,  64,  14); }
+.wiki-card .scope-pill-openclaw { background: rgba(  34, 197,  94, .16); border-color: rgba(  34, 197,  94, .40); color: rgb( 22, 101,  52); }
+
+[data-theme="dark"] .wiki-card .scope-pill-global { background: color-mix(in srgb, var(--text) 14%, var(--surface)); }
+[data-theme="dark"] .wiki-card .scope-pill-codex    { background: rgba( 99, 102, 241, .25); border-color: rgba( 99, 102, 241, .45); color: rgb(165, 160, 255); }
+[data-theme="dark"] .wiki-card .scope-pill-claude   { background: rgba(236,  72, 153, .25); border-color: rgba(236,  72, 153, .45); color: rgb(244, 114, 182); }
+[data-theme="dark"] .wiki-card .scope-pill-hermes   { background: rgba( 245, 158,  11, .25); border-color: rgba( 245, 158,  11, .45); color: rgb(251, 191,  36); }
+[data-theme="dark"] .wiki-card .scope-pill-openclaw { background: rgba(  34, 197,  94, .25); border-color: rgba(  34, 197,  94, .45); color: rgb( 74, 222, 128); }
+
+.wiki-toolbar select[title] { min-width: 110px; }

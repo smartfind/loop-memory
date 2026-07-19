@@ -88,6 +88,40 @@ loop-memory consolidate          # rescore + GC + dedupe
 
 ---
 
+## Why Loop Memory vs. every other agent-memory project
+
+We surveyed the open-source memory systems for AI agents that came
+up in 2026 (Mem0, Hindsight, OpenViking, A-MEM) and kept what worked.
+Loop Memory is the smallest system that still ships *all* of the
+following — every other project we looked at lacks at least one:
+
+| Capability | **Loop Memory** | Mem0 v3 | Hindsight | OpenViking | A-MEM |
+| --- | --- | --- | --- | --- | --- |
+| Multi-source capture (Codex / Claude / Hermes / OpenClaw) | ✅ out of the box | ⚠ requires plugin per client | ⚠ hosted only | ⚠ SDK + companion app | ❌ |
+| Local-first SQLite (zero external services) | ✅ | ❌ Postgres + Qdrant | ❌ Postgres + Qdrant | ⚠ file-system + cloud | ⚠ ChromaDB |
+| Hybrid recall: BM25 + semantic + entity (RRF) | ✅ | ✅ | ✅ | ✅ | ⚠ entity-only |
+| Temporal reasoning in retrieval (boost / suppress by date intent) | ✅ | ✅ | ❌ | ❌ | ❌ |
+| Tiered loading L0/L1/L2 (titles / summary / body) | ✅ | ❌ | ❌ | ✅ | ❌ |
+| Per-client wiki scope (global vs. source-specific) | ✅ | ⚠ user-level | ⚠ tenant-level | ❌ | ❌ |
+| Distillation that prefers *completeness over compression* | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Distillation that runs on a schedule **and** on demand | ✅ both | ✅ schedule | ✅ both | ✅ schedule | ❌ |
+| Knowledge graph (entities + relations) | ✅ light | ✅ Neo4j | ✅ | ✅ native graph | ✅ ChromaDB |
+| OpenAI-compatible multi-provider LLM (incl. MiniMax) | ✅ | ✅ | ✅ | ✅ | ⚠ |
+| Open-source, MIT, no hosted tier required | ✅ | ✅ (cloud SKUs dominant) | ✅ | ⚠ AGPLv3 | ✅ |
+
+**The honest gap**: we don't have Mem0's hosted platform (managed
+multi-tenant scaling, byte-benchmarked vector indexes), and we don't
+ship OpenViking's companion desktop app. What we *do* ship is the
+smallest set of moving parts that lets you run the same memory
+loop across every locally-installed agent without sending your
+transcripts anywhere.
+
+If you want raw scale, Mem0's cloud SKU will beat us. If you want a
+local-first single-user brain that every offline agent (Codex, Claude,
+Hermes, clawx) can read and write, we built this for you.
+
+---
+
 ## Architecture & docs
 
 | Doc | What's in it |

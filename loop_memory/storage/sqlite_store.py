@@ -1796,6 +1796,7 @@ class MemoryStore:
             "version": int(row["version"] or 1),
             "created_at": float(row["created_at"] or 0.0),
             "updated_at": float(row["updated_at"] or 0.0),
+            "scope": row["scope"] or "global",
         }
 
     # --- scoring ----------------------------------------------------------
