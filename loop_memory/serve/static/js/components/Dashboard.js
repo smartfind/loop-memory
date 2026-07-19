@@ -702,7 +702,7 @@ export const Dashboard = defineComponent({
       scoreDistributionTotal, peakScoreRange,
       sourceBars, pipelineBars, lifecycleSegments,
       onRefresh: refresh,
-      onRunEvolution: () => window.dispatchEvent(new CustomEvent('loop:llm-run')),
+      onRunEvolution: () => callAction('llmRun'),
     };
   },
   template: /* html */ `
