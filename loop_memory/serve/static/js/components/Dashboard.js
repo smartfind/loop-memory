@@ -495,7 +495,12 @@ export const Dashboard = defineComponent({
       const innerH = h - plot.top - plot.bottom;
       const baseline = plot.top + innerH; // 174
       const bw = innerW / Math.max(1, list.length);
-      const fmtShort = (v) => (v >= 1 ? '1' : v === 0 ? '0' : `.${Math.round(v * 10)}`);
+      // Compact decimal label used on the decay-distribution x-axis.
+      // Old version dropped the leading zero for fractional values
+      // ("0.2" → ".2"), making the axis ambiguous at a glance.
+      // Use toFixed(1) so every tick reads consistently as
+      // "0", "0.2", "0.4", …, "1".
+      const fmtShort = (v) => (v == null ? '' : v >= 1 ? '1' : (Math.round(v * 10) / 10).toFixed(1));
       return list.map((r, i) => {
         const upper = r.range ? r.range[1] : null;
         const lower = r.range ? r.range[0] : null;
@@ -520,7 +525,7 @@ export const Dashboard = defineComponent({
           // bucket to keep the axis readable at narrow widths.
           shortLabel: upper != null ? fmtShort(upper) : '',
           // full range label kept for the (rare) tooltip/full view use
-          label: (lower != null && upper != null) ? `${lower.toFixed(1)}–${upper.toFixed(1)}` : '',
+          label: (lower != null && upper != null) ? `${lower.toFixed(1).replace(/\b0\.0\b/g, '0')}–${upper.toFixed(1).replace(/\b1\.0\b/g, '1')}` : '',
           showShortLabel: i % 2 === 1, // 0, 2, 4... hide; 1, 3, 5... show
           peak: r.count > 0 && r.count === max,
           count: r.count,
@@ -699,7 +704,7 @@ export const Dashboard = defineComponent({
       fmtNum, truncate, timeAgo, sparkPath, fmtDuration, shortenPath,
       guardUptime, hist, sourceIcon,
       ring, donutArcPaths, trendPoints, ingestBars, ingestPeakHour, barsFor,
-      scoreDistributionTotal, peakScoreRange,
+      scoreDistributionTotal, peakScoreRange, scoreBars,
       sourceBars, pipelineBars, lifecycleSegments,
       onRefresh: refresh,
       onRunEvolution: () => callAction('llmRun'),
