@@ -181,6 +181,9 @@ export const App = defineComponent({
     registerActions({
       openSettings: () => settingsOpen.value = true,
       openDiag:     () => diagOpen.value = true,
+      // Dashboard's "运行进化" button → reuse the same LLM-run handler
+      // that TopBar's "立即整理" emits. Keeps a single source of truth.
+      llmRun:       onLlmRun,
     });
     function onOpenStats() { /* legacy stats popover — delegated to TopBar */ }
 

@@ -69,6 +69,7 @@ export const store = reactive({
 const _actions = {
   openSettings: () => { /* set by App.js */ },
   openDiag:     () => { /* set by App.js */ },
+  llmRun:       () => { /* set by App.js — kicks off an LLM consolidation run */ },
 };
 export function registerActions(map) { Object.assign(_actions, map); }
 export function callAction(name, ...args) {
