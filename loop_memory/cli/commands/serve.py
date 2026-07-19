@@ -38,9 +38,23 @@ def run_hook(args) -> int:
     from ...serve.watcher import run_watcher
     from ...storage.sqlite_store import MemoryStore
     if "--source" not in args or "--watch" not in args:
-        return die("usage: loop-memory hook --source <codex|claude|hermes> --watch <path> [--watch <path2> ...]")
+        return die("usage: loop-memory hook --source <codex|claude|hermes> --watch <path> [--watch <path2> ...] [--once] [--idle SECONDS]")
     s_idx = args.index("--source")
     source = args[s_idx + 1]
+    # --once: process every eligible file once, then exit. Used by the
+    # server-side force-ingest endpoint so a manual button doesn't have
+    # to fork a permanent watcher.
+    once = "--once" in args
+    # --idle SECONDS: override the watcher's default 60s idle window.
+    # The server uses this to tighten the wait when the user clicks
+    # "Force ingest".
+    idle_seconds = 60.0
+    if "--idle" in args:
+        i = args.index("--idle")
+        try:
+            idle_seconds = float(args[i + 1])
+        except (ValueError, IndexError):
+            return die("--idle requires a numeric argument")
     # Collect every --watch <path> pair (in order).
     watches: list[Path] = []
     i = 0
@@ -55,8 +69,25 @@ def run_hook(args) -> int:
     store = MemoryStore(DEFAULT_DB)
     pipeline = MemoryPipeline(store, embedder=HashingEmbedder(dim=128))
     loader = get_loader(source)
+    if once:
+        # --once mode: do exactly one ingest pass per watch dir, then
+        # return. Used by the server's force-ingest endpoint so a UI
+        # button can run a single batch without leaving a watcher
+        # process behind. We use idle_seconds=0 to ingest any file
+        # that has at least one new byte since the last successful
+        # ingest; the caller can override --idle to be stricter.
+        from ...serve.watcher import run_once
+        results = []
+        for w in watches:
+            r = run_once(loader, w, pipeline, idle_seconds=idle_seconds)
+            results.append({"watch_dir": str(w), **r})
+        # Persist results in a JSON line so callers (HTTP endpoint)
+        # can parse stdout deterministically.
+        import json as _json
+        print("LOOP_MEMORY_ONCE_RESULT " + _json.dumps(results))
+        return 0
     if len(watches) == 1:
-        run_watcher(loader, watches[0], pipeline)
+        run_watcher(loader, watches[0], pipeline, idle_seconds=idle_seconds)
         return 0
     # Multiple watches: spawn one thread per path so each watcher
     # has its own poll loop and ledger (no cross-talk between
@@ -66,7 +97,10 @@ def run_hook(args) -> int:
     for w in watches:
         t = threading.Thread(
             target=run_watcher,
-            args=(loader, w, pipeline),
+            # Positional: loader, watch_dir, pipeline, poll_seconds,
+            # idle_seconds. We pass idle_seconds=60 by default; the
+            # caller can override via --idle.
+            args=(loader, w, pipeline, 2.0, idle_seconds),
             daemon=True,
             name=f"loop-memory-watcher-{w.name}",
         )

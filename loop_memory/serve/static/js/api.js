@@ -114,6 +114,12 @@ export const api = {
   rescore:        () => fetchJSON('/api/admin/rescore', { method: 'POST' }),
   rebuildGraph:   () => fetchJSON('/api/admin/graph/rebuild', { method: 'POST' }),
   ingest:         (source, path) => fetchJSON('/api/admin/ingest', { method: 'POST', params: { source, path } }),
+  // Force-ingest endpoint: skips the watcher's idle window. Used by
+  // the IngestPopover "Force active session" button when the user
+  // has a long-running conversation and doesn't want to wait for the
+  // 60s idle timer.
+  forceIngest:    (params) => fetchJSON('/api/admin/watcher/force-ingest', { method: 'POST', params }),
+  activeSession:  (source) => fetchJSON('/api/admin/watcher/active-session', { params: { source } }),
 
   // Audit / runs
   llmAudit:       () => fetchJSON('/api/llm-audit'),
