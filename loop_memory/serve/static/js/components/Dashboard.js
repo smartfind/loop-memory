@@ -418,16 +418,30 @@ export const Dashboard = defineComponent({
       });
     }
 
-    function trendPoints(rows, w = 300, h = 140) {
+    function trendPoints(rows, w = 300, h = 170) {
+      // Layout:
+      //   viewBox height h = 170
+      //   plot area:   y[10..132]   (chart line lives here)
+      //   label band:  y[148..162]  (x-axis dates sit BELOW the chart)
+      // The previous 140-tall viewBox forced labels to y=135 — directly
+      // on top of the line when a day's count was zero — so date text
+      // and chart stroke visibly collided. Adding 30px of bottom room
+      // moves labels cleanly out of the plot area.
       const items = safeArr(rows);
       if (!items.length) return { line: '', area: '', ticks: [], max: 1 };
       const max = Math.max(...items.map(r => r.count), 1);
       const step = w / Math.max(1, items.length - 1);
-      const pts = items.map((r, i) => [i * step, h - (r.count / max) * (h - 8) - 4]);
+      const plotTop = 10;
+      const plotBottom = 132;
+      const pts = items.map((r, i) => {
+        const cx = i * step;
+        const cy = plotBottom - ((r.count || 0) / max) * (plotBottom - plotTop);
+        return [cx, cy];
+      });
       const line = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
-      const area = `${line} L${w},${h} L0,${h} Z`;
+      const area = `${line} L${w},${plotBottom} L0,${plotBottom} Z`;
       const ticks = items.map((r, i) => ({ x: i * step, label: r.date ? r.date.slice(5) : '', value: r.count }));
-      return { line, area, ticks, max };
+      return { line, area, ticks, max, labelY: 156 };
     }
 
     function ingestBars(rows, w = 360, h = 118) {
@@ -1013,18 +1027,19 @@ export const Dashboard = defineComponent({
         </div>
         <div class="ins-dist-card">
           <div class="ins-dist-title">📈 {{ t('dash.dist.trendTitle') }}</div>
-          <svg class="ins-trend-svg" viewBox="0 0 300 140" preserveAspectRatio="none">
+          <svg class="ins-trend-svg" viewBox="0 0 300 170" preserveAspectRatio="none">
             <defs>
               <linearGradient id="dist-trend-grad" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stop-color="var(--accent)" stop-opacity="0.5"></stop>
                 <stop offset="100%" stop-color="var(--accent)" stop-opacity="0"></stop>
               </linearGradient>
             </defs>
+            <line x1="0" y1="132" x2="300" y2="132" class="ins-trend-axis" />
             <path :d="trendPoints(insights.distribution.trend).area" fill="url(#dist-trend-grad)"></path>
             <path :d="trendPoints(insights.distribution.trend).line" class="ins-trend-line" fill="none" stroke="var(--accent)" stroke-width="2"></path>
             <g v-for="(t, i) in trendPoints(insights.distribution.trend).ticks" :key="i">
-              <text :x="t.x" y="135" text-anchor="middle" font-size="9" fill="var(--text-faint)">{{ t.label }}</text>
-              <circle :cx="t.x" :cy="(140 - (t.value / Math.max(1, trendPoints(insights.distribution.trend).max)) * 130) - 4" r="2.4" fill="var(--accent)"></circle>
+              <circle :cx="t.x" :cy="132 - (t.value / Math.max(1, trendPoints(insights.distribution.trend).max)) * 122" r="2.4" fill="var(--accent)"></circle>
+              <text :x="t.x" :y="trendPoints(insights.distribution.trend).labelY" text-anchor="middle" font-size="9" fill="var(--text-faint)">{{ t.label }}</text>
             </g>
           </svg>
         </div>
