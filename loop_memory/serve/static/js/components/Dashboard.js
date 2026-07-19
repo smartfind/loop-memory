@@ -506,7 +506,6 @@ export const Dashboard = defineComponent({
         const lower = r.range ? r.range[0] : null;
         const bucketLeft  = plot.left + i * bw;
         const bucketRight = plot.left + (i + 1) * bw;
-        const bucketCenter = bucketLeft + bw / 2;
         return {
           // Bar — slightly inset inside its bucket for visual breathing room.
           x: bucketLeft + (bw > 18 ? 4 : 1),
@@ -515,28 +514,34 @@ export const Dashboard = defineComponent({
           h: Math.max(2, ((r.count || 0) / max) * innerH),
           baseline,
           countY: baseline - Math.max(2, ((r.count || 0) / max) * innerH) - 7,
-          // Tick sits on the bucket BOUNDARY (right edge) — that is the
-          // standard histogram convention. Label sits on the bucket CENTER
-          // so the value reads as belonging to the bar above it, not to
-          // the divider between two bars. With 10 evenly-spaced centers
-          // (each ~34px apart) every bucket can carry a label without
-          // crowding, so we show them all.
+          // Tick + label both sit on the bucket BOUNDARY (right edge =
+          // upper bound of the score range). For the very last bucket
+          // that's the chart's right edge; for others it's the divider
+          // with the next bucket. Tick is 1px wide and centered on the
+          // boundary via x=tickX-0.5.
           tickX:  bucketRight,
-          labelX: bucketCenter,
+          labelX: bucketRight,
           tickY:  baseline + 6,
           labelY: baseline + 20,
-          // short label: midpoint of the bucket, rounded to 0.1 so it
-          // reads as the bar's representative value (0.1, 0.2, …, 1.0).
-          // We round the midpoint to 2 decimal places first because
-          // (0.6 + 0.7) / 2 evaluates to 0.6499999999999999 in
-          // IEEE-754, which Math.round then drops to 0.6 instead of
-          // the intended 0.7.
-          shortLabel: (lower != null && upper != null)
-            ? fmtShort(Math.round(((lower + upper) / 2) * 100) / 100)
-            : (upper != null ? fmtShort(upper) : ''),
+          // short label: the upper bound of the bucket, formatted with
+          // a leading zero. We show every other bucket to keep the
+          // axis readable at narrow widths.
+          shortLabel: upper != null ? fmtShort(upper) : '',
+          // For decimal-aligned axis (the '.' of '0.2' lands on the
+          // tick), the template splits the label at '.' into a prefix
+          // (rendered with text-anchor=end just before the tick) and
+          // a '.suffix' (rendered with text-anchor=start right after).
+          // We pre-split it here so Vue's template stays simple and
+          // the gutter between prefix and suffix is exactly 0.
+          labelPrefix: upper != null ? String(fmtShort(upper)).split('.')[0] : '',
+          labelSuffix: upper != null
+            ? (String(fmtShort(upper)).indexOf('.') >= 0
+                ? '.' + String(fmtShort(upper)).split('.')[1]
+                : '')
+            : '',
           // full range label kept for the (rare) tooltip/full view use
           label: (lower != null && upper != null) ? `${lower.toFixed(1).replace(/\b0\.0\b/g, '0')}–${upper.toFixed(1).replace(/\b1\.0\b/g, '1')}` : '',
-          showShortLabel: true,
+          showShortLabel: i % 2 === 1, // 0, 2, 4... hide; 1, 3, 5... show
           peak: r.count > 0 && r.count === max,
           count: r.count,
         };
@@ -957,9 +962,9 @@ export const Dashboard = defineComponent({
                 <title v-if="b.label">{{ b.label }} · {{ b.count }}</title>
               </rect>
               <text v-if="b.count" :x="b.x + b.w / 2" :y="b.countY" class="ins-decay-value">{{ b.count }}</text>
-              <text v-if="b.showShortLabel"
-                    :x="b.labelX" :y="b.labelY"
-                    class="ins-decay-label anchor-middle">{{ b.shortLabel }}</text>
+              <text v-if="b.showShortLabel" :y="b.labelY" class="ins-decay-label">
+                <tspan :x="b.tickX" text-anchor="end">{{ b.labelPrefix }}</tspan><tspan :x="b.tickX" text-anchor="start" dx="-1.5">{{ b.labelSuffix }}</tspan>
+              </text>
             </g>
           </svg>
           <div v-else class="ins-pulse-empty">—</div>
