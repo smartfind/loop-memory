@@ -61,8 +61,8 @@ def run_watcher(
     pipeline: MemoryPipeline,
     poll_seconds: float = 2.0,
     idle_seconds: float = 60.0,
-    ledger: Optional[dict] = None,
-    on_ingest: Optional[callable] = None,
+    ledger: dict | None = None,
+    on_ingest: callable | None = None,
 ) -> None:
     """Watch a directory and ingest each transcript once it has been idle
     for ``idle_seconds``.
@@ -228,8 +228,8 @@ def run_once(
     pipeline: MemoryPipeline,
     poll_seconds: float = 2.0,
     idle_seconds: float = 0.0,
-    ledger: Optional[dict] = None,
-    on_ingest: Optional[callable] = None,
+    ledger: dict | None = None,
+    on_ingest: callable | None = None,
 ) -> dict[str, Any]:
     """Run a single ingest pass over ``watch_dir`` and return a summary.
 
