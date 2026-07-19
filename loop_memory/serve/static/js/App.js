@@ -12,7 +12,7 @@
  * events emitted by TopBar and orchestrates API calls.
  */
 import { defineComponent, ref, computed, onMounted, onUnmounted, watch, nextTick } from 'https://unpkg.com/vue@3.4.38/dist/vue.esm-browser.prod.js';
-import { store, t, applyTheme, applyLang, loadI18n, toast } from './store.js';
+import { store, t, applyTheme, applyLang, loadI18n, toast, registerActions } from './store.js';
 import { api } from './api.js';
 
 import { TopBar } from './components/TopBar.js';
@@ -174,6 +174,14 @@ export const App = defineComponent({
     }
     function onOpenSettings() { settingsOpen.value = true; }
     function onOpenDiag() { diagOpen.value = true; }
+
+    // Expose App-level UI controls through the shared actions bus so
+    // deeply-nested components (e.g. Dashboard's source-health card)
+    // can open the settings drawer without bubbling events up the tree.
+    registerActions({
+      openSettings: () => settingsOpen.value = true,
+      openDiag:     () => diagOpen.value = true,
+    });
     function onOpenStats() { /* legacy stats popover — delegated to TopBar */ }
 
     async function onRebuildGraph() {

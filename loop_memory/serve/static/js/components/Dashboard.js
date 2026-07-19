@@ -16,7 +16,7 @@
  * - WriteGuard header shows uptime (time since first audit record).
  */
 import { defineComponent, ref, computed, onMounted, onUnmounted } from 'https://unpkg.com/vue@3.4.38/dist/vue.esm-browser.prod.js';
-import { store, t, timeAgo, toast, escapeHtml } from '../store.js';
+import { store, t, timeAgo, toast, escapeHtml, callAction } from '../store.js';
 import { api } from '../api.js';
 
 const SVGNS = 'http://www.w3.org/2000/svg';
@@ -618,6 +618,63 @@ export const Dashboard = defineComponent({
       return fmtDuration(Date.now() / 1000 - oldest);
     });
 
+    // Aggregate counts for the source-health top stats strip.
+    const sourceHealthStats = computed(() => {
+      const sh = sourceHealth.value;
+      if (!sh) return null;
+      const sources = sh.sources || [];
+      const total = sources.length;
+      const healthy = sources.filter(s => s.status === 'fresh').length;
+      const silent = sources.filter(s => s.status === 'silent' || s.status === 'never').length;
+      const mems = sources.reduce((a, b) => a + (b.count || 0), 0);
+      return { total, healthy, silent, mems };
+    });
+
+    // Parse "80872  0  com.loopmemory.codex" into {pid, exit, label, ok}
+    // so we can show whether each launchd hook is alive or has died.
+    const parsedHooks = computed(() => {
+      const sh = sourceHealth.value;
+      if (!Array.isArray(sh && sh.hooks)) return [];
+      return sh.hooks.map(line => {
+        const m = String(line).trim().match(/^(-?\d+)\s+(-?\d+)\s+(\S+)/);
+        if (!m) return { raw: line, pid: null, exit: null, label: String(line).trim(), ok: null };
+        const pid = Number(m[1]);
+        const exit = Number(m[2]);
+        const label = m[3];
+        const ok = exit >= 0 && pid > 0;
+        return { raw: line, pid, exit, label, ok };
+      });
+    });
+
+    // True when any source is degraded/silent/never — used to decide
+    // whether to show the "Run doctor / open settings" recovery strip.
+    const healthNeedsAttention = computed(() => {
+      const sh = sourceHealth.value;
+      if (!sh) return false;
+      const sources = sh.sources || [];
+      if (sources.some(s => s.status === "silent" || s.status === "never" || s.status === "stale")) return true;
+      const hooks = (sh.hooks || []).join(" ");
+      return /\b-\d+\s/.test(hooks);
+    });
+
+    // Quick-action handlers — bubble out through the shared action bus
+    // registered by App.js (openSettings → settings drawer, openDiag → doctor).
+    function openSettingsFromHealth() { try { callAction("openSettings"); } catch (_e) {} }
+    function runDoctorFromHealth()    { try { callAction("openDiag"); }     catch (_e) {} }
+
+    // Source-name → emoji icon for visual scanning.
+    function sourceIcon(name) {
+      const s = String(name || "").toLowerCase();
+      if (s.includes("codex"))                return "⌨";
+      if (s.includes("claude"))               return "✦";
+      if (s.includes("openclaw") || s.includes("claw")) return "◈";
+      if (s.includes("hermes"))               return "◆";
+      if (s.includes("gemini"))               return "✧";
+      if (s.includes("cursor"))               return "▶";
+      if (s.includes("chatgpt"))              return "☷";
+      return "●";
+    }
+
     // reactive aliases for i18n
     void computed(() => store.lang);
 
@@ -635,11 +692,12 @@ export const Dashboard = defineComponent({
       store, t, insights, loading, live, lastRefresh, lastRefreshLabel,
       weeklyReport, weeklyLoading, weeklyError, weeklyDays, loadWeekly, copyWeekly,
       weeklyMarkdownHtml,
-      llmAudit, writeGuard, sourceHealth, scoreBars,
-      resolvingId, resolvePair, contradictionKey,
+      llmAudit, writeGuard, sourceHealth, sourceHealthStats, parsedHooks,
+      healthNeedsAttention, openSettingsFromHealth, runDoctorFromHealth,
+      resolvePair, contradictionKey, resolvingId,
       KIND_TONE, STATUS_TONE, SOURCE_COLORS, STAGE_DEFS, SVGNS, ARCH,
       fmtNum, truncate, timeAgo, sparkPath, fmtDuration, shortenPath,
-      guardUptime, hist,
+      guardUptime, hist, sourceIcon,
       ring, donutArcPaths, trendPoints, ingestBars, ingestPeakHour, barsFor,
       scoreDistributionTotal, peakScoreRange,
       sourceBars, pipelineBars, lifecycleSegments,
@@ -1148,21 +1206,72 @@ export const Dashboard = defineComponent({
         <span class="right">{{ t('dash.health.sub') }}</span>
       </div>
       <div class="ins-health-row">
-        <div class="ins-health-card">
+        <div class="ins-health-card ins-health-card--rich">
           <div class="ins-health-title">
             <span>📡 {{ t('dash.health.sources') }}</span>
             <span v-if="sourceHealth" class="ins-overall-pill" :class="sourceHealth.overall">{{ sourceHealth.overall }}</span>
           </div>
-          <div class="ins-health-list" v-if="(sourceHealth && sourceHealth.sources || []).length">
-            <div v-for="s in sourceHealth.sources" :key="s.source" class="ins-health-row-item">
-              <span class="ins-overall-pill" :class="s.status" style="margin-left:0;">{{ s.status }}</span>
-              <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ s.source }}</span>
-              <span style="font-size:10.5px;color:var(--text-faint);">{{ s.hint }}</span>
+
+          <!-- 1. Top stats strip: total sources / healthy / silent / mems -->
+          <div class="ins-health-stats" v-if="sourceHealthStats">
+            <div class="ih-stat">
+              <div class="ih-stat-val">{{ fmtNum(sourceHealthStats.total) }}</div>
+              <div class="ih-stat-lbl">{{ t('dash.health.sources') }}</div>
+            </div>
+            <div class="ih-stat">
+              <div class="ih-stat-val ok">{{ fmtNum(sourceHealthStats.healthy) }}</div>
+              <div class="ih-stat-lbl">{{ t('dash.health.healthyLabel') }}</div>
+            </div>
+            <div class="ih-stat" v-if="sourceHealthStats.silent > 0">
+              <div class="ih-stat-val bad">{{ fmtNum(sourceHealthStats.silent) }}</div>
+              <div class="ih-stat-lbl">{{ t('dash.health.silentLabel') }}</div>
+            </div>
+            <div class="ih-stat">
+              <div class="ih-stat-val">{{ fmtNum(sourceHealthStats.mems) }}</div>
+              <div class="ih-stat-lbl">{{ t('dash.health.totalMems') }}</div>
             </div>
           </div>
-          <div v-if="Array.isArray(sourceHealth && sourceHealth.hooks) && sourceHealth.hooks.length" class="ins-hooks-strip">
-            <div class="muted">{{ t('dash.health.hooksLabel') }}</div>
-            <div v-for="h in sourceHealth.hooks" :key="h" class="ins-hook">{{ h }}</div>
+
+          <!-- 2. Per-source rows: badge, icon, name, mem count, last ingest, hint -->
+          <div class="ins-health-list" v-if="(sourceHealth && sourceHealth.sources || []).length">
+            <div v-for="s in sourceHealth.sources" :key="s.source" class="ins-health-row-item">
+              <span class="ins-overall-pill" :class="s.status" style="margin-left:0;">{{ t("dash.health.status." + s.status) }}</span>
+              <span class="ih-src">
+                <span class="ih-src-ico" aria-hidden="true">{{ sourceIcon(s.source) }}</span>
+                <span class="ih-src-name">{{ s.source }}</span>
+              </span>
+              <span class="ih-meta">
+                <span class="ih-meta-count"><b>{{ fmtNum(s.count) }}</b> {{ t('dash.health.count') }}</span>
+                <span class="ih-meta-time" :class="s.status">
+                  {{ t('dash.health.last') }} <b>{{ s.last_ts ? timeAgo(s.last_ts) : '—' }}</b> {{ t('dash.health.ago') }}
+                </span>
+              </span>
+            </div>
+          </div>
+
+          <!-- 3. Hook details with per-process status -->
+          <div v-if="parsedHooks.length" class="ins-hooks-strip">
+            <div class="ins-hooks-head">
+              <span class="muted">{{ t('dash.health.hooksLabel') }}</span>
+              <span class="ih-hook-ok" v-if="parsedHooks.every(h => h.ok)">● {{ t('dash.health.hookExitOk') }}</span>
+              <span class="ih-hook-bad" v-else>● {{ parsedHooks.filter(h => !h.ok).length }} / {{ parsedHooks.length }}</span>
+            </div>
+            <div v-for="h in parsedHooks" :key="h.raw" class="ins-hook-row">
+              <span class="ih-hook-dot" :class="{ ok: h.ok, bad: !h.ok }"></span>
+              <span class="ih-hook-label">{{ h.label }}</span>
+              <span class="ih-hook-pid" v-if="h.pid">{{ t('dash.health.hookPid', { pid: h.pid }) }}</span>
+              <span class="ih-hook-state" :class="{ ok: h.ok, bad: !h.ok }" v-if="h.ok === false">
+                {{ t('dash.health.hookExitBad', { code: h.exit }) }}
+              </span>
+              <span class="ih-hook-state ok" v-else-if="h.ok">{{ t('dash.health.hookExitOk') }}</span>
+            </div>
+          </div>
+
+          <!-- 4. Recovery strip: only when something needs attention -->
+          <div v-if="healthNeedsAttention" class="ins-health-recover">
+            <span class="muted">{{ t('dash.health.recoveryTitle') }}:</span>
+            <button class="btn xs ghost" @click="runDoctorFromHealth">{{ t('dash.health.recoverRun') }}</button>
+            <button class="btn xs ghost" @click="openSettingsFromHealth">{{ t('topbar.settings') }}</button>
           </div>
         </div>
         <div class="ins-wreport-card">
