@@ -19,9 +19,12 @@ export const Wiki = defineComponent({
     const pages = ref([]);
     const q = ref('');
     const sort = ref('updated_desc');
+    const scopeFilter = ref('all');  // 'all'|'global'|'codex'|...
     const loading = ref(false);
     const expanded = ref(null);
     const editing = ref(null);
+    // Scope tokens mirror WikiEditor.SCOPE_TOKENS
+    const SCOPE_TOKENS = ['global', 'codex', 'claude', 'hermes', 'openclaw'];
 
     async function refresh() {
       loading.value = true;
@@ -44,6 +47,18 @@ export const Wiki = defineComponent({
           (p.summary || '').toLowerCase().includes(needle) ||
           (p.slug || '').toLowerCase().includes(needle));
       }
+      // Scope filter: 'all' = everything; otherwise the page must
+      // either be 'global' (visible to everyone) OR include this
+      // client token in its comma-separated scope list.
+      if (scopeFilter.value && scopeFilter.value !== 'all') {
+        const tok = scopeFilter.value;
+        rows = rows.filter(p => {
+          const s = (p.scope || 'global').toString().toLowerCase();
+          if (s === 'global') return true;  // global visible to all
+          const tokens = s.split(',').map(x => x.trim()).filter(Boolean);
+          return tokens.includes(tok);
+        });
+      }
       const cmp = (a, b) => {
         if (sort.value === 'updated_desc') return (b.updated_at || 0) - (a.updated_at || 0);
         if (sort.value === 'importance_desc') return (b.importance || 0) - (a.importance || 0);
@@ -63,6 +78,16 @@ export const Wiki = defineComponent({
     function bulletsOf(p) {
       const lines = (p.body || '').split('\n');
       return lines.filter(l => l.startsWith('- '));
+    }
+    /** Render the scope chips that show which clients a page is
+     *  visible to. Always returns an array of strings; consumers
+     *  iterate as-is. */
+    function scopeTokensOf(p) {
+      const s = (p.scope || 'global').toString().toLowerCase();
+      return s.split(',').map(x => x.trim()).filter(Boolean);
+    }
+    function scopeChipLabel(tok) {
+      return ('wiki.scope.chip.' + tok);
     }
 
     function expand(id) { expanded.value = expanded.value === id ? null : id; }
@@ -194,7 +219,9 @@ export const Wiki = defineComponent({
     watch(() => store.activeTab, (id) => { if (id === 'wiki') refresh(); });
 
     return {
-      store, t, pages, q, sort, loading, visible, expanded, editing, bulletsOf,
+      store, t, pages, q, sort, scopeFilter, SCOPE_TOKENS,
+      loading, visible, expanded, editing, bulletsOf,
+      scopeTokensOf, scopeChipLabel,
       refresh, expand, edit, onNew, onExport, onImportClick, importing, exporting, saveEdit, removePage, fmtTime,
     };
   },
@@ -207,6 +234,14 @@ export const Wiki = defineComponent({
         <option value="updated_desc">{{ t('wiki.sort.updated') }}</option>
         <option value="importance_desc">{{ t('wiki.sort.importance') }}</option>
         <option value="title_asc">{{ t('wiki.sort.title') }}</option>
+      </select>
+      <select v-model="scopeFilter" :title="t('wiki.scope.hint')">
+        <option value="all">{{ t('wiki.scope.filter.all') }}</option>
+        <option value="global">{{ t('wiki.scope.filter.global') }}</option>
+        <option value="codex">{{ t('wiki.scope.filter.codex') }}</option>
+        <option value="claude">{{ t('wiki.scope.filter.claude') }}</option>
+        <option value="hermes">{{ t('wiki.scope.filter.hermes') }}</option>
+        <option value="openclaw">{{ t('wiki.scope.filter.openclaw') }}</option>
       </select>
       <span class="spacer"></span>
       <button class="tb-action ghost" :title="t('wiki.exportTip')" :disabled="exporting" @click="onExport">
@@ -232,6 +267,12 @@ export const Wiki = defineComponent({
           </span>
         </div>
         <div class="wc-summary">{{ p.summary }}</div>
+        <div class="wc-scopes" v-if="scopeTokensOf(p).length">
+          <span class="scope-pill" v-for="tok in scopeTokensOf(p)" :key="tok"
+                :class="'scope-pill-' + tok">
+            {{ t(scopeChipLabel(tok)) }}
+          </span>
+        </div>
         <ul class="wc-bullets">
           <li v-for="(b, i) in bulletsOf(p)" :key="i">{{ b.replace(/^-\\s*/, '') }}</li>
         </ul>

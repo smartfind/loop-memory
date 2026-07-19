@@ -262,3 +262,74 @@ class TieredLoadingTests(unittest.TestCase):
         for m in out["memories"]:
             self.assertEqual(m["text"], "", "L0 trims memory text")
             self.assertGreater(len(m["preview"]), 0, "preview remains")
+
+
+class WikiScopeTests(unittest.TestCase):
+    """Per-source scope on wiki_pages ('global' or comma-list of clients)."""
+
+    def setUp(self) -> None:
+        self.path = Path("/tmp/test_wiki_scope.db")
+        self.path.unlink(missing_ok=True)
+        self.store = MemoryStore(self.path)
+        # Each body carries a unique token so tests can isolate them.
+        self.page_codex = self.store.upsert_wiki_page(
+            slug="codex-only", title="Codex专属", body="- markertoken-codex",
+            scope="codex",
+        )
+        self.page_claude = self.store.upsert_wiki_page(
+            slug="claude-only", title="Claude专属", body="- markertoken-claude",
+            scope="claude",
+        )
+        self.page_global = self.store.upsert_wiki_page(
+            slug="for-all", title="通用知识", body="- markertoken-global",
+            scope="global",
+        )
+
+    def tearDown(self) -> None:
+        self.path.unlink(missing_ok=True)
+
+    def test_row_to_wiki_returns_scope(self) -> None:
+        # list_wiki_pages() searches title/body/summary, so query the
+        # unique markertoken each page's body contains.
+        for slug, want, body_token in (
+                ("codex-only", "codex", "markertoken-codex"),
+                ("claude-only", "claude", "markertoken-claude"),
+                ("for-all", "global", "markertoken-global")):
+            results = self.store.list_wiki_pages(query=body_token)
+            self.assertEqual(len(results), 1,
+                f"expected exactly 1 row for token {body_token!r}, got {len(results)}")
+            page = results[0]
+            self.assertEqual(page["slug"], slug)
+            self.assertEqual(page["scope"], want)
+
+    def test_recall_filters_wiki_by_source(self) -> None:
+        """When the caller passes source='codex', only pages whose
+        scope is 'global' or includes 'codex' should be returned.
+
+        We query for the unique markertoken each page carries so
+        trigram/LIKE noise from other wiki pages can't pollute the
+        assertion."""
+        out_codex = self.store.recall_hybrid("markertoken", limit=20,
+                                              source="codex", level=0)
+        titles_codex = {w["title"] for w in out_codex["wiki"]}
+        # codex client: sees Codex专属 (own scope) + 通用知识 (global)
+        self.assertIn("Codex专属", titles_codex)
+        self.assertIn("通用知识", titles_codex)
+        # codex client must NOT see Claude专属
+        self.assertNotIn("Claude专属", titles_codex)
+
+        out_claude = self.store.recall_hybrid("markertoken", limit=20,
+                                               source="claude", level=0)
+        titles_claude = {w["title"] for w in out_claude["wiki"]}
+        # claude client: sees Claude专属 + 通用知识, NOT Codex专属
+        self.assertIn("Claude专属", titles_claude)
+        self.assertIn("通用知识", titles_claude)
+        self.assertNotIn("Codex专属", titles_claude)
+
+    def test_recall_without_source_sees_everything(self) -> None:
+        out = self.store.recall_hybrid("markertoken", limit=20, level=0)
+        titles = {w["title"] for w in out["wiki"]}
+        # No source filter = admin view, sees all wiki pages.
+        self.assertIn("Codex专属", titles)
+        self.assertIn("Claude专属", titles)
+        self.assertIn("通用知识", titles)
