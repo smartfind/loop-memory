@@ -1228,18 +1228,13 @@ class MemoryStore:
         t_intent, t_conf = detect_temporal_intent(query)
         _now_ts = _time.time()
         if t_intent != "any" and t_conf > 0:
+            # We don't multiply here: the per-row hydration step in
+            # _hydrate_memories / _hydrate_wiki reads the actual
+            # created_at / updated_at from SQLite and recomputes
+            # the temporal score with that timestamp. The fused
+            # rows only need the intent + confidence carried through
+            # so the hydration helpers can pick them up.
             for r in fused_mem:
-                tscore = temporal_score(
-                    created_at=_now_ts,   # fallback below per-row
-                    updated_at=_now_ts,
-                    intent=t_intent,
-                    now=_now_ts,
-                    confidence=t_conf,
-                )
-                # Look up the actual row timestamp; if we don't have
-                # it in the fused payload, default to now (neutral).
-                # We'll overwrite tscore in the hydration step where
-                # we have the real created_at.
                 r.setdefault("_t_intent", t_intent)
                 r.setdefault("_t_conf", t_conf)
             for r in fused_wiki:
@@ -1350,7 +1345,7 @@ class MemoryStore:
                     "ORDER BY (COALESCE(importance,0)*0.6 + 0.4) DESC, updated_at DESC LIMIT ?",
                     (top_k,),
                 ).fetchall()
-        return [{"id": r["id"], "_score": float((r["importance"] or 0))} for r in rows]
+        return [{"id": r["id"], "_score": float(r["importance"] or 0)} for r in rows]
 
     @staticmethod
     def _source_token(name: str) -> str:
