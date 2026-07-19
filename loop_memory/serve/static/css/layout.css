@@ -642,8 +642,7 @@ section > h3 { font-size: 12px; text-transform: uppercase; color: var(--text-fai
 
 /* --- Dashboard (Insights) --- */
 .ins-wrap { padding: 0; }
-.ins-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
-.ins-head h2 { margin: 0 0 4px; font-size: 22px; font-weight: 700; }
+/* .ins-head: now defined in app.css as a compact card. */
 .ins-sub { color: var(--text-mute); font-size: 13px; }
 .ins-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; }
