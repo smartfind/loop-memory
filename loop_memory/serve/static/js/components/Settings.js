@@ -11,7 +11,7 @@
  * - Schedule includes weekday selector (visible when mode=weekly).
  */
 import { defineComponent, ref, computed, onMounted, watch, reactive } from 'https://unpkg.com/vue@3.4.38/dist/vue.esm-browser.prod.js';
-import { store, t, toast, fmtTime } from '../store.js';
+import { store, t, toast, fmtTime, callAction } from '../store.js';
 import { api, ApiError } from '../api.js';
 
 const WEEKDAYS = [
@@ -243,6 +243,12 @@ export const Settings = defineComponent({
     }, { immediate: true });
 
     function onClose() { emit('close'); }
+    function openClientHooksPanel() {
+      // Close the drawer first, then ask App.js to open the diagnostic
+      // modal which now owns the per-client "Configure all" button.
+      emit('close');
+      try { callAction('openDiag'); } catch (_e) {}
+    }
 
     return { cfg, providers, selectedProvider, onProviderChange,
              testing, testResult, onTest,
@@ -250,7 +256,7 @@ export const Settings = defineComponent({
              runs, runsLoading, refreshRuns, nextRun, nextRunText, scheduleModeHint,
              previewItems, previewLoading, previewOpen,
              statusKey, triggerKey, statLine,
-             WEEKDAYS, store, t, onClose };
+             WEEKDAYS, store, t, onClose, openClientHooksPanel };
   },
   template: /* html */ `
 <aside v-show="open" class="drawer" role="dialog" aria-label="Settings" @click.self="onClose">
@@ -266,6 +272,18 @@ export const Settings = defineComponent({
         </svg>
       </button>
     </header>
+
+    <!-- Client integration entry point — discoverable from the top of
+         settings so users find it without reading the README. -->
+    <button class="drawer-link-cta" type="button" @click="openClientHooksPanel"
+            :title="t('settings.hooks.tooltip')">
+      <span class="drawer-link-ico" aria-hidden="true">🪝</span>
+      <span class="drawer-link-text">
+        <strong>{{ t('settings.hooks.ctaTitle') }}</strong>
+        <small>{{ t('settings.hooks.ctaSub') }}</small>
+      </span>
+      <span class="drawer-link-arrow" aria-hidden="true">→</span>
+    </button>
 
     <!-- Connection (LLM info — global, used by every LLM feature) -->
     <section class="sec-connection">
