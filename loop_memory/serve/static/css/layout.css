@@ -1081,6 +1081,10 @@ section > h3 { font-size: 12px; text-transform: uppercase; color: var(--text-fai
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.3fr);
   gap: 12px;
+  /* Don't stretch the middle card (status distribution) up to match the
+     donut card — without this the short 3-row status list sits inside
+     a tall box, leaving a noticeable empty band at the bottom. */
+  align-items: start;
 }
 @media (max-width: 1100px) { .ins-distrib { grid-template-columns: 1fr; } }
 .ins-dist-card {
@@ -1096,8 +1100,9 @@ section > h3 { font-size: 12px; text-transform: uppercase; color: var(--text-fai
 .ins-legend-item .sw { width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
 .ins-legend-item .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ins-legend-item .ct { font-variant-numeric: tabular-nums; color: var(--text-mute); }
-.ins-trend-svg { width: 100%; height: 140px; }
+.ins-trend-svg { width: 100%; height: 170px; }
 .ins-trend-line { stroke-width: 2; }
+.ins-trend-axis { stroke: var(--border); stroke-width: 1; }
 
 /* --- Sources row: donut + wiki + ingest --- */
 .ins-sources-row {
