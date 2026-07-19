@@ -211,7 +211,7 @@ export const Settings = defineComponent({
     const WEEKDAY_NAMES_ZH = ['一','二','三','四','五','六','日'];
     const WEEKDAY_NAMES_EN = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
     function nextRunText() {
-      if (!cfg.schedule.enabled || (cfg.schedule.mode || 'off') === 'off') {
+      if ((cfg.schedule.mode || 'off') === 'off') {
         return t('settings.schedule.statusOff');
       }
       if (!nextRun.value) return '';
@@ -233,6 +233,14 @@ export const Settings = defineComponent({
       if (m === 'interval') return t('settings.schedule.intervalHint', { n: cfg.schedule.interval_minutes });
       return '';
     }
+
+    // The UI no longer shows an explicit "enabled" checkbox — the
+    // mode dropdown's 'off' option IS the disable. Auto-derive
+    // schedule.enabled from mode so scheduler.py keeps seeing a
+    // coherent state.
+    watch(() => cfg.schedule.mode, (m) => {
+      cfg.schedule.enabled = (m || 'off') !== 'off';
+    }, { immediate: true });
 
     function onClose() { emit('close'); }
 
@@ -314,10 +322,6 @@ export const Settings = defineComponent({
     <section class="sec-schedule">
       <h3>{{ t('settings.section.schedule') }}</h3>
       <p class="sec-scope">{{ t('settings.section.consolidationScope') }}</p>
-      <label class="row-inline" :title="t('settings.schedule.enabledHint')">
-        <input type="checkbox" v-model="cfg.schedule.enabled" />
-        <span>{{ t('settings.schedule.enabled') }}</span>
-      </label>
       <label>
         <span>{{ t('settings.schedule.mode') }}</span>
         <select v-model="cfg.schedule.mode">
@@ -329,6 +333,7 @@ export const Settings = defineComponent({
           <option value="interval">{{ t('settings.schedule.everyN') }}</option>
         </select>
       </label>
+      <p class="sched-hint mode-hint">{{ scheduleModeHint() || t('settings.schedule.offHint') }}</p>
       <label v-if="cfg.schedule.mode === 'interval'">
         <span>{{ t('settings.schedule.interval') }}</span>
         <input type="number" v-model.number="cfg.schedule.interval_minutes" min="1" max="1440" />
@@ -357,7 +362,6 @@ export const Settings = defineComponent({
         <span class="dot"></span>
         <span class="text">{{ nextRunText() }}</span>
       </div>
-      <div v-if="scheduleModeHint()" class="sched-hint">{{ scheduleModeHint() }}</div>
     </section>
 
     <!-- Behaviour — consolidation-job-only knobs -->

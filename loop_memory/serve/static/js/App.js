@@ -98,6 +98,12 @@ export const App = defineComponent({
         if (tab && ['timeline', 'dashboard', 'wiki', 'graph'].includes(tab)) {
           store.activeTab = tab;
         }
+        // Dev / screenshot helper: ?drawer=settings opens the settings
+        // drawer at boot so visual regressions can be captured without
+        // simulating a click.
+        if (usp.get('drawer') === 'settings') {
+          settingsOpen.value = true;
+        }
       } catch (e) { /* ignore */ }
     }
 
