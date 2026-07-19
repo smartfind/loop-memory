@@ -201,3 +201,64 @@ class RetrievalPrimitivesTests(unittest.TestCase):
         out = _escape_fts("vue.js")
         self.assertIn('"vue"', out)
         self.assertIn('"js"', out)
+
+
+class TieredLoadingTests(unittest.TestCase):
+    """L0/L1/L2 tiered loading on wiki/memory hydration (OpenViking)."""
+
+    def setUp(self) -> None:
+        self.path = Path("/tmp/test_loop_tiered.db")
+        self.path.unlink(missing_ok=True)
+        self.store = MemoryStore(self.path)
+        # Seed a long wiki page so truncation shows up clearly.
+        self.store.upsert_wiki_page(
+            slug="long-page", title="A long distillation",
+            body="X" * 4000,  # 4000 chars
+            summary="A brief summary",
+            importance=0.6, scope="global",
+        )
+        self.wiki_id = self.store.list_wiki_pages()[0]["id"]
+        # Seed a memory.
+        self.store.upsert_memory(
+            kind="fact", text="Z" * 1000,  # 1000 chars
+            importance=0.5, source="codex",
+        )
+
+    def tearDown(self) -> None:
+        self.path.unlink(missing_ok=True)
+
+    def test_recall_hybrid_levels_trim_wiki_body(self) -> None:
+        # Use a query that hits BOTH the wiki and the memory so we
+        # can assert level-based trimming on both payloads.
+        out = self.store.recall_hybrid("ZZZ long", limit=5, level=0)
+        body_len = sum(len(r.get("body") or "") for r in out["wiki"])
+        self.assertEqual(body_len, 0, "L0 should have no body")
+        if out["memories"]:
+            # At least one memory matched; verify L0 trimmed its text.
+            self.assertEqual(out["memories"][0]["text"], "")
+        for r in out["wiki"]:
+            self.assertEqual(r["_level"], 0)
+            # L0 has only preview and metadata.
+            self.assertIn("A long", r["preview"])
+
+    def test_recall_hybrid_l1_caps_wiki_body(self) -> None:
+        out = self.store.recall_hybrid("distillation", limit=5, level=1)
+        body_len = sum(len(r.get("body") or "") for r in out["wiki"])
+        self.assertGreater(body_len, 0)
+        # body is capped at 800 chars when level=1
+        for r in out["wiki"]:
+            self.assertLessEqual(len(r.get("body") or ""), 800)
+            self.assertEqual(r["_level"], 1)
+
+    def test_recall_hybrid_l2_returns_full_body(self) -> None:
+        out = self.store.recall_hybrid("distillation", limit=5, level=2)
+        for r in out["wiki"]:
+            self.assertGreaterEqual(len(r.get("body") or ""), 3500,
+                "L2 should preserve the full 4000-char body")
+            self.assertEqual(r["_level"], 2)
+
+    def test_memory_text_trimmed_at_l0(self) -> None:
+        out = self.store.recall_hybrid("Z", limit=5, level=0)
+        for m in out["memories"]:
+            self.assertEqual(m["text"], "", "L0 trims memory text")
+            self.assertGreater(len(m["preview"]), 0, "preview remains")

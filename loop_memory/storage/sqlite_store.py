@@ -1138,6 +1138,7 @@ class MemoryStore:
         embed_pool: int = 50,
         include: tuple[str, ...] = ("memories", "wiki", "entities"),
         bump_signals: bool = True,
+        level: int = 1,
     ) -> dict[str, list[dict]]:
         """RRF-fused recall across BM25 + semantic + entity channels.
 
@@ -1145,6 +1146,16 @@ class MemoryStore:
         scope is 'global' OR contains this source are returned. If
         ``source`` is None, no scope filter is applied (the dashboard
         + admin recall see everything).
+
+        ``level`` is the OpenViking-style tiered-loader knob:
+
+        * 0 → L0 (titles + tags + preview, never the raw body / full
+          text). Smallest payload, suitable for sidebar chips.
+        * 1 → L1 (default): summary + first 800 chars of body;
+          full text of memory rows. Recommended for the Timeline.
+        * 2 → L2: full body, full text. Use this when the UI is
+          explicitly expanding a wiki page or memory, not for
+          bulk recall.
         """
         import time as _time
         from .retrieval import (
@@ -1247,11 +1258,13 @@ class MemoryStore:
             out["memories"] = self._hydrate_memories(
                 mem_ids, fused_mem, source=source,
                 t_intent=t_intent, t_conf=t_conf, now=_now_ts,
+                level=level,
             )
         if wiki_ids:
             out["wiki"] = self._hydrate_wiki(
                 wiki_ids, fused_wiki,
                 t_intent=t_intent, t_conf=t_conf, now=_now_ts,
+                level=level,
             )
         if ent_ids:
             out["entities"] = self._hydrate_entities(ent_ids, fused_ent)
@@ -1344,7 +1357,8 @@ class MemoryStore:
         return (name or '').strip().lower().replace(' ', '-')
 
     def _hydrate_memories(self, ids: list[str], scored: list[dict], source: str | None = None,
-                           t_intent: str = "any", t_conf: float = 0.0, now: float = 0.0) -> list[dict]:
+                           t_intent: str = "any", t_conf: float = 0.0, now: float = 0.0,
+                           level: int = 1) -> list[dict]:
         if not ids:
             return []
         score_map = {r["id"]: r.get("_rrf", 0) for r in scored}
@@ -1375,10 +1389,20 @@ class MemoryStore:
                 updated_at=float(r["updated_at"] or r["created_at"] or now),
                 intent=t_intent, now=now, confidence=t_conf,
             )
+            full_text = r["text"] or ""
+            # Tiered payload (OpenViking pattern): level<=0 trims
+            # the full text down to the preview and tags only.
+            # level>=1 keeps the full text. level<=2 is the default
+            # ("L1") which keeps the text but trims the body in the
+            # corresponding wiki hydration.
+            if level <= 0:
+                payload_text = ""
+            else:
+                payload_text = full_text
             out.append({
                 "id": r["id"],
                 "kind": "memory",
-                "text": r["text"],
+                "text": payload_text,
                 "importance": float(r["importance"] or 0),
                 "score_field": float(r["score"] or 0),
                 "source": r["source"],
@@ -1387,7 +1411,8 @@ class MemoryStore:
                 "recall_count": int(r["recall_count"] or 0),
                 "score": round(base_score * t_mult, 4),
                 "_temporal_multiplier": round(t_mult, 3),
-                "preview": (r["text"] or "")[:240],
+                "preview": full_text[:240],
+                "_level": level,
             })
         # Filter by source if a scope applies. Memories are not
         # scoped (only wiki pages are), but we still respect the
@@ -1400,7 +1425,8 @@ class MemoryStore:
         return out
 
     def _hydrate_wiki(self, ids: list[str], scored: list[dict],
-                      t_intent: str = "any", t_conf: float = 0.0, now: float = 0.0) -> list[dict]:
+                      t_intent: str = "any", t_conf: float = 0.0, now: float = 0.0,
+                      level: int = 1) -> list[dict]:
         if not ids:
             return []
         score_map = {r["id"]: r.get("_rrf", 0) for r in scored}
@@ -1427,13 +1453,30 @@ class MemoryStore:
                 updated_at=float(r["updated_at"] or r["created_at"] or now),
                 intent=t_intent, now=now, confidence=t_conf,
             )
+            full_body = r["body"] or ""
+            summary_txt = r["summary"] or ""
+            # Tiered payload for wiki pages:
+            # L0 (level<=0): title + tags + preview only — body and
+            #     summary dropped entirely.
+            # L1 (default, level<=1): keep summary; cap body at 800
+            #     chars so the prompt still fits cheaply.
+            # L2 (level>=2): full body.
+            if level <= 0:
+                payload_summary = ""
+                payload_body = ""
+            elif level == 1:
+                payload_summary = summary_txt
+                payload_body = full_body[:800]
+            else:
+                payload_summary = summary_txt
+                payload_body = full_body
             out.append({
                 "id": r["id"],
                 "kind": "wiki",
                 "slug": r["slug"],
                 "title": r["title"],
-                "summary": r["summary"] or "",
-                "body": r["body"] or "",
+                "summary": payload_summary,
+                "body": payload_body,
                 "importance": float(r["importance"] or 0),
                 "tags": tags,
                 "scope": r["scope"] or "global",
@@ -1441,7 +1484,8 @@ class MemoryStore:
                 "version": int(r["version"] or 1),
                 "score": round(base_score * t_mult, 4),
                 "_temporal_multiplier": round(t_mult, 3),
-                "preview": ((r["summary"] or r["body"] or "")[:240]),
+                "preview": (summary_txt or full_body or "")[:240],
+                "_level": level,
             })
         out.sort(key=lambda m: -m["score"])
         return out
