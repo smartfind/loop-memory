@@ -2533,8 +2533,9 @@
   .ins-decay-svg .ins-decay-bar.peak { fill: var(--accent-strong, var(--accent)); opacity: 1; }
   .ins-decay-svg .ins-decay-value { fill: var(--text); font-size: 10px; text-anchor: middle; font-weight: 600; }
   .ins-decay-svg .ins-decay-label { fill: var(--text-faint); font-size: 10px; }
-  .ins-decay-svg .ins-decay-label.anchor-start { text-anchor: start; }
-  .ins-decay-svg .ins-decay-label.anchor-end   { text-anchor: end; }
+  .ins-decay-svg .ins-decay-label.anchor-start  { text-anchor: start; }
+  .ins-decay-svg .ins-decay-label.anchor-end    { text-anchor: end; }
+  .ins-decay-svg .ins-decay-label.anchor-middle { text-anchor: middle; }
   .ins-decay-svg .hist-bar { fill: var(--accent); opacity: 0.85; transition: opacity .15s; }
   .ins-decay-svg .hist-bar:hover { opacity: 1; }
   .ins-decay-svg .hist-axis { stroke: var(--border); stroke-width: 1; }
