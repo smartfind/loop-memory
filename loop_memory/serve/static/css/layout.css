@@ -1644,3 +1644,128 @@ section > h3 { font-size: 12px; text-transform: uppercase; color: var(--text-fai
   #pane-graph .graph-toolbar .spacer { display: none; }
   #pane-graph .graph-toolbar input { flex: 1; width: 140px; }
 }
+
+/* ============================================================
+   Diagnostic — client integration panel ("enable knowledge")
+   ============================================================ */
+.diag-hooks { display: flex; flex-direction: column; gap: 12px; }
+.diag-hooks-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px dashed var(--border);
+}
+.diag-hooks-head h4 {
+  margin: 0 0 2px;
+  font-size: 14px;
+  color: var(--text);
+}
+.diag-hooks-head .muted { font-size: 12px; color: var(--text-mute); margin: 0; }
+.diag-hooks-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 8px;
+}
+.diag-hook-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+}
+.diag-hook-row.ok      { border-color: rgba(16,185,129,0.35); background: color-mix(in srgb, rgba(16,185,129,0.06) 60%, var(--surface-2)); }
+.diag-hook-row.pending { border-color: rgba(245,158,11,0.45); background: color-mix(in srgb, rgba(245,158,11,0.07) 60%, var(--surface-2)); }
+.diag-hook-ico {
+  width: 22px; height: 22px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+.diag-hook-name { font-weight: 600; color: var(--text); flex: 1; min-width: 0; }
+.diag-hook-state .badge {
+  font-size: 10px; font-weight: 700;
+  padding: 2px 7px; border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.diag-hook-state .badge.ok   { background: rgba(16,185,129,0.18); color: #10b981; }
+.diag-hook-state .badge.warn { background: rgba(245,158,11,0.18); color: #f59e0b; }
+.diag-hook-state .badge.mute { background: var(--surface-2);        color: var(--text-mute); }
+
+.diag-hooks-actions {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+.diag-hooks-actions-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+.diag-hooks-actions ul {
+  margin: 4px 0 4px 18px;
+  padding: 0;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11.5px;
+  color: var(--text);
+  word-break: break-all;
+}
+.diag-hooks-actions li { margin: 2px 0; line-height: 1.45; }
+.diag-hooks-note { margin: 6px 0 0; font-size: 11.5px; }
+
+.diag-hooks-raw { margin-top: 4px; }
+.diag-hooks-raw > summary {
+  cursor: pointer;
+  font-size: 11.5px;
+  color: var(--text-mute);
+  padding: 4px 6px;
+  user-select: none;
+}
+.diag-hooks-raw > summary:hover { color: var(--text); }
+
+/* Settings drawer — "Client knowledge hooks" entry-point CTA */
+.drawer-link-cta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: calc(100% - 32px);
+  margin: 0 16px 12px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  text-align: left;
+  cursor: pointer;
+  transition: background .15s, border-color .15s, transform .15s;
+  color: inherit;
+}
+.drawer-link-cta:hover {
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface-2));
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+.drawer-link-cta:active { transform: translateY(0); }
+.drawer-link-ico {
+  width: 30px; height: 30px;
+  flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-radius: 8px;
+  font-size: 16px;
+}
+.drawer-link-text { flex: 1; min-width: 0; line-height: 1.2; }
+.drawer-link-text strong { display: block; font-size: 13px; color: var(--text); }
+.drawer-link-text small  { display: block; font-size: 11.5px; color: var(--text-mute); margin-top: 1px; }
+.drawer-link-arrow { color: var(--text-mute); font-size: 16px; }
+.drawer-link-cta:hover .drawer-link-arrow { color: var(--accent); }

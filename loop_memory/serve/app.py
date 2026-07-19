@@ -840,6 +840,70 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
             "checked_at": now,
         }
 
+    # ------------------------------------------------------------------
+    # Client integration: ``install-hooks`` endpoint.
+    #
+    # Until 2026-07 the only way to wire Codex/Claude/Hermes up to the
+    # loop-memory MCP + SessionStart inject was the CLI command
+    # ``loop-memory install-hooks`` — invisible from the web UI. Users
+    # had to find the README, the doctor command, or the wiki page.
+    # This endpoint + Diagnostic modal give the user a single button
+    # that configures every detected CLI in one shot.
+    # ------------------------------------------------------------------
+    @app.get("/api/install-hooks")
+    def install_hooks_status():
+        """Inspect detected clients + their MCP/hook state (read-only).
+
+        Returns a per-client status map + a hint of what would happen
+        if the user pressed the 'configure all' button.
+        """
+        from pathlib import Path as _P
+        try:
+            from ..cli.commands.diag import _detect_clients as _dc
+            clients = _dc()
+        except Exception as e:
+            return {"ok": False, "error": str(e), "clients": {}}
+        return {
+            "ok": True,
+            "clients": clients,
+            "configured_count": sum(1 for c in clients.values() if c.get("mcp_configured")),
+            "installed_count":  sum(1 for c in clients.values() if c.get("installed")),
+        }
+
+    @app.post("/api/install-hooks")
+    def install_hooks_run():
+        """Run ``loop-memory install-hooks`` programmatically.
+
+        Re-uses the same code path the CLI does so a UI click produces
+        an identical result to ``loop-memory install-hooks`` typed at
+        the shell. Returns the per-client actions so the UI can show
+        confirmation rows.
+        """
+        try:
+            from ..cli.commands.hooks import (
+                _install_codex, _install_claude, _install_hermes, _openclaw_hint,
+            )
+            from pathlib import Path as _P
+            home = _P.home()
+            actions = []
+            _install_codex(home, actions)
+            _install_claude(home, actions)
+            _install_hermes(home, actions)
+            _openclaw_hint(home, actions)
+            try:
+                from ..cli.commands.diag import _detect_clients as _dc
+                clients_after = _dc()
+            except Exception:
+                clients_after = {}
+            return {
+                "ok": True,
+                "actions": actions,
+                "clients": clients_after,
+                "note": "Restart your CLI to pick up the new MCP server + hooks.",
+            }
+        except Exception as e:
+            return {"ok": False, "error": str(e), "actions": []}
+
     @app.get("/api/diag")
     def diag():
         """JSON version of ``loop-memory doctor``.
