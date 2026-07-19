@@ -164,10 +164,6 @@ export const TopBar = defineComponent({
         </button>
         <IngestPopover v-show="ingestOpen" @close="ingestOpen=false" />
       </div>
-      <button class="tb-action primary" :title="t('action.consolidateNowTip')" @click="onLlmRun">
-        <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1l2.2 4.6L15 6.3l-3.5 3.4.8 4.8L8 12.4 3.7 14.5l.8-4.8L1 6.3l4.8-.7L8 1z"/></svg>
-        <span>{{ t('action.consolidateNow') }}</span>
-      </button>
     </div>
 
     <div class="tb-tools">
