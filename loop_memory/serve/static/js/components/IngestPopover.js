@@ -6,7 +6,7 @@
  * pick one or more of the registered loaders (codex / claude / hermes /
  * openclaw) and runs them, surfacing per-source results.
  */
-import { defineComponent, ref, computed } from 'https://unpkg.com/vue@3.4.38/dist/vue.esm-browser.prod.js';
+import { defineComponent, ref, computed, onMounted, watch } from 'https://unpkg.com/vue@3.4.38/dist/vue.esm-browser.prod.js';
 import { store, t, toast } from '../store.js';
 import { api } from '../api.js';
 
@@ -26,6 +26,50 @@ export const IngestPopover = defineComponent({
     const running = ref(false);
     const progress = ref('');     // human-readable status
     const results = ref(null);    // last batch results {source: {files, root, error}}
+    const activeSource = ref('codex');   // source for the force-ingest button
+    const activeInfo = ref(null);        // {name, size, mtime, age_seconds, ...} or null
+    const forceRunning = ref(false);
+    const forceResult = ref(null);
+
+    async function refreshActive() {
+      try {
+        const r = await api.activeSession(activeSource.value);
+        activeInfo.value = r && r.active ? r.active : null;
+      } catch (e) {
+        activeInfo.value = null;
+      }
+    }
+
+    async function forceActive() {
+      if (forceRunning.value) return;
+      forceRunning.value = true;
+      forceResult.value = null;
+      try {
+        const r = await api.forceIngest({
+          source: activeSource.value,
+          active_only: 'true',
+        });
+        forceResult.value = r;
+        const ok = r && r.ingested ? r.ingested : 0;
+        const err = r && r.errors ? r.errors : 0;
+        toast(
+          ok > 0
+            ? `立即摄入完成 · ${ok} 个会话 · ${r.files && r.files[0] && r.files[0].summary_items || 0} 条记忆`
+            : (err > 0 ? `摄入失败: ${err} 个错误` : '当前活跃会话暂无新内容'),
+          2800,
+        );
+        window.dispatchEvent(new CustomEvent('loop-memory:ingest-done', { detail: r }));
+        store._refreshStats = (store._refreshStats || 0) + 1;
+        await refreshActive();
+      } catch (e) {
+        toast(`摄入失败: ${e.message || e}`, 3500);
+      } finally {
+        forceRunning.value = false;
+      }
+    }
+
+    onMounted(refreshActive);
+    watch(activeSource, refreshActive);
 
     function toggle(id) {
       const s = new Set(selected.value);
@@ -79,6 +123,8 @@ export const IngestPopover = defineComponent({
     return {
       SOURCES, store, t,
       selected, running, progress, results,
+      activeSource, activeInfo, forceRunning, forceResult,
+      refreshActive, forceActive,
       toggle, selectAll, clearSelection, runAll,
       sourceDisabled,
     };
@@ -90,6 +136,32 @@ export const IngestPopover = defineComponent({
     <button class="ingest-close" @click="$emit('close')" aria-label="close">×</button>
   </div>
   <div class="ingest-sub">{{ t('action.ingestTip') }}</div>
+
+  <div class="force-bar">
+    <label class="force-source-label">
+      {{ t('action.forceSource') || '强制摄入源' }}:
+      <select v-model="activeSource" class="force-source-select">
+        <option v-for="src in SOURCES" :key="src.id" :value="src.id">{{ src.label }}</option>
+      </select>
+    </label>
+    <div v-if="activeInfo" class="force-active-info" :title="activeInfo.path">
+      <span class="force-active-name">{{ activeInfo.name }}</span>
+      <span class="force-active-meta">
+        {{ (activeInfo.size/1024).toFixed(0) }} KB ·
+        {{ activeInfo.age_seconds < 60 ? Math.round(activeInfo.age_seconds) + 's 前' : Math.round(activeInfo.age_seconds/60) + 'm 前' }}
+      </span>
+    </div>
+    <div v-else class="force-active-info dim">
+      {{ t('action.forceNoActive') || '当前没有活跃会话' }}
+    </div>
+    <button type="button" class="force-run"
+            :disabled="forceRunning || !activeInfo"
+            @click="forceActive"
+            :title="t('action.forceTip') || '跳过 idle 等待，立即把当前活跃会话的更新摄入'">
+      <span v-if="forceRunning">{{ t('action.forceRunning') || '摄入中…' }}</span>
+      <span v-else>{{ t('action.forceIngest') || '⚡ 立即摄入活跃会话' }}</span>
+    </button>
+  </div>
 
   <div class="ingest-list">
     <label v-for="src in SOURCES" :key="src.id"

@@ -578,5 +578,10 @@
   "wiki.importTip": "Import wiki pages from a Markdown or JSON file (merged by slug)",
   "wiki.importSuccess": "Import done — {created} created, {updated} updated, {skipped} skipped",
   "wiki.importEmpty": "No pages recognised in the file",
-  "wiki.importError": "Import failed: {msg}"
+  "wiki.importError": "Import failed: {msg}",
+  "action.forceIngest": "⚡ Force-ingest active session",
+  "action.forceSource": "Source",
+  "action.forceNoActive": "No active session",
+  "action.forceRunning": "Ingesting…",
+  "action.forceTip": "Skip the idle wait and ingest the most-recently-modified session now"
 }

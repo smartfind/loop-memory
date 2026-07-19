@@ -385,6 +385,56 @@ html, body, #app { height: 100%; }
   letter-spacing: .02em;
 }
 .topbar .tb-ingest-menu .ingest-run:disabled { background: color-mix(in srgb, var(--accent) 50%, var(--surface-2)); cursor: not-allowed; }
+/* Force-ingest panel — sits above the source list in the IngestPopover. */
+.topbar .tb-ingest-menu .force-bar {
+  display: grid; grid-template-columns: 1fr; gap: 6px;
+  padding: 8px 4px 10px;
+  border-bottom: 1px dashed var(--border);
+  margin-bottom: 8px;
+}
+.topbar .tb-ingest-menu .force-source-label {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px; color: var(--text-mute); font-weight: 600;
+}
+.topbar .tb-ingest-menu .force-source-select {
+  font-size: 11.5px; padding: 3px 6px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface); color: var(--text);
+  font-family: inherit;
+}
+.topbar .tb-ingest-menu .force-active-info {
+  display: flex; gap: 8px; align-items: baseline;
+  font-size: 11px; color: var(--text-soft);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  padding: 6px 8px; border-radius: 7px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.topbar .tb-ingest-menu .force-active-info.dim {
+  opacity: .55; background: transparent; color: var(--text-faint);
+  font-family: inherit; font-style: italic;
+}
+.topbar .tb-ingest-menu .force-active-name { color: var(--text); font-weight: 600; flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; }
+.topbar .tb-ingest-menu .force-active-meta { color: var(--text-faint); font-size: 10.5px; flex-shrink: 0; }
+.topbar .tb-ingest-menu .force-run {
+  width: 100%;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #f59e0b, #f97316);
+  color: white;
+  font-size: 12.5px; font-weight: 700;
+  cursor: pointer;
+  letter-spacing: .02em;
+  box-shadow: 0 2px 8px -3px rgba(245, 158, 11, .55);
+  transition: filter .12s ease, transform .05s ease;
+}
+.topbar .tb-ingest-menu .force-run:hover { filter: brightness(1.08); }
+.topbar .tb-ingest-menu .force-run:active { transform: scale(.985); }
+.topbar .tb-ingest-menu .force-run:disabled {
+  background: color-mix(in srgb, var(--accent) 35%, var(--surface-2));
+  cursor: not-allowed; box-shadow: none;
+}
 .topbar .tb-utility-group {
   display: inline-flex;
   align-items: center;

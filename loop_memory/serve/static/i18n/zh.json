@@ -578,5 +578,10 @@
   "wiki.importTip": "从 Markdown 或 JSON 文件导入知识页面（按 slug 合并）",
   "wiki.importSuccess": "导入完成：新增 {created}、更新 {updated}、跳过 {skipped}",
   "wiki.importEmpty": "未识别到任何页面",
-  "wiki.importError": "导入失败：{msg}"
+  "wiki.importError": "导入失败：{msg}",
+  "action.forceIngest": "⚡ 立即摄入活跃会话",
+  "action.forceSource": "数据源",
+  "action.forceNoActive": "当前没有活跃会话",
+  "action.forceRunning": "摄入中…",
+  "action.forceTip": "跳过 idle 等待，立即把当前活跃会话的更新摄入"
 }

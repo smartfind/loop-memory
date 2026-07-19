@@ -1250,6 +1250,195 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
             ingested += 1
         return {"files": ingested, "root": str(root)}
 
+    @app.post("/api/admin/watcher/force-ingest")
+    def watcher_force_ingest(
+        source: str | None = None,
+        path: str | None = None,
+        idle_seconds: float = 0.0,
+        active_only: bool = False,
+    ):
+        """Trigger a one-shot ingest pass for a watcher directory.
+
+        This is the manual escape hatch for cases where the persistent
+        launchd watcher is still waiting for the idle window (long
+        active sessions whose file mtime keeps refreshing).
+
+        Parameters:
+          source         - one of "codex" | "claude" | "hermes" |
+                           "openclaw". If omitted, we auto-detect from
+                           the path (path's leaf must contain the
+                           source name) or default to "codex".
+          path           - explicit watch directory. If omitted, uses
+                           the default watch dir for the given source.
+          idle_seconds   - require files to have been size-stable for
+                           at least this long before ingesting.
+                           Default 0 = ingest any file that has new
+                           content vs the last successful ingest.
+          active_only    - if True, restrict to the most-recently
+                           modified .jsonl file under the watch dir
+                           (the "currently active" session). Useful
+                           for the UI button: "force the active Codex
+                           session to ingest now".
+
+        Returns a per-file breakdown so the UI can show what happened.
+        """
+        from ..backends.embedding import HashingEmbedder
+        from ..ingest.loader import default_paths, get_loader
+        from ..ingest.pipeline import MemoryPipeline
+        from .watcher import run_once
+
+        # Resolve source
+        src = (source or "").strip().lower() or None
+        if not src and path:
+            # Try to infer from path: ~/.codex/sessions → codex
+            p_lower = path.lower()
+            for candidate in ("codex", "claude", "hermes", "openclaw"):
+                if f"/{candidate}/" in p_lower or p_lower.endswith(f"/{candidate}"):
+                    src = candidate
+                    break
+        if not src:
+            src = "codex"  # default fallback for the common case
+
+        # Resolve watch dir
+        if path:
+            root = Path(path).expanduser()
+        else:
+            defaults = default_paths()
+            if src not in defaults:
+                return {"error": f"unknown source {src!r}", "sources": list(defaults.keys())}
+            # default_paths may return a list for openclaw (sessions + memory)
+            default_val = defaults[src]
+            if isinstance(default_val, list):
+                # For multi-path sources, force-ingest against the
+                # first path; callers wanting a specific sub-dir
+                # should pass ``path`` explicitly.
+                root = Path(default_val[0]).expanduser()
+            else:
+                root = Path(default_val).expanduser()
+
+        loader = get_loader(src)
+        pipeline = MemoryPipeline(store, embedder=HashingEmbedder(dim=64))
+
+        # active_only: pick the most-recently-modified transcript file
+        # under root (or fall back to the dir itself).
+        if active_only:
+            try:
+                candidates = [
+                    p for p in loader.discover(root)
+                    if p.is_file() and p.name != ".loop_memory_seen.json"
+                ]
+            except FileNotFoundError:
+                candidates = []
+            if not candidates:
+                return {
+                    "source": src, "root": str(root),
+                    "active_only": True,
+                    "scanned": 0, "ingested": 0, "skipped": 0, "errors": 0,
+                    "files": [], "note": "no transcripts under watch dir",
+                }
+            candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+            target = candidates[0]
+            # Build a tiny virtual dir containing only this file by
+            # running run_once against a temp dir is overkill — instead
+            # we manually load + ingest just this one file but still
+            # update the ledger.
+            from .watcher import _load_ledger, _ledger_path, _save_ledger
+            ledger_path = _ledger_path(root)
+            ledger = _load_ledger(ledger_path)
+            key = str(target)
+            prev = ledger.get(key)
+            try:
+                st = target.stat()
+            except FileNotFoundError:
+                return {"source": src, "path": key, "error": "file disappeared"}
+            file_result = {
+                "path": key, "size": st.st_size, "mtime": st.st_mtime,
+                "previous_ingested_at": (prev or {}).get("ingested_at"),
+            }
+            try:
+                session = loader.load_one(target)
+            except Exception as e:
+                file_result.update({"status": "error", "error": f"{type(e).__name__}: {e}"})
+                return {"source": src, "root": str(root), "active_only": True,
+                        "scanned": 1, "ingested": 0, "skipped": 0, "errors": 1,
+                        "files": [file_result]}
+            if session is None:
+                file_result["status"] = "skipped"
+                file_result["reason"] = "loader returned None"
+                return {"source": src, "root": str(root), "active_only": True,
+                        "scanned": 1, "ingested": 0, "skipped": 1, "errors": 0,
+                        "files": [file_result]}
+            try:
+                pipe_result = pipeline.run(session)
+            except Exception as e:
+                file_result.update({"status": "error", "error": f"{type(e).__name__}: {e}"})
+                return {"source": src, "root": str(root), "active_only": True,
+                        "scanned": 1, "ingested": 0, "skipped": 0, "errors": 1,
+                        "files": [file_result]}
+            n_items = len(pipe_result.summary_items)
+            now = time.time()
+            ledger[key] = {
+                "sig": [st.st_mtime, st.st_size],
+                "first_seen": (prev or {}).get("first_seen", now),
+                "last_mtime": st.st_mtime,
+                "size": st.st_size,
+                "last_size_change_at": now,
+                "ingested_at": now,
+            }
+            _save_ledger(ledger_path, ledger)
+            file_result.update({"status": "ingested", "summary_items": n_items})
+            return {
+                "source": src, "root": str(root), "active_only": True,
+                "scanned": 1, "ingested": 1, "skipped": 0, "errors": 0,
+                "files": [file_result],
+            }
+
+        result = run_once(loader, root, pipeline, idle_seconds=idle_seconds)
+        result["source"] = src
+        result["root"] = str(root)
+        result["active_only"] = False
+        return result
+
+    @app.get("/api/admin/watcher/active-session")
+    def watcher_active_session(source: str = "codex"):
+        """Return the most-recently-modified transcript file under the
+        source's default watch dir. Used by the UI button to show
+        "currently active session: <name>" next to the Force-ingest
+        action.
+        """
+        from ..ingest.loader import default_paths, get_loader
+        defaults = default_paths()
+        if source not in defaults:
+            return {"error": f"unknown source {source!r}", "sources": list(defaults.keys())}
+        root = defaults[source]
+        if isinstance(root, list):
+            root = root[0]
+        root = Path(root).expanduser()
+        loader = get_loader(source)
+        try:
+            candidates = [
+                p for p in loader.discover(root)
+                if p.is_file() and p.name != ".loop_memory_seen.json"
+            ]
+        except FileNotFoundError:
+            candidates = []
+        if not candidates:
+            return {"source": source, "root": str(root), "active": None}
+        candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        top = candidates[0]
+        st = top.stat()
+        return {
+            "source": source,
+            "root": str(root),
+            "active": {
+                "path": str(top),
+                "name": top.name,
+                "size": st.st_size,
+                "mtime": st.st_mtime,
+                "age_seconds": time.time() - st.st_mtime,
+            },
+        }
+
 
 
     @app.get("/api/signals")
