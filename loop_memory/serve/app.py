@@ -2365,6 +2365,72 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
         if not ok:
             raise HTTPException(404, "wiki page not found")
         return {"ok": True}
+    @app.post("/api/wiki/bulk-scope")
+    def wiki_bulk_scope(body: dict):
+        """Set the ``scope`` field on multiple wiki pages in one shot.
+
+        Drives the master 全局 toggle in the Wiki tab. When the user
+        flips the toolbar toggle ON, we bulk-update every page to
+        ``scope="global"``. When they flip a single page OFF while the
+        master is ON, the master auto-flips OFF — but this endpoint
+        is also exposed so the front-end can keep the bulk fast-path
+        (single round-trip) without iterating over PUTs.
+
+        Body:
+            ``scope`` (str, required) — the new scope value. Allowed
+                tokens: ``global``, ``codex``, ``claude``, ``hermes``,
+                ``openclaw``. Comma-separated for per-client lists.
+            ``page_ids`` (list[str], optional) — when provided, only
+                these pages are updated. When omitted, ALL pages are
+                updated. Use the explicit list for the "user
+                manually toggled one off" path, omit for the master
+                toggle's bulk-ON case.
+        """
+        if not isinstance(body, dict):
+            raise HTTPException(400, "body must be an object")
+        raw_scope = (body.get("scope") or "").strip().lower()
+        if not raw_scope:
+            raise HTTPException(400, "scope is required")
+        valid_tokens = {"global", "all", "codex", "claude", "hermes", "openclaw"}
+        tokens = [t.strip() for t in raw_scope.split(",") if t.strip()]
+        if not tokens or not all(t in valid_tokens for t in tokens):
+            raise HTTPException(400, f"invalid scope: {raw_scope!r}")
+        normalised = ",".join(dict.fromkeys(tokens))
+        page_ids = body.get("page_ids")
+        if page_ids is not None:
+            if not isinstance(page_ids, list) or not all(
+                isinstance(x, str) for x in page_ids
+            ):
+                raise HTTPException(400, "page_ids must be a list of strings")
+            targets = page_ids
+        else:
+            # No explicit list = apply to every page. Used by the
+            # master "全局" toggle's bulk-ON path.
+            targets = [p["id"] for p in store.list_wiki_pages(limit=10000)]
+        updated = 0
+        for pid in targets:
+            existing = store.get_wiki_page(pid)
+            if not existing:
+                continue
+            # Avoid bumping updated_at / version when scope is
+            # already at the target value.
+            if (existing.get("scope") or "global") == normalised:
+                updated += 1
+                continue
+            store.upsert_wiki_page(
+                slug=existing["slug"],
+                title=existing["title"],
+                body=existing["body"],
+                summary=existing.get("summary") or "",
+                tags=existing.get("tags") or [],
+                importance=existing.get("importance") or 0.5,
+                evidence_ids=existing.get("evidence_ids") or [],
+                run_id=existing.get("run_id"),
+                scope=normalised,
+            )
+            updated += 1
+        return {"ok": True, "updated": updated, "scope": normalised}
+
 
     @app.post("/api/wiki/{page_id}/resummarize")
     def wiki_resummarize(page_id: str):

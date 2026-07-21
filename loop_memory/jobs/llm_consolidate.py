@@ -427,6 +427,42 @@ class LLMConsolidator:
         cls = type(self.provider).__name__
         return cls in ("RuleBasedProvider",)
 
+    def _scope_for_evidence(self, evidence_ids: list[str]) -> str:
+        """Resolve the default scope token for a freshly-distilled page.
+
+        Looks at the source field of each evidence memory and returns
+        a deduplicated, comma-joined list of known client tokens
+        (``codex``/``claude``/``hermes``/``openclaw``). Returns
+        ``"global"`` only as a last-resort fallback when the
+        evidence is empty or its memories all come from an unknown
+        source — keeps the legacy behaviour for those edge cases.
+
+        Why not just ``"global"``? The UI's per-card 全局 toggle
+        defaults to OFF. Forcing the toggle ON for every distilled
+        page would silently cross-share a user's per-client memory
+        with every other agent, which is exactly what the user
+        reported as confusing.
+        """
+        valid = {"codex", "claude", "hermes", "openclaw"}
+        if not evidence_ids:
+            return "global"
+        tokens: list[str] = []
+        try:
+            # ``list_memories`` already accepts an ``ids=`` filter — use
+            # it rather than reaching for a separate helper.
+            rows = self.store.list_memories(
+                ids=list(evidence_ids), limit=max(1, len(evidence_ids))
+            )
+        except Exception:
+            rows = []
+        for mem in rows or []:
+            ms = (getattr(mem, "source", None) or "").strip().lower()
+            if ms in valid and ms not in tokens:
+                tokens.append(ms)
+        if not tokens:
+            return "global"
+        return ",".join(tokens)
+
     def _synth_wiki_pages(
         self,
         memories: list[StoredMemory],
@@ -555,10 +591,18 @@ class LLMConsolidator:
             summary = (p.get("summary") or "").strip()[:400]
 
             existing = self.store.get_wiki_page_by_slug(slug)
+            # Default scope = the source clients of the evidence
+            # memories that this wiki page is distilled from, NOT
+            # 'global'. This matches the UI's per-card 全局 toggle
+            # default (off) and gives users a deliberate opt-in for
+            # cross-client sharing. Existing pages are preserved as-is
+            # so this change only affects newly-distilled pages.
+            scope_val = self._scope_for_evidence(evidence)
             self.store.upsert_wiki_page(
                 slug=slug, title=title, body=body, summary=summary,
                 tags=tags, importance=importance, evidence_ids=evidence,
                 run_id=run_id,
+                scope=scope_val,
             )
             if existing is None:
                 created += 1
@@ -620,10 +664,16 @@ class LLMConsolidator:
             )
             evidence = [m.id for m in items][:50]
             existing = self.store.get_wiki_page_by_slug(slug)
+            # Echo-mode / rules path also defaults to NOT global —
+            # scope = the source clients of the candidate memories
+            # that formed this page. Matches the LLM-path default
+            # and the UI's per-card 全局 toggle default (off).
+            scope_val = self._scope_for_evidence(evidence)
             self.store.upsert_wiki_page(
                 slug=slug, title=title, body=body, summary=summary,
                 tags=tags, importance=importance, evidence_ids=evidence,
                 run_id=run_id,
+                scope=scope_val,
             )
             if existing is None:
                 created += 1
