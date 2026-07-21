@@ -93,19 +93,54 @@ watch(() => [store.lang, store.theme, store.showZh], () => {
 const _i18n = reactive({ en: {}, zh: {} });
 let _i18nLoaded = false;
 
+/**
+ * Read the inline i18n JSON that the server injects into ``<script
+ * type="application/json" id="loop-i18n-en">`` / ``id="loop-i18n-zh"``
+ * (see ``serve/app.py`` index route). Reading these SYNCHRONOUSLY at
+ * module init means Vue's first render already has the strings — no
+ * flash of raw keys like ``tab.wiki`` while the JSON fetch is in
+ * flight, which the user reported as "页面先变英文再转中文".
+ *
+ * Returns true if at least one dict was populated inline.
+ */
+function _readInlineI18n() {
+  if (typeof document === 'undefined') return false;
+  let ok = false;
+  for (const lang of ['en', 'zh']) {
+    const tag = document.getElementById('loop-i18n-' + lang);
+    if (!tag) continue;
+    try {
+      const dict = JSON.parse(tag.textContent || '{}');
+      Object.assign(_i18n[lang], dict);
+      ok = true;
+    } catch (_e) { /* ignore parse errors — fetch fallback below */ }
+  }
+  return ok;
+}
+
+// Synchronously hydrate from inline JSON before Vue mounts. This is the
+// critical line that prevents the "flash of English keys" the user
+// complained about on hard refresh.
+if (_readInlineI18n()) {
+  _i18nLoaded = true;
+}
+
 export async function loadI18n() {
   if (_i18nLoaded) return _i18n;
-  // Load in parallel; ignore individual failures so a single missing file
-  // doesn't break the whole UI.
-  // ``cache: 'no-store'`` bypasses the browser HTTP cache so that a
-  // user who just edited an i18n string and hit reload actually sees
-  // the new copy — Safari in particular is aggressive about caching
-  // small JSON files served with ``Cache-Control: max-age=3600``.
+  // Fetch the JSON files for any keys that weren't inlined (e.g. when
+  // the page is opened from a different host / dev mode). ``cache:
+  // 'no-store'`` bypasses the browser HTTP cache so that a user who
+  // just edited an i18n string and hit reload actually sees the new
+  // copy — Safari in particular is aggressive about caching small
+  // JSON files served with ``Cache-Control: max-age=3600``.
   const [en, zh] = await Promise.all([
     fetch('static/i18n/en.json', { cache: 'no-store' }).then(r => r.ok ? r.json() : {}).catch(() => ({})),
     fetch('static/i18n/zh.json', { cache: 'no-store' }).then(r => r.ok ? r.json() : {}).catch(() => ({})),
   ]);
-  // Assign into the reactive so subscribers re-render.
+  // Merge on top of any inline dicts (the inline version usually wins
+  // since it's what the server served for this exact render, but if
+  // the user is in a stale browser cache and we got fresher JSON from
+  // the network, that's the better source).
   Object.assign(_i18n.en, en);
   Object.assign(_i18n.zh, zh);
   _i18nLoaded = true;
@@ -145,6 +180,12 @@ export function applyTheme() {
 
 export function applyLang() {
   document.documentElement.setAttribute('data-lang', store.lang);
+  // Also update the standard ``lang`` attribute so screen readers,
+  // browser translation prompts, and search-engine hints reflect the
+  // actual content language. ``data-lang`` is kept for CSS selectors
+  // that key off it.
+  const htmlLang = store.lang === 'zh' ? 'zh-CN' : 'en';
+  document.documentElement.setAttribute('lang', htmlLang);
 }
 
 // Apply theme/lang to <html> reactively.

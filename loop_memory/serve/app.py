@@ -119,10 +119,63 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
 
     @app.get("/")
     def index():
+        """Serve the dashboard HTML with the i18n JSONs inlined.
+
+        The dashboard renders its UI from string keys like
+        ``tab.wiki`` looked up via ``t()`` in ``store.js``. Until the
+        i18n JSON files finish loading, ``t()`` would return the raw
+        key (e.g. ``tab.wiki``) — which the user perceived as
+        English-looking code-style text on every hard refresh
+        ("页面先变英文再转中文").
+
+        The fix is to inline both dictionaries as ``<script
+        type="application/json">`` tags in the HTML so ``store.js``
+        can read them synchronously at module init time, before Vue
+        even mounts. The total inline payload is ~60KB (the two
+        JSON files), which is acceptable for a single full-page
+        load — and crucially, it eliminates the hydration race.
+
+        Reads the JSONs from disk on every request so an i18n edit
+        is picked up on the next hard refresh without a server
+        restart. Cheap (<1ms on local SSD).
+        """
         index_path = static_dir / "index.html"
         if not index_path.exists():
             return JSONResponse({"error": "index.html missing"}, status_code=500)
-        return FileResponse(str(index_path))
+        try:
+            html = index_path.read_text(encoding="utf-8")
+        except Exception:
+            return FileResponse(str(index_path))
+        try:
+            en_json = (static_dir / "i18n" / "en.json").read_text(encoding="utf-8")
+            zh_json = (static_dir / "i18n" / "zh.json").read_text(encoding="utf-8")
+            # Escape any ``</script>`` that could appear inside the JSON
+            # (none today, but a single careless edit shouldn't break
+            # the whole page). The standard escape is ``<\/script>``.
+            en_safe = en_json.replace("</script>", "<\\/script>")
+            zh_safe = zh_json.replace("</script>", "<\\/script>")
+            # Inject the two payloads right before main.js so they
+            # exist when store.js evaluates.
+            inject = (
+                '<script type="application/json" id="loop-i18n-en">'
+                + en_safe + "</script>"
+                '<script type="application/json" id="loop-i18n-zh">'
+                + zh_safe + "</script>"
+            )
+            marker = '<script type="module" src="static/js/main.js"></script>'
+            if marker in html:
+                html = html.replace(marker, inject + marker, 1)
+            else:
+                # Fallback: inject before </body>
+                html = html.replace("</body>", inject + "</body>", 1)
+        except Exception:
+            # If the i18n files are missing or unreadable, fall back
+            # to the bare HTML — ``store.js`` will then load them
+            # over HTTP (with the old flash behaviour, but at least
+            # the page still renders).
+            pass
+        from fastapi.responses import HTMLResponse  # type: ignore
+        return HTMLResponse(html)
 
     @app.get("/api/insights")
     def insights():
