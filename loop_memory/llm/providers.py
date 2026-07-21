@@ -460,8 +460,33 @@ def validate_config(cfg: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
         out["base_url"] = spec.default_base_url
     if not isinstance(out.get("schedule"), dict):
         out["schedule"] = default_config()["schedule"]
-    if not isinstance(out.get("behaviour"), dict):
-        out["behaviour"] = default_config()["behaviour"]
+    # Defensive deep-clean of the schedule dict. Earlier versions of
+    # the Settings UI sent the full config payload through
+    # ``POST /api/admin/llm/schedule`` — a flat-merge endpoint that
+    # nested ``schedule`` and ``behaviour`` under
+    # ``cfg.schedule.schedule`` / ``cfg.schedule.behaviour`` while
+    # leaving the top-level ``enabled`` / ``mode`` stale. Saved rows
+    # built up that way can still be in the store today. Rebuilding
+    # the schedule from a clean default + the known keys drops any
+    # nested pollution on the next save and prevents it from
+    # spreading to the scheduler or being shown back to the user.
+    _sched_keys = set(default_config()["schedule"].keys())
+    clean_sched = dict(default_config()["schedule"])
+    if isinstance(out.get("schedule"), dict):
+        for k in _sched_keys:
+            if k in out["schedule"]:
+                clean_sched[k] = out["schedule"][k]
+    out["schedule"] = clean_sched
+    # Same treatment for behaviour — drop stray top-level / nested
+    # keys (e.g. ``schedule`` mistakenly merged in) so behaviour
+    # only ever carries the canonical knobs.
+    _beh_keys = set(default_config()["behaviour"].keys())
+    clean_beh = dict(default_config()["behaviour"])
+    if isinstance(out.get("behaviour"), dict):
+        for k in _beh_keys:
+            if k in out["behaviour"]:
+                clean_beh[k] = out["behaviour"][k]
+    out["behaviour"] = clean_beh
     beh = out["behaviour"]
     try:
         beh["batch_size"] = max(1, min(int(beh.get("batch_size") or 50), 500))
