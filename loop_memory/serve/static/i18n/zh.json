@@ -636,5 +636,16 @@
   "wiki.scope.chip.claude": "🟪 Claude",
   "wiki.scope.chip.hermes": "🟧 Hermes",
   "wiki.scope.chip.openclaw": "🟩 OpenClaw",
-  "wiki.scope.summary": "可见：{scopes}"
+  "wiki.scope.summary": "可见：{scopes}",
+  "settings.ingest.saved": "采集频率已保存（空闲 {idle}s，扫描 {poll}s）。监听器下次循环生效。",
+  "settings.ingest.saveFail": "保存失败：{msg}",
+  "settings.ingest.resetToDefaults": "把空闲阈值和扫描间隔恢复为 5 分钟 / 5 秒",
+  "settings.ingest.idle": "写入空闲阈值（秒）",
+  "settings.ingest.pollHint": "监听器多久扫一次目录。默认 {def} 秒。过大延迟会偏高，过小会增加 stat() 频率。",
+  "settings.ingest.poll": "目录扫描间隔（秒）",
+  "settings.ingest.scope": "控制后台监听器多久扫一次目录、多久确认一条会话已写完再入库。值越大越省盘，写完后被召回的延迟也越大。",
+  "settings.ingest.idleHint": "会话文件大小连续 {min}–{max} 秒不再增长才入库；默认 {def} 秒（5 分钟）。过短会把长会话切成多段。",
+  "settings.ingest.liveHint": "已生效",
+  "settings.section.ingest": "采集频率",
+  "settings.ingest.resetDefaults": "恢复默认"
 }
