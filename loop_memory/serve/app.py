@@ -1415,6 +1415,93 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
         return {"queued": False, "result": result}
 
     @app.post("/api/admin/ingest")
+    @app.get("/api/admin/ingest/config")
+    def ingest_config_get():
+        """Return the watcher's ingest cadence settings.
+
+        These knobs drive the background file-system watcher that
+        auto-ingests finished transcripts from Codex / Claude / Hermes
+        / OpenClaw. Exposing them via the API lets the Settings
+        drawer tune the cadence without regenerating the launchd
+        plist — the watcher reads from the settings store every
+        few iterations and picks up changes automatically.
+
+        Defaults are 5 minutes idle (size-stable wait) and 5-second
+        poll. Users can dial up for less aggressive scanning (good
+        for SSDs and long-lived sessions) or down for snappier
+        recall.
+        """
+        from ..serve.watcher import DEFAULT_IDLE_SECONDS, DEFAULT_POLL_SECONDS
+        cfg = store.get_setting("ingest", {}) or {}
+        return {
+            "idle_seconds": float(cfg.get("idle_seconds", DEFAULT_IDLE_SECONDS)),
+            "poll_seconds": float(cfg.get("poll_seconds", DEFAULT_POLL_SECONDS)),
+            "defaults": {
+                "idle_seconds": DEFAULT_IDLE_SECONDS,
+                "poll_seconds": DEFAULT_POLL_SECONDS,
+            },
+            "notes": {
+                "idle_seconds": "size-stable wait before a transcript is "
+                                "considered finished and ingested (seconds)",
+                "poll_seconds": "how often the watcher scans the directory "
+                                "(seconds)",
+                "min_idle_seconds": 30,
+                "min_poll_seconds": 1,
+                "max_idle_seconds": 3600,
+                "max_poll_seconds": 60,
+            },
+        }
+
+    @app.post("/api/admin/ingest/config")
+    def ingest_config_post(body: dict):
+        """Persist new ingest cadence settings.
+
+        Body fields (all optional):
+          * ``idle_seconds`` (int|float) — size-stable wait before ingest
+          * ``poll_seconds`` (int|float) — directory scan period
+
+        Validation enforces sane bounds (>= 30s for idle to avoid
+        fragmenting long sessions, <= 3600s so something eventually
+        ingests; >= 1s for poll, <= 60s to bound stat() churn).
+        Settings persist immediately and the running watcher picks
+        them up on the next reload tick (≤ 30s later).
+        """
+        if not isinstance(body, dict):
+            from fastapi import HTTPException
+            raise HTTPException(400, "body must be an object")
+        from ..serve.watcher import DEFAULT_IDLE_SECONDS, DEFAULT_POLL_SECONDS
+        current = store.get_setting("ingest", {}) or {}
+        idle = body.get("idle_seconds", current.get("idle_seconds", DEFAULT_IDLE_SECONDS))
+        poll = body.get("poll_seconds", current.get("poll_seconds", DEFAULT_POLL_SECONDS))
+        try:
+            idle = float(idle)
+            poll = float(poll)
+        except (TypeError, ValueError):
+            from fastapi import HTTPException
+            raise HTTPException(400, "idle_seconds and poll_seconds must be numeric")
+        # Bounds — see API docstring.
+        if idle < 30 or idle > 3600:
+            from fastapi import HTTPException
+            raise HTTPException(
+                400,
+                f"idle_seconds must be in [30, 3600] (got {idle}); "
+                "use longer intervals to reduce disk wear and avoid "
+                "fragmenting long sessions",
+            )
+        if poll < 1 or poll > 60:
+            from fastapi import HTTPException
+            raise HTTPException(
+                400,
+                f"poll_seconds must be in [1, 60] (got {poll}); "
+                "the directory scan itself is cheap (stat()) but it "
+                "still runs once per tick",
+            )
+        new_cfg = dict(current)
+        new_cfg["idle_seconds"] = idle
+        new_cfg["poll_seconds"] = poll
+        store.set_setting("ingest", new_cfg)
+        return {"ok": True, "ingest": new_cfg}
+
     def ingest(source: str, path: str | None = None):
         from ..backends.embedding import HashingEmbedder
         from ..ingest.loader import default_paths, get_loader

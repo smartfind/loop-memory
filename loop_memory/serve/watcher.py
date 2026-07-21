@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -33,6 +34,17 @@ from ..ingest.loader import BaseLoader
 from ..ingest.pipeline import MemoryPipeline
 
 log = logging.getLogger("loop_memory.watcher")
+# Make ``watching ...`` / ``watcher settings reloaded: ...`` lines
+# visible in the hook process log without requiring every caller to
+# configure logging first. ``basicConfig`` is a no-op once the root
+# logger already has a handler, so importing this module from the
+# serve app or from tests doesn't disturb their log formatting.
+if not logging.getLogger().handlers:
+    _level_name = os.environ.get("LOOP_MEMORY_LOG_LEVEL", "INFO").upper()
+    logging.basicConfig(
+        level=getattr(logging, _level_name, logging.INFO),
+        format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
+    )
 
 
 def _ledger_path(watch_dir: Path) -> Path:
@@ -55,14 +67,49 @@ def _save_ledger(path: Path, ledger: dict) -> None:
         log.exception("failed to persist ingest ledger at %s", path)
 
 
+# Default knobs when the user has no persisted ingest settings yet.
+# We default to 5 minutes (300s) of size-stable idle before ingesting:
+# shorter intervals fragment long conversations into multiple partial
+# memories, longer intervals delay recall. The user can dial this up
+# or down from Settings → 采集频率. ``poll_seconds`` defaults to 5
+# (vs the previous 2.0) to cut down on stat() churn on the watched
+# directory — stat is cheap on SSD but very cheap on the order of
+# seconds; not the order of milliseconds. The user can always tune
+# both via the Settings drawer.
+DEFAULT_IDLE_SECONDS = 300.0
+DEFAULT_POLL_SECONDS = 5.0
+
+
+def _read_ingest_settings(store) -> tuple[float, float]:
+    """Pull ``ingest.idle_seconds`` / ``ingest.poll_seconds`` from the
+    settings store. Missing keys fall back to module defaults.
+
+    Returning floats (not e.g. ints) keeps the math inside the loop
+    predictable: ``time.sleep(poll_seconds)`` and the idle comparison
+    both treat the value as a wall-clock duration in seconds.
+
+    A failure here is logged and falls back to defaults rather than
+    crashing the watcher — the watcher is a long-lived background
+    process and a transient DB hiccup must not kill it.
+    """
+    try:
+        cfg = store.get_setting("ingest", {}) if store is not None else {}
+    except Exception:
+        cfg = {}
+    idle = float(cfg.get("idle_seconds", DEFAULT_IDLE_SECONDS))
+    poll = float(cfg.get("poll_seconds", DEFAULT_POLL_SECONDS))
+    return idle, poll
+
+
 def run_watcher(
     loader: BaseLoader,
     watch_dir: Path,
     pipeline: MemoryPipeline,
-    poll_seconds: float = 2.0,
-    idle_seconds: float = 60.0,
+    poll_seconds: float | None = None,
+    idle_seconds: float | None = None,
     ledger: dict | None = None,
     on_ingest: callable | None = None,
+    store: Any = None,
 ) -> None:
     """Watch a directory and ingest each transcript once it has been idle
     for ``idle_seconds``.
@@ -74,12 +121,34 @@ def run_watcher(
     ``on_ingest`` is an optional callable invoked with no arguments
     after a successful ingest. The serve layer hooks this to a
     consolidator scheduler so ``realtime`` mode can fire.
+
+    ``store`` is an optional :class:`MemoryStore`. When provided, the
+    watcher reads ``ingest.idle_seconds`` / ``ingest.poll_seconds``
+    from the settings table at every iteration so the user can dial
+    ingest frequency from the Settings drawer WITHOUT restarting the
+    launchd watcher process. Reads are throttled to once every
+    ``SETTINGS_RELOAD_EVERY`` ticks (cheap SQLite SELECT) so we
+    don't add noticeable overhead even at a 5-second poll cadence.
     """
     watch_dir = Path(watch_dir).expanduser()
     watch_dir.mkdir(parents=True, exist_ok=True)
     ledger_path = _ledger_path(watch_dir)
     if ledger is None:
         ledger = _load_ledger(ledger_path)
+
+    # Resolve initial values from the settings store if available,
+    # otherwise fall back to the kwarg / module defaults.
+    store_idle, store_poll = _read_ingest_settings(store)
+    if idle_seconds is None:
+        idle_seconds = store_idle
+    if poll_seconds is None:
+        poll_seconds = store_poll
+
+    # Re-read settings on a wall-clock cadence instead of per-tick,
+    # so reload latency doesn't grow with ``poll_seconds``. We default
+    # to 30s: short enough that a user dialing the slider sees the
+    # effect promptly, long enough that we don't hammer SQLite.
+    SETTINGS_RELOAD_SECONDS = 30.0
 
     log.info(
         "watching %s for %s transcripts (idle>=%.0fs, poll=%.1fs)",
@@ -89,8 +158,27 @@ def run_watcher(
     def persist():
         _save_ledger(ledger_path, ledger)
 
+    last_reload_at = 0.0
     try:
         while True:
+            # Throttled settings reload on a wall-clock cadence so
+            # the reload interval is stable regardless of poll_seconds.
+            if store is not None:
+                now_mono = time.monotonic()
+                if now_mono - last_reload_at >= SETTINGS_RELOAD_SECONDS:
+                    last_reload_at = now_mono
+                    try:
+                        new_idle, new_poll = _read_ingest_settings(store)
+                        if new_idle != idle_seconds or new_poll != poll_seconds:
+                            log.info(
+                                "watcher settings reloaded: idle=%.0fs poll=%.1fs",
+                                new_idle, new_poll,
+                            )
+                            idle_seconds = new_idle
+                            poll_seconds = new_poll
+                    except Exception:
+                        log.exception("settings reload failed (using current values)")
+
             try:
                 files = list(loader.discover(watch_dir))
             except FileNotFoundError:
@@ -220,6 +308,7 @@ def run_watcher(
     except KeyboardInterrupt:
         log.info("watcher exiting")
         persist()
+
 
 
 def run_once(

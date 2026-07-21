@@ -599,6 +599,86 @@
   }
   .wiki-toolbar input.grow { flex: 1; min-width: 200px; }
 
+  /* ------------------------------------------------------------------
+     全局 toggle styles — two variants:
+       * .master-global-toggle  — sits in the wiki toolbar, drives
+         a single bulk write that flips every page to scope='global'.
+       * .card-global-toggle    — sits inside each wiki card,
+         toggles just that one page's scope.
+
+     Both share the same visual language: a 32x18 track with a 14px
+     knob that slides on a 120ms ease. The "mixed" state (master
+     is on but some pages have diverged) is rendered as a half-tinted
+     knob so the user can see the partial-state at a glance.
+     ------------------------------------------------------------------ */
+  .master-global-toggle,
+  .card-global-toggle {
+    display: inline-flex; align-items: center; gap: 7px;
+    cursor: pointer;
+    user-select: none;
+    font-size: 12.5px;
+    color: var(--text-mute);
+    transition: color .12s ease, opacity .12s ease;
+  }
+  .master-global-toggle.on,
+  .card-global-toggle.on { color: var(--accent); }
+  .master-global-toggle.busy,
+  .card-global-toggle.busy { opacity: 0.6; cursor: progress; }
+  .master-global-toggle input,
+  .card-global-toggle input {
+    position: absolute; opacity: 0; width: 0; height: 0;
+    pointer-events: none;
+  }
+  .master-global-toggle .mgt-knob,
+  .card-global-toggle .cgt-knob {
+    position: relative;
+    width: 32px; height: 18px;
+    border-radius: 999px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    transition: background .15s ease, border-color .15s ease;
+    flex-shrink: 0;
+  }
+  .master-global-toggle .mgt-knob::after,
+  .card-global-toggle .cgt-knob::after {
+    content: '';
+    position: absolute;
+    top: 1px; left: 1px;
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: var(--text-faint);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.18);
+    transition: transform .15s ease, background .15s ease;
+  }
+  .master-global-toggle.on .mgt-knob,
+  .card-global-toggle.on .cgt-knob {
+    background: color-mix(in srgb, var(--accent) 22%, var(--surface-2));
+    border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  }
+  .master-global-toggle.on .mgt-knob::after,
+  .card-global-toggle.on .cgt-knob::after {
+    transform: translateX(14px);
+    background: var(--accent);
+  }
+  /* Inactive label colour should fade when the toggle is OFF so the
+     "off by default" affordance is obvious on first load. */
+  .master-global-toggle .mgt-text,
+  .card-global-toggle .cgt-text {
+    font-weight: 500;
+    line-height: 1;
+  }
+  .master-global-toggle { padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-2); }
+  .master-global-toggle:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); }
+  /* The card-level toggle lives inside the card's scope row, so it
+     inherits the same vertical rhythm as the chips above. */
+  .card-global-toggle { margin: -2px 0 8px; }
+  .card-global-toggle:focus-within .cgt-knob {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
+  }
+  .master-global-toggle:focus-within .mgt-knob {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
+  }
+
   .wiki-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
@@ -1399,10 +1479,19 @@
     border-left: 1px solid var(--border);
     box-shadow: -8px 0 32px rgba(15,23,42,0.18);
     z-index: 90;
-    flex-direction: column;
+    /* Flex column so the head / body / foot partition the viewport
+       vertically: the body scrolls, the foot stays pinned at the
+       bottom so the Save button is always one click away — fixes
+       "have to scroll to the bottom to save, then back to the top
+       to close". ``overflow: hidden`` is required so the body's
+       ``overflow-y: auto`` does not bubble up to the page itself. */
+    display: flex; flex-direction: column;
+    overflow: hidden;
   }
   /* legacy .drawer.show not used anymore — Vue v-show drives visibility */
   .drawer-head {
+    /* Header sits at the top of the flex column at its natural height. */
+    flex: 0 0 auto;
     padding: 16px 18px; border-bottom: 1px solid var(--border);
     display: flex; align-items: flex-start; gap: 10px;
   }
@@ -1450,9 +1539,41 @@
     font-size: 13px;
   }
   .drawer-foot {
+    /* Pin the action bar to the bottom of the drawer so the Save
+       button is always reachable, even when the schedule / behaviour
+       sections scroll. ``flex: 0 0 auto`` keeps the foot at its
+       natural height (no shrink/grow). The shadow + border hint at
+       scrollable content above. */
+    flex: 0 0 auto;
     padding: 12px 18px; border-top: 1px solid var(--border);
     display: flex; gap: 8px; justify-content: flex-end;
+    align-items: center;
     background: var(--surface-2);
+    box-shadow: 0 -8px 16px -10px rgba(15, 23, 42, 0.18);
+  }
+  /* When the drawer body has scrolled content, the foot button row
+     stays glued to the bottom regardless of scroll position. The
+     drawer-body itself owns ``overflow-y: auto`` so the scrollbar
+     lives in the body, not on the page. */
+  .drawer-foot .btn { white-space: nowrap; }
+
+  /* Ingest frequency section — chip for the "live" hint after saving. */
+  .sec-ingest .hint {
+    display: block;
+    font-size: 11.5px;
+    color: var(--text-faint);
+    margin-top: 4px;
+    line-height: 1.4;
+  }
+  .ingest-hint {
+    align-self: center;
+    margin-left: auto;
+    font-size: 11.5px;
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+    border-radius: 999px;
+    padding: 3px 10px;
   }
   .drawer-section { margin-bottom: 18px; }
   /* Doctor modal — green/red diagnostic screen accessible from kebab. */

@@ -103,6 +103,11 @@ export const api = {
   createWiki:     (payload) => fetchJSON('/api/wiki', { method: 'POST', body: payload }),
   updateWiki:     (id, payload) => fetchJSON(`/api/wiki/${id}`, { method: 'PUT', body: payload }),
   deleteWiki:     (id) => fetchJSON(`/api/wiki/${id}`, { method: 'DELETE' }),
+  // Bulk-set ``scope`` on one or many wiki pages in a single
+  // round-trip. ``payload.page_ids`` is optional — omitting it
+  // applies to every page (used by the master "全局" toggle's
+  // bulk-ON path).
+  bulkScopeWiki:  (payload) => fetchJSON('/api/wiki/bulk-scope', { method: 'POST', body: payload }),
 
   // Graph
   graph:          (params) => fetchJSON('/api/graph', { params }),
@@ -117,11 +122,25 @@ export const api = {
   llmStatus:      () => fetchJSON('/api/admin/llm/status'),
   llmRun:         (payload) => fetchJSON('/api/admin/llm/run', { method: 'POST', body: payload }),
   llmSchedule:    (payload) => fetchJSON('/api/admin/llm/schedule', { method: 'POST', body: payload }),
+  // Full save — writes the entire {provider, model, base_url,
+  // schedule, behaviour, api_key} tuple to the settings store. The
+  // ``/api/admin/llm/schedule`` endpoint stays around for genuine
+  // quick-toggle callers (the dashboard button, hooks, etc.) and
+  // merges into ``cfg.schedule`` flat — sending the full form to
+  // it would put the entire schedule object under
+  // ``cfg.schedule.schedule`` and silently drop the top-level
+  // ``enabled``/``mode`` flags, which is the persistence bug.
+  saveLlm:         (payload) => fetchJSON('/api/admin/llm/config', { method: 'PUT', body: payload }),
 
   // Ingest / score
   rescore:        () => fetchJSON('/api/admin/rescore', { method: 'POST' }),
   rebuildGraph:   () => fetchJSON('/api/admin/graph/rebuild', { method: 'POST' }),
   ingest:         (source, path) => fetchJSON('/api/admin/ingest', { method: 'POST', params: { source, path } }),
+  // Watcher ingest-cadence settings. ``getIngestConfig`` returns the
+  // current values plus the defaults and bounds so the Settings UI
+  // can render hint text without hardcoding them.
+  getIngestConfig: () => fetchJSON('/api/admin/ingest/config'),
+  saveIngestConfig: (payload) => fetchJSON('/api/admin/ingest/config', { method: 'POST', body: payload }),
   // Force-ingest endpoint: skips the watcher's idle window. Used by
   // the IngestPopover "Force active session" button when the user
   // has a long-running conversation and doesn't want to wait for the

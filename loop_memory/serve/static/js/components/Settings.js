@@ -44,6 +44,25 @@ export const Settings = defineComponent({
         enable_summarize: true, dry_run: false,
       },
     });
+    // Ingest cadence — drives the background file watcher that
+    // auto-ingests finished transcripts from Codex / Claude / Hermes
+    // / OpenClaw. Kept SEPARATE from the LLM ``cfg`` block above
+    // because:
+    //   * it lives in a different settings key (``ingest`` not
+    //     ``llm_consolidator``);
+    //   * its save round-trip is independent (the watcher is a
+    //     separate process that hot-reloads every few ticks);
+    //   * it has no api_key handling so it doesn't share the LLM
+    //     save flow's fingerprint / key lifecycle.
+    const ingestCfg = reactive({
+      idle_seconds: 300,    // size-stable wait before ingesting
+      poll_seconds: 5,      // directory scan period
+      defaults: { idle_seconds: 300, poll_seconds: 5 },
+      notes: { min_idle_seconds: 30, min_poll_seconds: 1,
+               max_idle_seconds: 3600, max_poll_seconds: 60 },
+    });
+    const ingestSaving = ref(false);
+    const ingestHint = ref(false);
     const testing = ref(false);
     const testResult = ref(null);
     const saving = ref(false);
@@ -58,13 +77,32 @@ export const Settings = defineComponent({
     const previewOpen = ref(false);
 
     async function load() {
+      let ing = null;
       try {
-        const [p, c] = await Promise.all([api.llmProviders(), api.llmConfig()]);
+        const [p, c] = await Promise.all([
+          api.llmProviders(), api.llmConfig(),
+        ]);
         providers.value = p || [];
         // /api/admin/llm/config returns {config: {...}, warnings, ...}
         const actualCfg = (c && c.config) ? c.config : c;
         Object.assign(cfg, actualCfg);
       } catch (e) { /* ignore */ }
+      try {
+        ing = await api.getIngestConfig();
+      } catch (e) { ing = null; }
+      // Hydrate ingestCfg from the dedicated endpoint. Falls back to
+      // the reactive defaults if the endpoint is unreachable (older
+      // server builds, or first paint before loadI18n lands).
+      if (ing && typeof ing === 'object') {
+        if (typeof ing.idle_seconds === 'number') ingestCfg.idle_seconds = ing.idle_seconds;
+        if (typeof ing.poll_seconds === 'number') ingestCfg.poll_seconds = ing.poll_seconds;
+        if (ing.defaults && typeof ing.defaults === 'object') {
+          ingestCfg.defaults = { ...ing.defaults };
+        }
+        if (ing.notes && typeof ing.notes === 'object') {
+          ingestCfg.notes = { ...ing.notes };
+        }
+      }
       try {
         const status = await api.llmStatus();
         if (status && status.provider) store.modelInfo = {
@@ -130,11 +168,30 @@ export const Settings = defineComponent({
           schedule: cfg.schedule, behaviour: cfg.behaviour,
         };
         if (cfg.api_key) payload.api_key = cfg.api_key;
-        await api.llmSchedule(payload);
+        // Use the full PUT endpoint so the entire config tuple
+        // (provider, model, base_url, schedule, behaviour, api_key)
+        // is written atomically. The ``/api/admin/llm/schedule`` POST
+        // endpoint only flat-merges keys into ``cfg.schedule``, so
+        // sending the full form there would nest ``schedule`` and
+        // ``behaviour`` under ``cfg.schedule.schedule`` /
+        // ``cfg.schedule.behaviour`` and silently leave the top-level
+        // ``enabled`` / ``mode`` flags stale — the "saved but still
+        // shows unconfigured" persistence bug.
+        await api.saveLlm(payload);
         savedHint.value = true;
-        setTimeout(() => { savedHint.value = false; }, 2500);
-        cfg.api_key = '';
+        // Reload first so the in-memory ``cfg`` reflects what was
+        // actually persisted (handles ``api_key`` fingerprint, etc.)
+        // before we close the drawer.
         await load();
+        toast(t('settings.saved') || t('common.saved') || '\u5df2\u4fdd\u5b58', 1800);
+        cfg.api_key = '';
+        // Auto-close the drawer so the user does not have to scroll
+        // back to the top to hit the close button after saving.
+        // The toast confirms the save; reopening shows the new state.
+        setTimeout(() => {
+          savedHint.value = false;
+          emit('close');
+        }, 700);
       } catch (e) {
         toast(t('common.error') + ': ' + e.message, 4000);
       } finally {
@@ -142,14 +199,51 @@ export const Settings = defineComponent({
       }
     }
 
+    async function onSaveIngest() {
+      ingestSaving.value = true;
+      try {
+        const r = await api.saveIngestConfig({
+          idle_seconds: Number(ingestCfg.idle_seconds),
+          poll_seconds: Number(ingestCfg.poll_seconds),
+        });
+        ingestHint.value = true;
+        toast(t('settings.ingest.saved', {
+          idle: ingestCfg.idle_seconds, poll: ingestCfg.poll_seconds,
+        }), 2200);
+        // Re-pull so any server-side normalization is reflected.
+        if (r && r.ingest) {
+          ingestCfg.idle_seconds = r.ingest.idle_seconds;
+          ingestCfg.poll_seconds = r.ingest.poll_seconds;
+        }
+        setTimeout(() => { ingestHint.value = false; }, 2500);
+      } catch (e) {
+        toast(t('settings.ingest.saveFail', { msg: e.message }), 4000);
+      } finally {
+        ingestSaving.value = false;
+      }
+    }
+
     async function onClearKey() {
       if (!confirm(t('settings.apiKey.confirmClear'))) return;
       try {
-        await api.llmSchedule({ ...cfg, api_key: '' });
+        // ``__clear__`` is the sentinel the PUT endpoint understands:
+        // it deletes the secret from the backend and flips
+        // ``api_key_set`` to false. We must NOT use the
+        // ``/api/admin/llm/schedule`` POST endpoint here — it
+        // would re-introduce the same persistence bug as
+        // ``onSave`` (nested ``schedule`` / ``behaviour``).
+        const payload = {
+          provider: cfg.provider, model: cfg.model, base_url: cfg.base_url,
+          schedule: cfg.schedule, behaviour: cfg.behaviour,
+          api_key: '__clear__',
+        };
+        await api.saveLlm(payload);
         cfg.api_key_set = false;
         toast(t('settings.apiKey.cleared'), 2000);
         await load();
-      } catch (e) { /* ignore */ }
+      } catch (e) {
+        toast(t('toast.fail', { msg: e.message }), 4000);
+      }
     }
 
     async function onReset() {
@@ -253,6 +347,7 @@ export const Settings = defineComponent({
     return { cfg, providers, selectedProvider, onProviderChange,
              testing, testResult, onTest,
              saving, savedHint, onSave, onClearKey, onReset, onRunNow, onPreview,
+             ingestCfg, ingestSaving, ingestHint, onSaveIngest,
              runs, runsLoading, refreshRuns, nextRun, nextRunText, scheduleModeHint,
              previewItems, previewLoading, previewOpen,
              statusKey, triggerKey, statLine,
@@ -333,6 +428,51 @@ export const Settings = defineComponent({
         <span v-if="testResult" class="test-result" :class="{ ok: testResult.ok, fail: !testResult.ok }">
           {{ testResult.ok ? t('settings.test.ok', { ms: testResult.elapsed_ms || 0 }) : (testResult.error?.provider_message || testResult.error?.hint || 'failed') }}
         </span>
+      </div>
+    </section>
+
+    <!-- Ingest — how often the background watcher scans / ingests -->
+    <section class="sec-ingest">
+      <h3>{{ t('settings.section.ingest') }}</h3>
+      <p class="sec-scope">{{ t('settings.ingest.scope') }}</p>
+      <div class="row-2">
+        <label>
+          <span>{{ t('settings.ingest.idle') }}</span>
+          <input type="number" v-model.number="ingestCfg.idle_seconds"
+                 :min="ingestCfg.notes.min_idle_seconds || 30"
+                 :max="ingestCfg.notes.max_idle_seconds || 3600" />
+          <small class="hint">
+            {{ t('settings.ingest.idleHint', {
+              def: ingestCfg.defaults.idle_seconds || 300,
+              min: ingestCfg.notes.min_idle_seconds || 30,
+              max: ingestCfg.notes.max_idle_seconds || 3600,
+            }) }}
+          </small>
+        </label>
+        <label>
+          <span>{{ t('settings.ingest.poll') }}</span>
+          <input type="number" v-model.number="ingestCfg.poll_seconds"
+                 :min="ingestCfg.notes.min_poll_seconds || 1"
+                 :max="ingestCfg.notes.max_poll_seconds || 60" />
+          <small class="hint">
+            {{ t('settings.ingest.pollHint', {
+              def: ingestCfg.defaults.poll_seconds || 5,
+            }) }}
+          </small>
+        </label>
+      </div>
+      <div class="action-row" style="gap:8px;flex-wrap:wrap;margin-top:8px;">
+        <button class="btn primary" type="button" :disabled="ingestSaving"
+                @click="onSaveIngest">
+          {{ ingestSaving ? t('common.saving') : t('action.save') }}
+        </button>
+        <button class="btn ghost" type="button"
+                @click="ingestCfg.idle_seconds = ingestCfg.defaults.idle_seconds;
+                        ingestCfg.poll_seconds = ingestCfg.defaults.poll_seconds"
+                :title="t('settings.ingest.resetToDefaults')">
+          {{ t('settings.ingest.resetDefaults') }}
+        </button>
+        <span v-if="ingestHint" class="ingest-hint">{{ t('settings.ingest.liveHint') }}</span>
       </div>
     </section>
 

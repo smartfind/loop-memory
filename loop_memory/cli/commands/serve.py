@@ -87,7 +87,10 @@ def run_hook(args) -> int:
         print("LOOP_MEMORY_ONCE_RESULT " + _json.dumps(results))
         return 0
     if len(watches) == 1:
-        run_watcher(loader, watches[0], pipeline, idle_seconds=idle_seconds)
+        # Pass ``store=store`` so the watcher can hot-reload
+        # ingest frequency / poll cadence from Settings → 采集频率
+        # without needing a launchd restart.
+        run_watcher(loader, watches[0], pipeline, idle_seconds=idle_seconds, store=store)
         return 0
     # Multiple watches: spawn one thread per path so each watcher
     # has its own poll loop and ledger (no cross-talk between
@@ -97,10 +100,8 @@ def run_hook(args) -> int:
     for w in watches:
         t = threading.Thread(
             target=run_watcher,
-            # Positional: loader, watch_dir, pipeline, poll_seconds,
-            # idle_seconds. We pass idle_seconds=60 by default; the
-            # caller can override via --idle.
             args=(loader, w, pipeline, 2.0, idle_seconds),
+            kwargs={"store": store},
             daemon=True,
             name=f"loop-memory-watcher-{w.name}",
         )
