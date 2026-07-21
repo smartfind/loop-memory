@@ -647,5 +647,13 @@
   "settings.ingest.idleHint": "Wait {min}–{max}s after the transcript stops growing before ingesting; default {def}s (5 min). Too short fragments long sessions.",
   "settings.ingest.liveHint": "Live",
   "settings.section.ingest": "Ingest frequency",
-  "settings.ingest.resetDefaults": "Reset"
+  "settings.ingest.resetDefaults": "Reset",
+  "wiki.masterGlobal.label": "Make all global",
+  "wiki.masterGlobal.hint": "When ON every wiki page is shared with all clients. Flipping a single card OFF auto-flips this master to a mixed state.",
+  "wiki.masterGlobalOn": "Set {n} pages to global",
+  "wiki.cardGlobal.label": "Global",
+  "wiki.cardGlobal.onHint": "This page is shared with every client. Click to un-share.",
+  "wiki.cardGlobal.offHint": "Only the listed clients can see this page. Click to share globally.",
+  "wiki.globalToggleFail": "Failed to toggle global: {msg}",
+  "wiki.masterGlobalOff": "Set {n} pages to non-global (default Codex)"
 }

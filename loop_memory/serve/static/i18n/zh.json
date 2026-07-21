@@ -647,5 +647,13 @@
   "settings.ingest.idleHint": "会话文件大小连续 {min}–{max} 秒不再增长才入库；默认 {def} 秒（5 分钟）。过短会把长会话切成多段。",
   "settings.ingest.liveHint": "已生效",
   "settings.section.ingest": "采集频率",
-  "settings.ingest.resetDefaults": "恢复默认"
+  "settings.ingest.resetDefaults": "恢复默认",
+  "wiki.masterGlobal.label": "全部设为全局",
+  "wiki.masterGlobal.hint": "打开后所有知识全局生效；单独关闭某条后此开关会自动跳到混合态。",
+  "wiki.masterGlobalOn": "已将 {n} 条知识设为全局",
+  "wiki.cardGlobal.label": "全局",
+  "wiki.cardGlobal.onHint": "已开启全局生效 — 所有客户端都能看到这条知识。点击关闭。",
+  "wiki.cardGlobal.offHint": "仅特定客户端可见。点击切换为全局生效。",
+  "wiki.globalToggleFail": "切换全局失败：{msg}",
+  "wiki.masterGlobalOff": "已将 {n} 条知识设为非全局（默认 Codex）"
 }

@@ -8,7 +8,7 @@
  * significantly easier to scan and edit.
  */
 import { defineComponent, ref, computed, onMounted, onUnmounted, watch } from 'https://unpkg.com/vue@3.4.38/dist/vue.esm-browser.prod.js';
-import { store, t, escapeHtml, fmtTime } from '../store.js';
+import { store, t, toast, escapeHtml, fmtTime } from '../store.js';
 import { api } from '../api.js';
 import { WikiEditor } from './WikiEditor.js';
 
@@ -25,6 +25,12 @@ export const Wiki = defineComponent({
     const editing = ref(null);
     // Scope tokens mirror WikiEditor.SCOPE_TOKENS
     const SCOPE_TOKENS = ['global', 'codex', 'claude', 'hermes', 'openclaw'];
+    // Default scope applied to every page when the master 全局 switch
+    // is flipped OFF. ``codex`` is the most common client in this
+    // workspace, so it's a safe "scoped to one client" default that
+    // matches the per-card toggle's fallback. Users can refine each
+    // card afterwards via the per-card toggle or the WikiEditor.
+    const SCOPE_OFF_DEFAULT = 'codex';
 
     async function refresh() {
       loading.value = true;
@@ -218,11 +224,157 @@ export const Wiki = defineComponent({
     // list went stale (distillation may have added/removed pages).
     watch(() => store.activeTab, (id) => { if (id === 'wiki') refresh(); });
 
+    // ------------------------------------------------------------------
+    // Per-card 全局 toggle + toolbar master 全局 toggle.
+    //
+    // Design contract:
+    //   - Each wiki page carries a ``scope`` field (existing schema)
+    //     where 'global' means "shared with every agent", otherwise a
+    //     comma-list of client tokens ('codex', 'claude', …).
+    //   - Default is NOT global: distilled pages get the source-client
+    //     of the evidence memories (see ``_scope_for_evidence`` in
+    //     ``llm_consolidate.py``), so the per-card toggle is OFF on
+    //     newly-distilled pages.
+    //   - The toolbar master toggle has three visible states:
+    //       * on  (every page is global — bulk ON)
+    //       * off (no automatic bulk change)
+    //       * "mixed" (some pages are global, some are not) — shown
+    //         as a half-tinted knob so the user knows they have
+    //         already diverged from the master.
+    //   - Master is OPTIMISTIC: flipping it ON calls ``bulk-scope``
+    //     to write 'global' to every page in one round-trip, then
+    //     refreshes the local list. The visible "mixed" state
+    //     resolves itself automatically as the response lands.
+    //   - When the user manually flips a SINGLE card OFF while the
+    //     master is ON, the master auto-flips to "mixed" — that's
+    //     the rule "关闭某一个知识全局生效后，上面的全局生效自动关闭".
+    // ------------------------------------------------------------------
+    const masterGlobal = ref(false);   // local optimistic state
+    const bulkBusy = ref(false);       // disable toggle while inflight
+
+    /** True iff the page is shared with every client. */
+    function isGlobal(p) {
+      const s = (p && p.scope || '').toString().toLowerCase();
+      if (!s) return true;  // schema default = global
+      // "global" alone, or starting with "global," => global.
+      return s === 'global' || s.split(',').map(x => x.trim()).includes('global');
+    }
+
+    /**
+     * Toggle a single card's 全局 switch. Persists the change via
+     * ``bulk-scope`` with the explicit ``page_ids`` list — avoids a
+     * per-page PUT round-trip. Also nudges ``masterGlobal`` to
+     * reflect the partial-state rule.
+     */
+    async function toggleCardGlobal(p) {
+      if (bulkBusy.value) return;
+      // If the page is currently global, flipping OFF means we
+      // switch to a per-client scope. The natural fallback is the
+      // page's existing scope tokens (e.g. 'codex,claude'); if it
+      // was 'global', fall back to the single most-recent source
+      // recorded in ``tags``/``evidence`` or just 'codex' so the
+      // page is no longer shared with every agent.
+      const cur = (p.scope || '').toString().toLowerCase();
+      let nextScope;
+      if (isGlobal(p)) {
+        // Going global → not-global. Preserve whatever non-global
+        // tokens were there, otherwise fall back to 'codex' so the
+        // page is at least scoped to one client.
+        const nonGlobal = cur.split(',')
+          .map(x => x.trim())
+          .filter(x => x && x !== 'global' && SCOPE_TOKENS.includes(x));
+        nextScope = nonGlobal.length ? nonGlobal.join(',') : 'codex';
+      } else {
+        nextScope = 'global';
+      }
+      bulkBusy.value = true;
+      // Optimistic local update so the UI reflects the flip
+      // immediately, before the network round-trip.
+      const idx = pages.value.findIndex(x => x.id === p.id);
+      if (idx >= 0) {
+        pages.value[idx] = { ...pages.value[idx], scope: nextScope };
+      }
+      // Partial-state rule: if the master was ON and the user
+      // flipped a single card OFF, the master has to follow.
+      if (masterGlobal.value && nextScope !== 'global') {
+        masterGlobal.value = false;
+      }
+      try {
+        await api.bulkScopeWiki({ scope: nextScope, page_ids: [p.id] });
+      } catch (e) {
+        // Roll back the optimistic update on failure.
+        if (idx >= 0) {
+          pages.value[idx] = p;
+        }
+        toast(t('wiki.globalToggleFail', { msg: e.message }), 4000);
+      } finally {
+        bulkBusy.value = false;
+      }
+    }
+
+    /**
+     * Toggle the master 全局 switch in the toolbar. Both directions
+     * are now REAL bulk writes (single round-trip each):
+     *
+     *   * ON  → every page becomes ``scope='global'``. Master UI
+     *           flips ON, every per-card knob follows.
+     *   * OFF → every page loses its global flag. Each page is set
+     *           to the SCOPE_OFF_DEFAULT scope (``'codex'``) so it
+     *           is no longer shared with every client. Users who
+     *           want a different client can still flip individual
+     *           cards afterwards; the per-card toggle continues to
+     *           work as before.
+     *
+     * Previously, master OFF was a pure local state change and
+     * pages stayed global — the user reported this as confusing:
+     * "若拨动关闭全局按钮，要全部关闭所有的全局设置" — flipping
+     * the master OFF should actually turn off global everywhere.
+     */
+    async function toggleMasterGlobal() {
+      if (bulkBusy.value) return;
+      const turningOn = !masterGlobal.value;
+      const targetScope = turningOn ? 'global' : SCOPE_OFF_DEFAULT;
+      bulkBusy.value = true;
+      // Optimistic local state flip so the knob reacts instantly;
+      // the bulk write below will reconcile once it returns.
+      masterGlobal.value = turningOn;
+      try {
+        const r = await api.bulkScopeWiki({ scope: targetScope });
+        await refresh();
+        toast(
+          turningOn
+            ? t('wiki.masterGlobalOn', { n: r.updated || 0 })
+            : t('wiki.masterGlobalOff', { n: r.updated || 0 }),
+          2200,
+        );
+      } catch (e) {
+        // Roll back the optimistic flip on failure.
+        masterGlobal.value = !turningOn;
+        toast(t('wiki.globalToggleFail', { msg: e.message }), 4000);
+      } finally {
+        bulkBusy.value = false;
+      }
+    }
+
+    // Whenever the page list changes (refresh / new distillation),
+    // re-derive the master state. ON iff EVERY page is currently
+    // global; OFF otherwise (the "mixed" partial-state rule).
+    watch(pages, (rows) => {
+      if (!Array.isArray(rows) || !rows.length) {
+        masterGlobal.value = false;
+        return;
+      }
+      // Don't clobber a "true" master while the user is mid-bulk-ON.
+      if (bulkBusy.value && masterGlobal.value) return;
+      masterGlobal.value = rows.every(isGlobal);
+    }, { deep: true });
+
     return {
       store, t, pages, q, sort, scopeFilter, SCOPE_TOKENS,
       loading, visible, expanded, editing, bulletsOf,
       scopeTokensOf, scopeChipLabel,
       refresh, expand, edit, onNew, onExport, onImportClick, importing, exporting, saveEdit, removePage, fmtTime,
+      isGlobal, toggleCardGlobal, toggleMasterGlobal, masterGlobal, bulkBusy,
     };
   },
   template: /* html */ `
@@ -244,6 +396,16 @@ export const Wiki = defineComponent({
         <option value="openclaw">{{ t('wiki.scope.filter.openclaw') }}</option>
       </select>
       <span class="spacer"></span>
+      <label class="master-global-toggle"
+             :class="{ on: masterGlobal, busy: bulkBusy }"
+             :title="t('wiki.masterGlobal.hint')">
+        <input type="checkbox"
+               :checked="masterGlobal"
+               :disabled="bulkBusy"
+               @change="toggleMasterGlobal" />
+        <span class="mgt-knob" aria-hidden="true"></span>
+        <span class="mgt-text">{{ t('wiki.masterGlobal.label') }}</span>
+      </label>
       <button class="tb-action ghost" :title="t('wiki.exportTip')" :disabled="exporting" @click="onExport">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="14" height="14"><path d="M8 1v9M4.5 6.5L8 10l3.5-3.5M2 12v2.5h12V12"/></svg>
         <span>{{ exporting ? '…' : t('wiki.export') }}</span>
@@ -273,6 +435,16 @@ export const Wiki = defineComponent({
             {{ t(scopeChipLabel(tok)) }}
           </span>
         </div>
+        <label class="card-global-toggle"
+               :class="{ on: isGlobal(p), busy: bulkBusy }"
+               :title="isGlobal(p) ? t('wiki.cardGlobal.onHint') : t('wiki.cardGlobal.offHint')">
+          <input type="checkbox"
+                 :checked="isGlobal(p)"
+                 :disabled="bulkBusy"
+                 @change="toggleCardGlobal(p)" />
+          <span class="cgt-knob" aria-hidden="true"></span>
+          <span class="cgt-text">{{ t('wiki.cardGlobal.label') }}</span>
+        </label>
         <ul class="wc-bullets">
           <li v-for="(b, i) in bulletsOf(p)" :key="i">{{ b.replace(/^-\\s*/, '') }}</li>
         </ul>
