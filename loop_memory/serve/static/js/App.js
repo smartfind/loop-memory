@@ -100,8 +100,14 @@ export const App = defineComponent({
         }
         // Dev / screenshot helper: ?drawer=settings opens the settings
         // drawer at boot so visual regressions can be captured without
-        // simulating a click.
-        if (usp.get('drawer') === 'settings') {
+        // simulating a click. ?drawer=llm-config opens the LLM-only
+        // variant (used to capture the model-chip entry point).
+        const drawer = usp.get('drawer');
+        if (drawer === 'settings') {
+          settingsMode.value = 'settings';
+          settingsOpen.value = true;
+        } else if (drawer === 'llm-config') {
+          settingsMode.value = 'llm';
           settingsOpen.value = true;
         }
       } catch (e) { /* ignore */ }
@@ -172,7 +178,12 @@ export const App = defineComponent({
         if (r.queued) toast(t('action.llmRunQueued'), 2000);
       } catch (e) { toast(t('common.error') + ': ' + e.message, 4000); }
     }
-    function onOpenSettings() { settingsOpen.value = true; }
+    // Drawer mode is set by which entry the user clicked:
+    //   - "settings" (gear icon):  full drawer (LLM + ingest + schedule)
+    //   - "llm"      (model chip): only the LLM Connection section
+    const settingsMode = ref('settings');
+    function onOpenSettings() { settingsMode.value = 'settings'; settingsOpen.value = true; }
+    function onOpenLlmConfig() { settingsMode.value = 'llm';      settingsOpen.value = true; }
     function onOpenDiag() { diagOpen.value = true; }
 
     // Expose App-level UI controls through the shared actions bus so
@@ -215,9 +226,9 @@ export const App = defineComponent({
     }
 
     return {
-      store, t, settingsOpen, diagOpen,
+      store, t, settingsOpen, settingsMode, diagOpen,
       onIngest, onRescore, onLlmRun,
-      onOpenSettings, onOpenStats, onOpenDiag,
+      onOpenSettings, onOpenLlmConfig, onOpenStats, onOpenDiag,
       onRebuildGraph, onOpenWiki,
       dismissStrip: () => { store.stripDismissed = true; },
     };
@@ -226,7 +237,8 @@ export const App = defineComponent({
 <div class="app-shell">
   <TopBar @ingest="onIngest" @rescore="onRescore"
           @llm-run="onLlmRun"
-          @open-settings="onOpenSettings" @open-diag="onOpenDiag"
+          @open-settings="onOpenSettings" @open-llm-config="onOpenLlmConfig"
+          @open-diag="onOpenDiag"
           @rebuild-graph="onRebuildGraph"
           @consolidate="onConsolidate" />
   <div class="app-body">
@@ -243,7 +255,7 @@ export const App = defineComponent({
     </main>
   </div>
   <RunStrip @dismiss="dismissStrip" />
-  <Settings :open="settingsOpen" @close="settingsOpen = false" />
+  <Settings :open="settingsOpen" :mode="settingsMode" @close="settingsOpen = false" />
   <Diagnostic :open="diagOpen" @close="diagOpen = false" />
   <Toast />
 </div>

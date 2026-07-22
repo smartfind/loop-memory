@@ -25,6 +25,14 @@ export const Settings = defineComponent({
   name: 'Settings',
   props: {
     open: { type: Boolean, default: false },
+    // Drawer mode:
+    //   - "llm"     : only the LLM Connection section (entered via
+    //                 the topbar model-chip — user clicked on the
+    //                 model name to configure it).
+    //   - "settings": full drawer — Connection + Ingest + Schedule
+    //                 (entered via the gear icon — user wants to
+    //                 tweak anything, not just the LLM).
+    mode: { type: String, default: 'settings' },
   },
   emits: ['close'],
   setup(props, { emit }) {
@@ -358,8 +366,8 @@ export const Settings = defineComponent({
   <div class="drawer-body">
     <header class="drawer-head">
       <div class="drawer-head-text">
-        <h2>{{ t('settings.title') }}</h2>
-        <p class="drawer-subtitle">{{ t('settings.subtitle') }}</p>
+        <h2>{{ t(mode === 'llm' ? 'settings.title.llm' : 'settings.title') }}</h2>
+        <p class="drawer-subtitle">{{ t(mode === 'llm' ? 'settings.subtitle.llm' : 'settings.subtitle') }}</p>
       </div>
       <button class="icon-btn" @click="onClose" type="button" aria-label="Close">
         <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -369,8 +377,9 @@ export const Settings = defineComponent({
     </header>
 
     <!-- Client integration entry point — discoverable from the top of
-         settings so users find it without reading the README. -->
-    <button class="drawer-link-cta" type="button" @click="openClientHooksPanel"
+         settings so users find it without reading the README.
+         Hidden in 'mode=llm' so the LLM config view stays focused. -->
+    <button v-if="mode !== 'llm'" class="drawer-link-cta" type="button" @click="openClientHooksPanel"
             :title="t('settings.hooks.tooltip')">
       <span class="drawer-link-ico" aria-hidden="true">🪝</span>
       <span class="drawer-link-text">
@@ -431,8 +440,9 @@ export const Settings = defineComponent({
       </div>
     </section>
 
-    <!-- Ingest — how often the background watcher scans / ingests -->
-    <section class="sec-ingest">
+    <!-- Ingest — how often the background watcher scans / ingests.
+         Hidden in 'mode=llm' (ingest cadence is independent of the LLM). -->
+    <section v-if="mode !== 'llm'" class="sec-ingest">
       <h3>{{ t('settings.section.ingest') }}</h3>
       <p class="sec-scope">{{ t('settings.ingest.scope') }}</p>
       <div class="row-2">
@@ -476,8 +486,9 @@ export const Settings = defineComponent({
       </div>
     </section>
 
-    <!-- Schedule — when the consolidation job auto-runs (LLM info above is global) -->
-    <section class="sec-schedule">
+    <!-- Schedule — when the consolidation job auto-runs (LLM info above is global).
+         Hidden in 'mode=llm' (schedule is independent of the LLM provider). -->
+    <section v-if="mode !== 'llm'" class="sec-schedule">
       <h3>{{ t('settings.section.schedule') }}</h3>
       <p class="sec-scope">{{ t('settings.section.consolidationScope') }}</p>
       <label>
@@ -523,7 +534,9 @@ export const Settings = defineComponent({
     </section>
 
     <!-- Behaviour — consolidation-job-only knobs -->
-    <section class="sec-behaviour">
+    <!-- Behaviour — batch size / min importance / filters etc.
+         Hidden in 'mode=llm'. -->
+    <section v-if="mode !== 'llm'" class="sec-behaviour">
       <h3>{{ t('settings.section.behaviour') }}</h3>
       <p class="sec-scope">{{ t('settings.behaviour.scope') }}</p>
       <div class="row-2">

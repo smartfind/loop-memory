@@ -422,7 +422,7 @@
   "settings.hooks.ctaTitle": "启用知识到 Codex / Claude / Hermes",
   "settings.hooks.ctaSub": "一键写入 MCP + SessionStart 钩子",
   "settings.hooks.tooltip": "为已安装的客户端写入自动接入配置文件",
-  "settings.title": "大模型配置",
+  "settings.title": "设置",
   "sidebar.allSources": "全部来源",
   "sidebar.empty": "暂无会话",
   "sidebar.sessions": "会话",
@@ -575,7 +575,7 @@
   "timeline.sessionScope": "正在查看会话：",
   "timeline.clearScope": "清除会话筛选，查看全部记忆",
   "timeline.emptyForSession": "这个会话暂未提取到记忆，尝试重新导入或者运行\"AI 整理\"。",
-  "settings.subtitle": "一次配置，全局生效",
+  "settings.subtitle": "管理大模型、采集频率、定时整理等所有偏好",
   "settings.section.connection": "连接",
   "settings.connection.usedBy": "以下功能共享此大模型：整理任务、知识图谱提炼、周报生成、连通性测试",
   "settings.connection.usedByNote": "在其它功能里无需重复配置。",
@@ -655,5 +655,7 @@
   "wiki.cardGlobal.onHint": "已开启全局生效 — 所有客户端都能看到这条知识。点击关闭。",
   "wiki.cardGlobal.offHint": "仅特定客户端可见。点击切换为全局生效。",
   "wiki.globalToggleFail": "切换全局失败：{msg}",
-  "wiki.masterGlobalOff": "已将 {n} 条知识设为非全局（默认 Codex）"
+  "wiki.masterGlobalOff": "已将 {n} 条知识设为非全局（默认 Codex）",
+  "settings.title.llm": "大模型配置",
+  "settings.subtitle.llm": "一次配置，全局生效"
 }
