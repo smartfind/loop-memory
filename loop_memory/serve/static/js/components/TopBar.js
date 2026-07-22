@@ -17,7 +17,7 @@ import { api, ApiError } from '../api.js';
 export const TopBar = defineComponent({
   name: 'TopBar',
   components: { IngestPopover },
-  emits: ['ingest', 'rescore', 'llm-run', 'open-settings', 'open-stats', 'open-diag', 'rebuild-graph', 'consolidate'],
+  emits: ['ingest', 'rescore', 'llm-run', 'open-settings', 'open-llm-config', 'open-stats', 'open-diag', 'rebuild-graph', 'consolidate'],
   setup(props, { emit }) {
     const statsOpen = ref(false);
     const toolsOpen = ref(false);
@@ -71,6 +71,7 @@ export const TopBar = defineComponent({
       onRescore:     () => { closeAll(); emit('rescore'); },
       onLlmRun:      () => { closeAll(); emit('llm-run'); },
       onOpenSettings:() => { closeAll(); emit('open-settings'); },
+      onOpenLlmConfig:() => { closeAll(); emit('open-llm-config'); },
       onOpenStats:   () => emit('open-stats'),
       onOpenDiag:    () => { closeAll(); emit('open-diag'); },
       onRebuildGraph:() => { closeAll(); emit('rebuild-graph'); },
@@ -138,7 +139,7 @@ export const TopBar = defineComponent({
             :data-reach="store.modelInfo.reachability"
             role="button" type="button"
             :title="modelChipTip"
-            @click="onOpenSettings">
+            @click="onOpenLlmConfig">
       <span class="m-icon">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
           <circle cx="8" cy="8" r="3"/>

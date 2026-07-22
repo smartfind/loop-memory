@@ -422,7 +422,7 @@
   "settings.hooks.ctaTitle": "Enable knowledge on Codex / Claude / Hermes",
   "settings.hooks.ctaSub": "One-click MCP + SessionStart hook setup",
   "settings.hooks.tooltip": "Auto-write MCP + SessionStart hook configs for detected clients",
-  "settings.title": "LLM Configuration",
+  "settings.title": "Settings",
   "sidebar.allSources": "All sources",
   "sidebar.empty": "No sessions yet",
   "sidebar.sessions": "Sessions",
@@ -575,7 +575,7 @@
   "timeline.sessionScope": "Viewing session:",
   "timeline.clearScope": "Clear session filter, show all memories",
   "timeline.emptyForSession": "No memories have been extracted for this session yet. Try running \"AI Run\" or re-importing.",
-  "settings.subtitle": "Configure once, used everywhere",
+  "settings.subtitle": "Manage LLM, ingest cadence, scheduled runs and other preferences",
   "settings.section.connection": "Connection",
   "settings.connection.usedBy": "This LLM powers: consolidation, knowledge-graph distillation, weekly reports, and connectivity tests",
   "settings.connection.usedByNote": "No need to configure LLM separately in those features.",
@@ -655,5 +655,7 @@
   "wiki.cardGlobal.onHint": "This page is shared with every client. Click to un-share.",
   "wiki.cardGlobal.offHint": "Only the listed clients can see this page. Click to share globally.",
   "wiki.globalToggleFail": "Failed to toggle global: {msg}",
-  "wiki.masterGlobalOff": "Set {n} pages to non-global (default Codex)"
+  "wiki.masterGlobalOff": "Set {n} pages to non-global (default Codex)",
+  "settings.title.llm": "LLM Configuration",
+  "settings.subtitle.llm": "Configure once, used everywhere"
 }
