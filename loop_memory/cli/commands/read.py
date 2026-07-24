@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from .._common import DEFAULT_DB, default_db_path, die, make_engine
+from ...privacy import redact_text, strip_private_spans
 
 
 def run_chat(_args) -> int:
@@ -113,8 +114,13 @@ def run_export(args) -> int:
     lines.append("")
     for p in pages:
         title = (p.get("title") or "untitled").strip()
-        body = (p.get("body") or "").strip()
-        summary = (p.get("summary") or "").strip()
+        # Defensive redaction: bodies should already be redacted at
+        # write time, but a page distilled before the redaction hook
+        # shipped could still contain a leaked secret. Run the page
+        # through the same pipeline one more time so the exported
+        # markdown is safe to paste into any public doc.
+        body = redact_text(strip_private_spans((p.get("body") or "").strip()))
+        summary = redact_text(strip_private_spans((p.get("summary") or "").strip()))
         lines.append(f"## {title}")
         lines.append("")
         if summary and summary != title:
@@ -125,6 +131,96 @@ def run_export(args) -> int:
     Path(out_path).write_text("\n".join(lines), encoding="utf-8")
     print(f"✅ wrote {len(pages)} pages → {out_path}")
     print("   paste this file into any LLM client as context to apply your distilled knowledge.")
+    return 0
+
+
+def run_digest(args) -> int:
+    """Build a tight, byte-budgeted markdown digest of the long-term
+    memory store. Designed to be injected as ``AGENTS.md`` at session
+    start so the assistant carries a compact summary of the user's
+    distilled knowledge — without paying the cost of every historical
+    turn being replayed into context.
+
+    The output is plain markdown, ordered by importance, capped at
+    ``--max-chars`` (default 12000 ≈ 3000 tokens). This is small
+    enough to live permanently in the assistant's system prompt,
+    dramatically reducing how much session history needs to be
+    carried per turn.
+
+    Usage:  loop-memory digest [--out PATH] [--max-chars 12000] [--q QUERY]
+    """
+    from ...storage.sqlite_store import MemoryStore
+    out_path = None
+    max_chars = 12000
+    query = None
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--out" and i + 1 < len(args):
+            out_path = args[i + 1]; i += 2
+        elif a == "--max-chars" and i + 1 < len(args):
+            max_chars = max(500, int(args[i + 1])); i += 2
+        elif a == "--q" and i + 1 < len(args):
+            query = args[i + 1]; i += 2
+        else:
+            i += 1
+    if out_path is None:
+        out_path = str(Path.home() / ".loop_memory" / "AGENTS.md")
+    out_path = str(Path(out_path).expanduser())
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    store = MemoryStore(default_db_path())
+    pages = store.list_wiki_pages(limit=200, query=query)
+    # Order by importance desc, then updated_at desc — surface the
+    # most useful and freshest knowledge first.
+    pages.sort(key=lambda p: (float(p.get("importance") or 0), float(p.get("updated_at") or 0)), reverse=True)
+
+    # Score the page's density so we keep self-contained pages and
+    # drop thin ones when the budget runs out.
+    def density(p):
+        body = (p.get("body") or "").strip()
+        facts = p.get("key_facts") or []
+        return len(body) + 80 * len(facts)
+
+    kept: list = []
+    total = 0
+    overhead = 280  # header + footer
+    budget = max_chars - overhead
+    for p in pages:
+        body = redact_text(strip_private_spans((p.get("body") or "").strip()))
+        summary = redact_text(strip_private_spans((p.get("summary") or "").strip()))
+        title = (p.get("title") or "untitled").strip()
+        facts = p.get("key_facts") or []
+        # Build the candidate block
+        block_lines = [f"## {title}", ""]
+        if summary and summary != title:
+            block_lines += [f"> {summary}", ""]
+        if facts:
+            block_lines.append("**Key facts:**")
+            for f in facts[:8]:
+                block_lines.append(f"- {f}")
+            block_lines.append("")
+        if body:
+            # Cap each page body at 800 chars to keep digest compact.
+            if len(body) > 800:
+                body = body[:800].rstrip() + "…"
+            block_lines += [body, ""]
+        block = "\n".join(block_lines)
+        if total + len(block) > budget:
+            break
+        kept.append((p, block))
+        total += len(block)
+
+    lines = ["# Distilled knowledge — auto-injected memory digest", ""]
+    lines.append(f"_Compiled from {len(kept)} of {len(pages)} wiki pages, capped at {max_chars:,} chars (~{max_chars//4:,} tokens)._")
+    lines.append(f"_Generated { _dt.datetime.now().isoformat(timespec='seconds') }._")
+    lines.append("")
+    lines.append("Read me at the start of every task. Update by running `loop-memory digest` again, "
+                 "or via the web UI's Settings → 'Recompile digest'.")
+    lines.append("")
+    for _, block in kept:
+        lines.append(block)
+    Path(out_path).write_text("\n".join(lines), encoding="utf-8")
+    print(f"✅ digest → {out_path}  ({total:,} chars, {len(kept)} pages)")
     return 0
 
 

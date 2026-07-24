@@ -23,6 +23,9 @@ export const Wiki = defineComponent({
     const loading = ref(false);
     const expanded = ref(null);
     const editing = ref(null);
+    const contradictions = ref([]);
+    const contrLoading = ref(false);
+    const showContradictions = ref(false);
     // Scope tokens mirror WikiEditor.SCOPE_TOKENS
     const SCOPE_TOKENS = ['global', 'codex', 'claude', 'hermes', 'openclaw'];
     // Default scope applied to every page when the master 全局 switch
@@ -41,6 +44,44 @@ export const Wiki = defineComponent({
         pages.value = [];
       } finally {
         loading.value = false;
+      }
+    }
+    async function refreshContradictions() {
+      contrLoading.value = true;
+      try {
+        const data = await api.listContradictions();
+        contradictions.value = (data && data.items) || [];
+      } catch (e) {
+        contradictions.value = [];
+      } finally {
+        contrLoading.value = false;
+      }
+    }
+    async function scanContradictions() {
+      contrLoading.value = true;
+      try {
+        await api.scanContradictions({ threshold: 0.45 });
+        await refreshContradictions();
+      } catch (e) {
+        // best-effort; UI shows stale list
+      } finally {
+        contrLoading.value = false;
+      }
+    }
+    async function resolveContradiction(pageId) {
+      try {
+        await api.resolveWikiContradiction(pageId);
+        await refreshContradictions();
+      } catch (e) {
+        // ignore
+      }
+    }
+    async function quickMerge(pageId, loserId) {
+      try {
+        await api.mergeWiki(pageId, { loser_id: loserId });
+        await Promise.all([refresh(), refreshContradictions()]);
+      } catch (e) {
+        // ignore
       }
     }
 
@@ -222,7 +263,12 @@ export const Wiki = defineComponent({
     watch(() => store.stats.wiki_pages, refresh);
     // When the user navigates back to the wiki tab, refresh in case the
     // list went stale (distillation may have added/removed pages).
-    watch(() => store.activeTab, (id) => { if (id === 'wiki') refresh(); });
+    watch(() => store.activeTab, (id) => {
+      if (id === 'wiki') {
+        refresh();
+        refreshContradictions();
+      }
+    });
 
     // ------------------------------------------------------------------
     // Per-card 全局 toggle + toolbar master 全局 toggle.
@@ -374,6 +420,7 @@ export const Wiki = defineComponent({
       loading, visible, expanded, editing, bulletsOf,
       scopeTokensOf, scopeChipLabel,
       refresh, expand, edit, onNew, onExport, onImportClick, importing, exporting, saveEdit, removePage, fmtTime,
+      contradictions, contrLoading, showContradictions, refreshContradictions, scanContradictions, resolveContradiction, quickMerge,
       isGlobal, toggleCardGlobal, toggleMasterGlobal, masterGlobal, bulkBusy,
     };
   },
@@ -418,6 +465,48 @@ export const Wiki = defineComponent({
         <svg viewBox="0 0 16 16" fill="currentColor" width="14" height="14"><path d="M8 1v14M1 8h14" stroke="currentColor" stroke-width="2"/></svg>
         <span>{{ t('wiki.new') }}</span>
       </button>
+    </div>
+
+    <!-- Contradictions banner — only renders when there are pages
+         that flag a conflict. Each item shows both titles and a
+         one-click "merge winner / dissolve loser" button, plus a
+         "not actually a conflict" escape hatch that clears the
+         flag without losing the page. -->
+    <div v-if="contradictions.length" class="wiki-contradictions">
+      <header class="wc-head">
+        <h4>{{ t('wiki.contradict.title') }} ({{ contradictions.length }})</h4>
+        <div class="wc-ctrls">
+          <button class="btn ghost small" type="button"
+                  :disabled="contrLoading" @click="scanContradictions">
+            {{ contrLoading ? '…' : t('wiki.contradict.rescan') }}
+          </button>
+        </div>
+      </header>
+      <ul class="wc-list">
+        <li v-for="row in contradictions" :key="row.id" class="wc-row">
+          <div class="wc-pair">
+            <strong>{{ row.title }}</strong>
+            <span class="vs">{{ t('wiki.contradict.vs') }}</span>
+            <strong v-for="p in row.partners" :key="p.id">{{ p.title }}</strong>
+          </div>
+          <div class="wc-summary-row">
+            <span class="wc-summary-text">{{ row.summary || '—' }}</span>
+            <span class="wc-summary-text" v-for="p in row.partners" :key="'s'+p.id">
+              · {{ p.summary || '—' }}
+            </span>
+          </div>
+          <div class="wc-actions">
+            <button class="btn primary small" type="button"
+                    @click="quickMerge(row.id, row.partners[0].id)">
+              {{ t('wiki.contradict.mergeInto', { title: row.title }) }}
+            </button>
+            <button class="btn ghost small" type="button"
+                    @click="resolveContradiction(row.id)">
+              {{ t('wiki.contradict.notConflict') }}
+            </button>
+          </div>
+        </li>
+      </ul>
     </div>
 
     <div v-if="visible.length" class="wiki-grid">

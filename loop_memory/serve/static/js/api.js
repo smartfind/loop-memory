@@ -100,6 +100,10 @@ export const api = {
   // Wiki
   listWiki:       () => fetchJSON('/api/wiki'),
   getWiki:        (id) => fetchJSON(`/api/wiki/${id}`),
+  listContradictions: () => fetchJSON('/api/wiki/contradictions'),
+  scanContradictions: (params) => fetchJSON('/api/wiki/contradictions/scan', { method: 'POST', params }),
+  mergeWiki:      (winnerId, payload) => fetchJSON(`/api/wiki/${winnerId}/merge`, { method: 'POST', body: payload }),
+  resolveWikiContradiction: (pageId) => fetchJSON(`/api/wiki/${pageId}/resolve`, { method: 'POST' }),
   createWiki:     (payload) => fetchJSON('/api/wiki', { method: 'POST', body: payload }),
   updateWiki:     (id, payload) => fetchJSON(`/api/wiki/${id}`, { method: 'PUT', body: payload }),
   deleteWiki:     (id) => fetchJSON(`/api/wiki/${id}`, { method: 'DELETE' }),
@@ -141,6 +145,18 @@ export const api = {
   // can render hint text without hardcoding them.
   getIngestConfig: () => fetchJSON('/api/admin/ingest/config'),
   saveIngestConfig: (payload) => fetchJSON('/api/admin/ingest/config', { method: 'POST', body: payload }),
+  // Redaction toggle + preview. The preview endpoint runs the same
+  // pipeline the live ingest uses, so the UI can show exactly what
+  // a pasted snippet will look like after storage.
+  getRedactConfig:    () => fetchJSON('/api/admin/redact'),
+  saveRedactConfig:   (payload) => fetchJSON('/api/admin/redact', { method: 'POST', body: payload }),
+  redactPreview:      (payload) => fetchJSON('/api/admin/redact/preview', { method: 'POST', body: payload }),
+  // Storage budget + manual compact trigger. The dashboard polls
+  // getStorage() to show live db size and the compactor's last
+  // run timestamp.
+  getStorage:         () => fetchJSON('/api/admin/storage'),
+  saveStorageBudget:  (payload) => fetchJSON('/api/admin/storage/budget', { method: 'POST', body: payload }),
+  runCompact:         (params) => fetchJSON('/api/admin/compact', { method: 'POST', params }),
   // Force-ingest endpoint: skips the watcher's idle window. Used by
   // the IngestPopover "Force active session" button when the user
   // has a long-running conversation and doesn't want to wait for the

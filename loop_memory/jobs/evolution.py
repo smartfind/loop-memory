@@ -1302,14 +1302,28 @@ class EvolutionConsolidator:
             summary = (p.get("summary") or "").strip()[:400]
             existing_p = self.store.get_wiki_page_by_slug(slug)
             try:
-                self.store.upsert_wiki_page(
+                upserted = self.store.upsert_wiki_page(
                     slug=slug, title=title, body=body, summary=summary,
                     tags=tags, importance=importance, evidence_ids=evidence,
+                    key_facts=p.get("key_facts") or [],
                     run_id=self._run_id,
                 )
             except Exception as e:
                 stats.notes.append(f"wiki upsert err: {e}")
                 continue
+            # Post-write hook: scan this page for contradictions
+            # against the rest of the wiki. Cheap (one Jaccard per
+            # candidate) and keeps the "needs review" UI list fresh
+            # without requiring a manual re-scan.
+            try:
+                from .contradiction import detect_for_page, write_contradicting_ids
+                matches = detect_for_page(self.store, upserted["id"], threshold=0.45)
+                if matches:
+                    n = write_contradicting_ids(self.store, matches)
+                    if n:
+                        stats.notes.append(f"contradictions: {n} pages flagged")
+            except Exception as e:
+                stats.notes.append(f"contradiction scan skipped: {e}")
             if existing_p is None:
                 created += 1
             else:
