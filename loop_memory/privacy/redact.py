@@ -128,7 +128,7 @@ class RedactionSummary:
         self.counts[kind] = self.counts.get(kind, 0) + 1
         self.total_chars += n_chars
 
-    def merge(self, other: "RedactionSummary") -> None:
+    def merge(self, other: RedactionSummary) -> None:
         for k, v in other.counts.items():
             self.counts[k] = self.counts.get(k, 0) + v
         self.total_chars += other.total_chars
@@ -152,11 +152,11 @@ def redact_text(text: str, *, summary: RedactionSummary | None = None) -> str:
         if kind == "__redacted_placeholder__":
             continue
         # Replace, tracking match length for the summary.
-        def _sub(m: re.Match[str]) -> str:
+        def _sub(m: re.Match[str], redaction_kind: str = kind) -> str:
             n = len(m.group(0))
             if summary is not None:
-                summary.add(kind, n)
-            return _placeholder(kind)
+                summary.add(redaction_kind, n)
+            return _placeholder(redaction_kind)
         out = pat.sub(_sub, out)
 
     # Generic fallback: only when an env-style assignment is found.
