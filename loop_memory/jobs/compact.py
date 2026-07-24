@@ -215,7 +215,6 @@ class Compactor:
                 continue
             # Keep the top-scoring rows, digest the rest.
             rows.sort(key=lambda m: (m.score or 0) * (m.importance or 0), reverse=True)
-            keep = rows[: self.min_keep_per_session]
             digest_from = rows[self.min_keep_per_session:]
             if not digest_from:
                 continue
