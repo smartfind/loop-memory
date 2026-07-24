@@ -16,6 +16,7 @@ Usage:
     loop-memory install-hooks      # auto-write MCP + SessionStart hooks for known clients
     loop-memory consolidate-now    # ask the running server to trigger a pass right now
     loop-memory export             # write distilled wiki as markdown to ~/loop-memory-export-<date>.md
+    loop-memory digest [--out PATH] # compact knowledge digest for AGENTS.md (≤ max-chars bytes)
     loop-memory ask "what about…"  # print a paste-ready context block for any LLM client
 """
 
@@ -48,6 +49,7 @@ COMMANDS = {
     "consolidate": write_cmd.run_consolidate,
     "consolidate-now": write_cmd.run_consolidate_now,
     "export": read_cmd.run_export,
+    "digest": read_cmd.run_digest,
     "ask": read_cmd.run_ask,
     "rescore": write_cmd.run_rescore,
     "serve": serve_cmd.run_serve,

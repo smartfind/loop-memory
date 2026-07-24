@@ -22,6 +22,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
+from collections.abc import Callable
 from typing import Any
 
 from ..llm.providers import build_provider, default_config, validate_config
@@ -73,6 +74,13 @@ class _State:
     last_test_ok: bool | None = None   # None = never tested
     last_test_at: float = 0.0          # epoch seconds
     last_test_message: str = ""
+    # Compaction: small enough to share the same wake loop as the
+    # LLM consolidator, but never blocks it.
+    compact_running: bool = False
+    last_compact_at: float = 0.0
+    compact_started_at: float = 0.0
+    compact_message: str = ""
+    last_compact_report: dict[str, Any] | None = None
 
 
 class ConsolidatorScheduler:
@@ -141,6 +149,11 @@ class ConsolidatorScheduler:
                     "run_id": s.progress_run_id,
                     "message": s.progress_message,
                 },
+                "compact_running": s.compact_running,
+                "last_compact_at": s.last_compact_at if s.last_compact_at > 0 else None,
+                "compact_started_at": s.compact_started_at if s.compact_started_at > 0 else None,
+                "compact_message": s.compact_message,
+                "last_compact_report": s.last_compact_report,
             }
 
     def record_test_result(self, ok: bool, message: str = "") -> None:
@@ -171,6 +184,34 @@ class ConsolidatorScheduler:
             return self._do_run(trigger)
         self._start_run_thread(trigger)
         return None
+
+    def run_blocking(self, label: str, fn: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+        """Run an arbitrary callable off the request thread, returning
+        the dict it produced. Used by maintenance endpoints
+        (compaction, reindex, …) so the HTTP request returns quickly
+        and the user can poll a status endpoint while the work
+        completes.
+
+        Returns ``{"status": "busy", ...}`` when a consolidation is
+        already running, ``{"status": "error", ...}`` on failure,
+        or ``{"status": "done", "label": label, "result": result}``
+        on success. We delegate to a one-shot ``ThreadPoolExecutor``
+        so the call returns quickly to FastAPI while the heavy
+        work runs in a worker thread.
+        """
+        import concurrent.futures as _cf
+        with self._lock:
+            running = bool(self._state.is_running)
+        if running:
+            return {"status": "busy", "label": label, "detail": "another job is in progress"}
+        with _cf.ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"lm-{label}") as ex:
+            fut = ex.submit(fn)
+            try:
+                result = fut.result(timeout=300)
+            except Exception as e:
+                log.exception("%s job failed", label)
+                return {"status": "error", "label": label, "error": str(e)}
+        return {"status": "done", "label": label, "result": result}
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -265,10 +306,86 @@ class ConsolidatorScheduler:
                         s.is_running = True
                         trigger = "schedule" if sched.get("mode") != "realtime" else "realtime"
                         self._start_run_thread(trigger)
+                # Compaction runs on its own cadence so the user can
+                # opt into background tidying without enabling the
+                # expensive LLM consolidator. We piggy-back on the
+                # same wake loop to avoid a second thread.
+                self._maybe_schedule_compact(now)
                 wait = max(1.0, min(60.0, (s.next_run - now) if s.next_run > 0 else 30.0))
             self._wake.wait(timeout=wait)
             self._wake.clear()
         log.info("consolidator scheduler stopped")
+
+    # ---- compact cadence -------------------------------------------------
+
+    def _maybe_schedule_compact(self, now: float) -> None:
+        """Decide whether to kick off a compaction pass on the
+        background thread. Cheap to call once per scheduler tick.
+
+        Triggers:
+
+          * ``auto_compact`` is on AND the cadence has elapsed
+          * the store has crossed its byte budget
+        """
+        with self._lock:
+            if self._state.is_running or self._state.compact_running:
+                return
+            cfg = self.store.get_setting("storage_budget", {}) or {}
+        if not cfg:
+            return
+        auto = bool(cfg.get("auto_compact", False))
+        interval_h = max(1, int(cfg.get("compact_interval_hours") or 24))
+        last = (self.store.get_setting("last_compact", {}) or {}).get("finished_at", 0.0)
+        max_bytes = int(cfg.get("max_bytes") or 0)
+        size_now = self.store.db_size_bytes()
+        budget_breached = max_bytes > 0 and size_now > max_bytes
+        cadence_elapsed = (now - float(last)) >= interval_h * 3600
+        if not (auto and cadence_elapsed) and not budget_breached:
+            return
+        reason = "budget" if budget_breached else "cadence"
+        self._start_compact_thread(reason)
+
+    def _start_compact_thread(self, reason: str) -> None:
+        def run() -> None:
+            try:
+                self._do_compact(reason)
+            finally:
+                with self._lock:
+                    self._state.compact_running = False
+                    self._wake.set()
+
+        with self._lock:
+            if self._state.compact_running:
+                return
+            self._state.compact_running = True
+        thread = threading.Thread(target=run, daemon=True, name=f"compactor-{reason}")
+        thread.start()
+
+    def _do_compact(self, reason: str) -> dict[str, Any]:
+        from .compact import Compactor
+        log.info("compaction start (reason=%s)", reason)
+        with self._lock:
+            self._state.compact_started_at = time.time()
+            self._state.compact_message = "starting"
+
+        def _progress(cur: int, total: int, msg: str) -> None:
+            with self._lock:
+                self._state.progress_current = cur
+                self._state.progress_total = total
+                self._state.compact_message = msg
+
+        comp = Compactor(self.store, mode="heuristic")
+        report = comp.run(progress=_progress, force=False)
+        d = report.to_dict()
+        d["reason"] = reason
+        d["finished_at"] = time.time()
+        self.store.set_setting("last_compact", d)
+        with self._lock:
+            self._state.last_compact_at = time.time()
+            self._state.last_compact_report = d
+            self._state.compact_message = ""
+        log.info("compaction done: %s", d)
+        return d
 
     def _do_run_safe(self, trigger: str) -> None:
         try:

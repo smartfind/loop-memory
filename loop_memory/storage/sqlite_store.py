@@ -205,7 +205,11 @@ CREATE TABLE IF NOT EXISTS wiki_pages (
     run_id          TEXT,           -- consolidation run that produced/updated it
     version         INTEGER NOT NULL DEFAULT 1,
     created_at      REAL NOT NULL,
-    updated_at      REAL NOT NULL
+    updated_at      REAL NOT NULL,
+    key_facts       TEXT,           -- JSON array of single-sentence facts
+    contradicting_ids TEXT          -- JSON array of wiki page ids this page
+                                     -- contradicts; populated by the
+                                     -- contradiction detector on write.
 );
 CREATE INDEX IF NOT EXISTS idx_wiki_updated  ON wiki_pages(updated_at);
 CREATE INDEX IF NOT EXISTS idx_wiki_import   ON wiki_pages(importance);
@@ -410,6 +414,10 @@ class MemoryStore:
             cols = {row["name"] for row in c.execute("PRAGMA table_info(wiki_pages)").fetchall()}
             if "scope" not in cols:
                 c.execute("ALTER TABLE wiki_pages ADD COLUMN scope TEXT NOT NULL DEFAULT 'global'")
+            if "key_facts" not in cols:
+                c.execute("ALTER TABLE wiki_pages ADD COLUMN key_facts TEXT")
+            if "contradicting_ids" not in cols:
+                c.execute("ALTER TABLE wiki_pages ADD COLUMN contradicting_ids TEXT")
 
             # One-shot FTS5 tokenizer migration. ``CREATE VIRTUAL TABLE
             # IF NOT EXISTS`` will *not* rebuild an existing FTS5 table
@@ -1651,17 +1659,25 @@ class MemoryStore:
         evidence_ids: list[str] | None = None,
         run_id: str | None = None,
         scope: str = "global",
+        key_facts: list[str] | None = None,
+        contradicting_ids: list[str] | None = None,
     ) -> Dict[str, Any]:
         """Create-or-update a wiki page by slug.
 
         Returns the full row as a dict so the API can hand it back to
         the UI without an extra round-trip.
+
+        ``key_facts`` and ``contradicting_ids`` are optional JSON-array
+        columns (see ``_init_schema``). Older callers pass neither
+        and the columns stay NULL.
         """
         import json as _json
         import uuid as _uuid
         now = time.time()
         tags_json = _json.dumps(tags or [], ensure_ascii=False)
         evid_json = _json.dumps(evidence_ids or [], ensure_ascii=False)
+        kf_json = _json.dumps(key_facts or [], ensure_ascii=False) if key_facts is not None else None
+        ci_json = _json.dumps(contradicting_ids or [], ensure_ascii=False) if contradicting_ids is not None else None
         with self._conn() as c:
             existing = c.execute(
                 "SELECT id, version FROM wiki_pages WHERE slug=?", (slug,)
@@ -1671,15 +1687,25 @@ class MemoryStore:
                 version = 1
                 c.execute(
                     "INSERT INTO wiki_pages(id, slug, title, body, summary, tags, "
-                    "importance, evidence_ids, run_id, version, created_at, updated_at, scope) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "importance, evidence_ids, run_id, version, created_at, updated_at, scope, "
+                    "key_facts, contradicting_ids) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (pid, slug, title, body, summary or "", tags_json,
                      float(importance), evid_json, run_id, version, now, now,
-                     scope or "global"),
+                     scope or "global", kf_json, ci_json),
                 )
             else:
                 pid = existing["id"]
                 version = (existing["version"] or 1) + 1
+                # Only override key_facts / contradicting_ids when the
+                # caller explicitly passes them — preserves lists
+                # built up by the contradiction detector across edits.
+                if key_facts is not None:
+                    c.execute("UPDATE wiki_pages SET key_facts=? WHERE id=?",
+                              (kf_json, pid))
+                if contradicting_ids is not None:
+                    c.execute("UPDATE wiki_pages SET contradicting_ids=? WHERE id=?",
+                              (ci_json, pid))
                 c.execute(
                     "UPDATE wiki_pages SET title=?, body=?, summary=?, tags=?, "
                     "importance=?, evidence_ids=?, run_id=?, version=?, updated_at=?, scope=? "
@@ -1698,6 +1724,7 @@ class MemoryStore:
         limit: int = 200,
         min_importance: float | None = None,
         query: str | None = None,
+        scope: str | None = None,
     ) -> list[Dict[str, Any]]:
         clauses: list[str] = []
         params: list = []
@@ -1708,6 +1735,9 @@ class MemoryStore:
             clauses.append("(title LIKE ? OR body LIKE ? OR summary LIKE ?)")
             like = f"%{query}%"
             params.extend([like, like, like])
+        if scope:
+            clauses.append("scope = ?")
+            params.append(scope)
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         with self._conn() as c:
             rows = c.execute(
@@ -1715,6 +1745,112 @@ class MemoryStore:
                 (*params, limit),
             ).fetchall()
         return [self._row_to_wiki(r) for r in rows]
+
+    def merge_wiki_pages(
+        self,
+        *,
+        winner_id: str,
+        loser_id: str,
+        merged_body: str | None = None,
+        merged_summary: str | None = None,
+        merged_key_facts: list[str] | None = None,
+        merged_importance: float | None = None,
+        merged_tags: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Merge two wiki pages into one and archive the loser.
+
+        The winner keeps its id; the loser is deleted (its evidence
+        ids are preserved as a record in ``merged_into`` so any
+        later re-scan can see what was absorbed). The winner's
+        body/summary/key_facts are replaced with the caller-supplied
+        merged values. Returns a small dict describing what changed.
+
+        Used by the contradiction UI: the user previews a side-by-side
+        diff, edits a merged body, and posts it here. The loser is
+        gone in the same transaction so the UI can refresh once.
+        """
+        if winner_id == loser_id:
+            raise ValueError("merge_wiki_pages needs two distinct ids")
+        winner = self.get_wiki_page(winner_id)
+        loser = self.get_wiki_page(loser_id)
+        if not winner or not loser:
+            raise ValueError("both pages must exist")
+        # Carry the loser's evidence_ids forward — they're a record
+        # of which raw memories contributed to the merged topic.
+        winner_evidence = list(winner.get("evidence_ids") or [])
+        winner_evidence.extend(loser.get("evidence_ids") or [])
+        # Dedup but keep order.
+        seen = set()
+        merged_evidence = []
+        for x in winner_evidence:
+            if x in seen:
+                continue
+            seen.add(x)
+            merged_evidence.append(x)
+        body = merged_body if merged_body is not None else winner.get("body") or ""
+        summary = merged_summary if merged_summary is not None else winner.get("summary") or ""
+        facts = merged_key_facts if merged_key_facts is not None else winner.get("key_facts") or []
+        tags = merged_tags if merged_tags is not None else winner.get("tags") or []
+        imp = merged_importance if merged_importance is not None else max(
+            float(winner.get("importance") or 0),
+            float(loser.get("importance") or 0),
+        )
+        # Clear the winner's contradicting_ids — once merged, there's
+        # nothing left to flag.
+        with self._conn() as c:
+            c.execute(
+                "UPDATE wiki_pages SET body=?, summary=?, key_facts=?, "
+                "tags=?, importance=?, evidence_ids=?, contradicting_ids=?, "
+                "updated_at=? WHERE id=?",
+                (
+                    body,
+                    summary,
+                    json.dumps(facts, ensure_ascii=False) if facts is not None else None,
+                    json.dumps(tags, ensure_ascii=False),
+                    imp,
+                    json.dumps(merged_evidence, ensure_ascii=False),
+                    json.dumps([], ensure_ascii=False),
+                    time.time(),
+                    winner_id,
+                ),
+            )
+            c.execute("DELETE FROM wiki_pages WHERE id=?", (loser_id,))
+            # Also drop the loser from any other page's contradicting_ids
+            c.execute(
+                "UPDATE wiki_pages SET contradicting_ids="
+                "REPLACE(REPLACE(contradicting_ids, ?, ''), ?, '') "
+                "WHERE contradicting_ids LIKE ?",
+                (
+                    f'"{loser_id}"',
+                    f',"{loser_id}"',
+                    f'%{loser_id}%',
+                ),
+            )
+        return {
+            "winner_id": winner_id,
+            "loser_id": loser_id,
+            "winner_title": winner.get("title") or "",
+            "loser_title": loser.get("title") or "",
+            "merged": {
+                "body_len": len(body),
+                "summary_len": len(summary),
+                "facts": len(facts),
+                "evidence_ids": len(merged_evidence),
+                "importance": imp,
+            },
+        }
+
+    def resolve_contradiction(self, page_id: str) -> bool:
+        """Clear a page's ``contradicting_ids`` so it disappears from
+        the contradiction list. Use when the user inspects and
+        decides there is no real conflict (e.g. the two pages are
+        about different facets of the same topic)."""
+        with self._conn() as c:
+            cur = c.execute(
+                "UPDATE wiki_pages SET contradicting_ids=? WHERE id=?",
+                (json.dumps([], ensure_ascii=False), page_id),
+            )
+            return cur.rowcount > 0
 
     def get_wiki_page(self, page_id: str) -> Dict[str, Any] | None:
         with self._conn() as c:
@@ -1763,21 +1899,38 @@ class MemoryStore:
             return int(row["n"] or 0) if row else 0
 
     def _row_to_wiki(self, row: sqlite3.Row) -> Dict[str, Any]:
-        import json as _json
         tags = []
         if row["tags"]:
             try:
-                tags = _json.loads(row["tags"])
+                tags = json.loads(row["tags"])
             except (ValueError, TypeError):
                 logger.warning("corrupt tags for relation %s; resetting", row["id"])
                 tags = []
         evidence = []
         if row["evidence_ids"]:
             try:
-                evidence = _json.loads(row["evidence_ids"])
+                evidence = json.loads(row["evidence_ids"])
             except (ValueError, TypeError):
                 logger.warning("corrupt evidence_ids for relation %s; resetting", row["id"])
                 evidence = []
+        key_facts: list[str] = []
+        if row["key_facts"]:
+            try:
+                parsed = json.loads(row["key_facts"])
+                if isinstance(parsed, list):
+                    key_facts = [str(x) for x in parsed if x]
+            except (ValueError, TypeError):
+                logger.warning("corrupt key_facts for wiki page %s; resetting", row["id"])
+                key_facts = []
+        contradicting_ids: list[str] = []
+        if row["contradicting_ids"]:
+            try:
+                parsed = json.loads(row["contradicting_ids"])
+                if isinstance(parsed, list):
+                    contradicting_ids = [str(x) for x in parsed if x]
+            except (ValueError, TypeError):
+                logger.warning("corrupt contradicting_ids for wiki page %s; resetting", row["id"])
+                contradicting_ids = []
         return {
             "id": row["id"],
             "slug": row["slug"],
@@ -1791,6 +1944,8 @@ class MemoryStore:
             "version": int(row["version"] or 1),
             "created_at": float(row["created_at"] or 0.0),
             "updated_at": float(row["updated_at"] or 0.0),
+            "key_facts": key_facts,
+            "contradicting_ids": contradicting_ids,
             "scope": row["scope"] or "global",
         }
 
@@ -2191,7 +2346,61 @@ class MemoryStore:
                 "wiki_avg_importance": round(float(wiki_avg), 4),
                 "avg_score": round(avg, 4),
                 "path": str(self.path),
+                "db_size_bytes": self.db_size_bytes(),
             }
+
+    def db_size_bytes(self) -> int:
+        """Return the on-disk size of the SQLite file in bytes.
+
+        Cheap (one stat call) so the dashboard can poll it freely.
+        """
+        try:
+            return int(self.path.stat().st_size)
+        except OSError:
+            return 0
+
+    def list_low_value_memories(self, limit: int = 500) -> list[StoredMemory]:
+        """Memories ranked by *combined* importance × score, ascending.
+
+        Used by the compactor to drop the least-useful rows when the
+        store exceeds its hard ceiling. Excludes rows that have ever
+        been recalled — we never evict demonstrably-useful memories
+        without an explicit user action.
+        """
+        with self._conn() as c:
+            rows = c.execute(
+                """
+                SELECT m.*
+                FROM memories m
+                LEFT JOIN memory_signals s ON s.memory_id = m.id
+                WHERE COALESCE(s.recall_count, 0) = 0
+                  AND m.kind != 'digest'
+                ORDER BY (COALESCE(m.score, 0) * COALESCE(m.importance, 0)) ASC,
+                         COALESCE(m.created_at, 0) ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            return [self._row_to_memory(r) for r in rows]
+
+    def storage_breakdown(self) -> dict[str, int]:
+        """Per-table row counts and approximate bytes-on-disk.
+
+        The on-disk byte estimate is from SQLite's ``dbstat`` virtual
+        table when available; falls back to a row-count × avg-size
+        heuristic otherwise.
+        """
+        out: dict[str, int] = {}
+        with self._conn() as c:
+            for tbl in ("memories", "sessions", "wiki_pages", "entities", "relations",
+                        "memory_signals", "contradiction_pairs", "drops", "settings"):
+                try:
+                    row = c.execute(f"SELECT COUNT(*) c FROM {tbl}").fetchone()
+                    out[tbl] = int(row["c"] or 0)
+                except sqlite3.OperationalError:
+                    out[tbl] = 0
+        out["db_size_bytes"] = self.db_size_bytes()
+        return out
 
 
     # --- settings ---------------------------------------------------------

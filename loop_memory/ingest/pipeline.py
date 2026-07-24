@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from ..backends.embedding import BaseEmbedder, IdentityEmbedder
 from ..memory.types import MemoryItem
 from ..storage.sqlite_store import MemoryStore, StoredMemory, StoredSession
+from ..privacy import redact_text, strip_private_spans, RedactionSummary
 from .loader import IngestedSession, IngestedTurn
 
 log = logging.getLogger(__name__)
@@ -180,6 +181,7 @@ class MemoryPipeline:
         max_facts: int = 3,
         max_chars: int = 480,
         guard: WriteGuard | None = None,
+        redact_enabled: bool | None = None,
     ) -> None:
         self.store = store
         self.embedder = embedder or IdentityEmbedder()
@@ -188,6 +190,16 @@ class MemoryPipeline:
         self.max_facts = max(0, max_facts)
         self.max_chars = max_chars
         self.guard = guard or WriteGuard(store)
+        # Privacy redaction: ON by default. ``LOOP_MEMORY_REDACT=0``
+        # disables it for debugging. Explicit ``redact_enabled=`` arg
+        # in the constructor overrides the env var. The summary
+        # counter is per-pipeline-run and is read by the /admin
+        # endpoints for live observability.
+        import os as _os
+        if redact_enabled is None:
+            redact_enabled = _os.environ.get("LOOP_MEMORY_REDACT", "1") != "0"
+        self.redact_enabled = bool(redact_enabled)
+        self.redact_summary = RedactionSummary()
         # Lazy-initialised on first drop so the import path stays optional
         # for environments that don't pull sqlite_store.
         self._drop_store = None
@@ -340,6 +352,14 @@ class MemoryPipeline:
                     except Exception:
                         pass
                 return None
+        # Privacy redaction. Runs before embedding so the vector
+        # stored in SQLite never sees a leaked secret. We also
+        # honour ``<private>...</private>`` user markers — the body
+        # becomes a single ``[PRIVATE:redacted]`` token.
+        if self.redact_enabled:
+            text = strip_private_spans(text)
+            if text.strip():
+                text = redact_text(text, summary=self.redact_summary)
         emb = None
         if self.embedder.dim:
             try:

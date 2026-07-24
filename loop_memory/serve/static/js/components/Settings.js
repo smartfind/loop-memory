@@ -71,6 +71,27 @@ export const Settings = defineComponent({
     });
     const ingestSaving = ref(false);
     const ingestHint = ref(false);
+    // ---- Redaction ----
+    // Default ON. Loaded from /api/admin/redact; persist via the
+    // same endpoint. ``redactText`` is bound to the preview input
+    // so the user can paste any text and see what would land in
+    // long-term storage before actually writing it.
+    const redactCfg = reactive({
+      enabled: true,
+      private_spans: true,
+      kinds: [],
+      notes: {},
+    });
+    const redactSaving = ref(false);
+    const redactHint = ref(false);
+    const redactPreview = reactive({
+      input: '',
+      output: '',
+      counts: {},
+      total: 0,
+      total_chars: 0,
+      busy: false,
+    });
     const testing = ref(false);
     const testResult = ref(null);
     const saving = ref(false);
@@ -111,6 +132,15 @@ export const Settings = defineComponent({
           ingestCfg.notes = { ...ing.notes };
         }
       }
+      try {
+        const rd = await api.getRedactConfig().catch(() => null);
+        if (rd && typeof rd === 'object') {
+          redactCfg.enabled = (rd.enabled !== false);
+          redactCfg.private_spans = (rd.private_spans !== false);
+          if (Array.isArray(rd.kinds)) redactCfg.kinds = rd.kinds;
+          if (rd.notes) redactCfg.notes = rd.notes;
+        }
+      } catch (e) { /* ignore */ }
       try {
         const status = await api.llmStatus();
         if (status && status.provider) store.modelInfo = {
@@ -231,6 +261,52 @@ export const Settings = defineComponent({
       }
     }
 
+    // ---- Redaction handlers ----
+    async function onSaveRedact() {
+      redactSaving.value = true;
+      try {
+        await api.saveRedactConfig({
+          enabled: redactCfg.enabled,
+          private_spans: redactCfg.private_spans,
+          kinds: redactCfg.kinds,
+        });
+        redactHint.value = true;
+        toast(t('settings.redact.saved'), 1800);
+        setTimeout(() => { redactHint.value = false; }, 2500);
+      } catch (e) {
+        toast(t('settings.redact.saveFail', { msg: e.message }), 4000);
+      } finally {
+        redactSaving.value = false;
+      }
+    }
+
+    async function onRunRedactPreview() {
+      if (!redactPreview.input || !redactPreview.input.trim()) {
+        toast(t('settings.redact.emptyPreview'), 2000);
+        return;
+      }
+      redactPreview.busy = true;
+      try {
+        const r = await api.redactPreview({ text: redactPreview.input });
+        redactPreview.output = r.text || '';
+        redactPreview.counts = r.counts || {};
+        redactPreview.total = r.total || 0;
+        redactPreview.total_chars = r.total_chars || 0;
+      } catch (e) {
+        toast(t('settings.redact.saveFail', { msg: e.message }), 4000);
+      } finally {
+        redactPreview.busy = false;
+      }
+    }
+
+    function clearRedactPreview() {
+      redactPreview.input = '';
+      redactPreview.output = '';
+      redactPreview.counts = {};
+      redactPreview.total = 0;
+      redactPreview.total_chars = 0;
+    }
+
     async function onClearKey() {
       if (!confirm(t('settings.apiKey.confirmClear'))) return;
       try {
@@ -344,6 +420,105 @@ export const Settings = defineComponent({
       cfg.schedule.enabled = (m || 'off') !== 'off';
     }, { immediate: true });
 
+    // --- storage budget + manual compact ---------------------------
+    const storageCfg = reactive({
+      max_bytes_mb: 200,
+      max_memories: 8000,
+      auto_compact: false,
+      compact_interval_hours: 24,
+      defaults: { max_bytes_mb: 200, max_memories: 8000, compact_interval_hours: 24 },
+      current_mb: 0,
+      current_memories: 0,
+      last_compact_text: '—',
+    });
+    const storageSaving = ref(false);
+    const storageHint = ref('');
+    const storageCompacting = ref(false);
+    const storageStats = ref({ memories: 0, db_size_bytes: 0 });
+    const DEFAULT_STORAGE = {
+      max_bytes_mb: 200, max_memories: 8000,
+      auto_compact: false, compact_interval_hours: 24,
+    };
+
+    function bytesToMb(b) {
+      if (!b) return 0;
+      return Math.round((Number(b) / (1024 * 1024)) * 10) / 10;
+    }
+    function _fmtLastCompact(ts) {
+      if (!ts) return t('settings.storage.never');
+      try {
+        const d = new Date(Number(ts) * 1000);
+        return d.toLocaleString();
+      } catch (_e) {
+        return '—';
+      }
+    }
+
+    async function refreshStorage() {
+      try {
+        const data = await api.getStorage();
+        const budget = (data && data.budget) || {};
+        storageCfg.max_bytes_mb = Math.round((Number(budget.max_bytes || DEFAULT_STORAGE.max_bytes_mb * 1024 * 1024) / (1024 * 1024)) || DEFAULT_STORAGE.max_bytes_mb);
+        storageCfg.max_memories = Number(budget.max_memories || DEFAULT_STORAGE.max_memories);
+        storageCfg.auto_compact = !!budget.auto_compact;
+        storageCfg.compact_interval_hours = Number(budget.compact_interval_hours || DEFAULT_STORAGE.compact_interval_hours);
+        const br = (data && data.breakdown) || {};
+        storageCfg.current_mb = bytesToMb(br.db_size_bytes || data.db_size_bytes);
+        storageCfg.current_memories = Number(br.memories || 0);
+        storageStats.value = {
+          memories: storageCfg.current_memories,
+          db_size_bytes: Number(br.db_size_bytes || data.db_size_bytes || 0),
+        };
+        const last = (data && data.last_compact) || {};
+        storageCfg.last_compact_text = _fmtLastCompact(last.finished_at);
+      } catch (e) {
+        // best-effort — leave defaults in place
+      }
+    }
+
+    async function onSaveStorage() {
+      storageSaving.value = true;
+      storageHint.value = '';
+      try {
+        const payload = {
+          max_bytes: Math.max(0, Math.round(Number(storageCfg.max_bytes_mb || 0) * 1024 * 1024)),
+          max_memories: Math.max(0, Math.round(Number(storageCfg.max_memories || 0))),
+          auto_compact: !!storageCfg.auto_compact,
+          compact_interval_hours: Math.max(1, Math.round(Number(storageCfg.compact_interval_hours || 24))),
+        };
+        await api.saveStorageBudget(payload);
+        storageHint.value = t('settings.storage.savedHint');
+        setTimeout(() => { storageHint.value = ''; }, 2500);
+        await refreshStorage();
+      } catch (e) {
+        storageHint.value = t('settings.storage.saveFailed', { error: String(e && e.message || e) });
+      } finally {
+        storageSaving.value = false;
+      }
+    }
+
+    async function onRunCompact() {
+      storageCompacting.value = true;
+      storageHint.value = t('settings.storage.compacting');
+      try {
+        const r = await api.runCompact({ force: true, mode: "heuristic" });
+        const result = (r && r.result) || r || {};
+        const d = result.result || result;
+        storageHint.value = t('settings.storage.compactDone', {
+          deleted: d.deleted_memories || 0,
+          sessions: d.digested_sessions || 0,
+        });
+        await refreshStorage();
+      } catch (e) {
+        storageHint.value = t('settings.storage.compactFailed', { error: String(e && e.message || e) });
+      } finally {
+        storageCompacting.value = false;
+        setTimeout(() => { if (storageHint.value && storageHint.value.startsWith(t('settings.storage.compactDone', { deleted: 0, sessions: 0 }).slice(0, 5))) storageHint.value = ''; }, 4000);
+      }
+    }
+
+    watch(() => props.open, (v) => { if (v) refreshStorage(); });
+
     function onClose() { emit('close'); }
     function openClientHooksPanel() {
       // Close the drawer first, then ask App.js to open the diagnostic
@@ -356,6 +531,10 @@ export const Settings = defineComponent({
              testing, testResult, onTest,
              saving, savedHint, onSave, onClearKey, onReset, onRunNow, onPreview,
              ingestCfg, ingestSaving, ingestHint, onSaveIngest,
+             redactCfg, redactSaving, redactHint, onSaveRedact,
+             redactPreview, onRunRedactPreview, clearRedactPreview,
+             storageCfg, storageSaving, storageHint, onSaveStorage,
+             storageCompacting, onRunCompact, storageStats,
              runs, runsLoading, refreshRuns, nextRun, nextRunText, scheduleModeHint,
              previewItems, previewLoading, previewOpen,
              statusKey, triggerKey, statLine,
@@ -483,6 +662,126 @@ export const Settings = defineComponent({
           {{ t('settings.ingest.resetDefaults') }}
         </button>
         <span v-if="ingestHint" class="ingest-hint">{{ t('settings.ingest.liveHint') }}</span>
+      </div>
+    </section>
+
+    <!-- Storage budget + compaction cadence. Hidden in 'mode=llm' —
+         the LLM Connection drawer should not surface maintenance
+         controls; compaction lives behind the gear icon. -->
+    <section v-if="mode !== 'llm'" class="sec-storage">
+      <h3>{{ t('settings.section.storage') }}</h3>
+      <p class="sec-scope">{{ t('settings.storage.scope') }}</p>
+      <div class="row-2">
+        <label>
+          <span>{{ t('settings.storage.maxBytes') }}</span>
+          <input type="number" v-model.number="storageCfg.max_bytes_mb"
+                 :min="0" :max="2048" />
+          <small class="hint">{{ t('settings.storage.maxBytesHint', { def: storageCfg.defaults.max_bytes_mb, current: storageCfg.current_mb }) }}</small>
+        </label>
+        <label>
+          <span>{{ t('settings.storage.maxMemories') }}</span>
+          <input type="number" v-model.number="storageCfg.max_memories"
+                 :min="0" :max="100000" />
+          <small class="hint">{{ t('settings.storage.maxMemoriesHint', { def: storageCfg.defaults.max_memories, current: storageCfg.current_memories }) }}</small>
+        </label>
+      </div>
+      <label class="row-toggle">
+        <input type="checkbox" v-model="storageCfg.auto_compact" />
+        <span>{{ t('settings.storage.autoCompact') }}</span>
+      </label>
+      <div v-if="storageCfg.auto_compact" class="row-2">
+        <label>
+          <span>{{ t('settings.storage.intervalHours') }}</span>
+          <input type="number" v-model.number="storageCfg.compact_interval_hours"
+                 :min="1" :max="720" />
+          <small class="hint">{{ t('settings.storage.intervalHoursHint', { def: storageCfg.defaults.compact_interval_hours }) }}</small>
+        </label>
+        <div class="storage-meter">
+          <span>{{ t('settings.storage.lastCompact') }}</span>
+          <strong>{{ storageCfg.last_compact_text }}</strong>
+        </div>
+      </div>
+      <div class="action-row" style="gap:8px;flex-wrap:wrap;margin-top:8px;">
+        <button class="btn primary" type="button" :disabled="storageSaving"
+                @click="onSaveStorage">
+          {{ storageSaving ? t('common.saving') : t('action.save') }}
+        </button>
+        <button class="btn ghost" type="button" :disabled="storageCompacting"
+                @click="onRunCompact">
+          {{ storageCompacting ? t('settings.storage.compacting') : t('settings.storage.runCompact') }}
+        </button>
+        <span v-if="storageHint" class="ingest-hint">{{ storageHint }}</span>
+      </div>
+    </section>
+
+    <!-- Redaction — secrets auto-stripped from stored memories and
+         exported markdown. Hidden in 'mode=llm' (LLM Connection
+         doesn't own privacy — redaction is project-wide). The
+         preview textarea lets the user paste any text and see
+         exactly what would land in long-term storage. -->
+    <section v-if="mode !== 'llm'" class="sec-redact">
+      <h3>{{ t('settings.section.redact') }}</h3>
+      <p class="sec-scope">{{ t('settings.redact.scope') }}</p>
+      <label class="row-toggle">
+        <input type="checkbox" v-model="redactCfg.enabled" />
+        <span>
+          <strong>{{ t('settings.redact.enabled') }}</strong>
+          <small>{{ t('settings.redact.enabledHint') }}</small>
+        </span>
+      </label>
+      <label class="row-toggle">
+        <input type="checkbox" v-model="redactCfg.private_spans" />
+        <span>
+          <strong>{{ t('settings.redact.privateSpans') }}</strong>
+          <small>{{ t('settings.redact.privateSpansHint') }}</small>
+        </span>
+      </label>
+      <details class="redact-kinds">
+        <summary>{{ t('settings.redact.kindsSummary', { n: redactCfg.kinds.length }) }}</summary>
+        <ul class="kind-list">
+          <li v-for="k in redactCfg.kinds" :key="k">
+            <code>{{ k }}</code>
+          </li>
+        </ul>
+      </details>
+      <div class="redact-preview">
+        <label>
+          <span>{{ t('settings.redact.previewLabel') }}</span>
+          <textarea v-model="redactPreview.input" rows="3"
+                    :placeholder="t('settings.redact.previewPlaceholder')"></textarea>
+        </label>
+        <div class="redact-preview-actions">
+          <button class="btn small" type="button" :disabled="redactPreview.busy"
+                  @click="onRunRedactPreview">
+            {{ redactPreview.busy ? t('common.loading') : t('settings.redact.previewRun') }}
+          </button>
+          <button class="btn small ghost" type="button" @click="clearRedactPreview"
+                  :disabled="!redactPreview.input && !redactPreview.output">
+            {{ t('common.clear') }}
+          </button>
+        </div>
+        <div v-if="redactPreview.output" class="redact-output">
+          <div class="redact-output-text">
+            <small class="hint">{{ t('settings.redact.previewResult') }}</small>
+            <pre>{{ redactPreview.output }}</pre>
+          </div>
+          <div class="redact-output-meta" v-if="redactPreview.total > 0">
+            <span class="redact-pill"
+                  v-for="(n, kind) in redactPreview.counts" :key="kind">
+              {{ kind }} × {{ n }}
+            </span>
+            <small class="hint">
+              {{ t('settings.redact.previewTotal', { n: redactPreview.total, chars: redactPreview.total_chars }) }}
+            </small>
+          </div>
+        </div>
+      </div>
+      <div class="action-row" style="gap:8px;flex-wrap:wrap;margin-top:8px;">
+        <button class="btn primary" type="button" :disabled="redactSaving"
+                @click="onSaveRedact">
+          {{ redactSaving ? t('common.saving') : t('action.save') }}
+        </button>
+        <span v-if="redactHint" class="redact-hint">{{ t('settings.redact.liveHint') }}</span>
       </div>
     </section>
 

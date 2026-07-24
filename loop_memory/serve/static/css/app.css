@@ -1575,6 +1575,128 @@
     border-radius: 999px;
     padding: 3px 10px;
   }
+  /* Redaction section — toggles, kind list, preview pane. The
+     "live" chip mirrors the ingest-hint chip styling so both
+     sections feel consistent. */
+  .sec-redact .row-toggle {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 8px 10px;
+    margin: 6px 0;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    cursor: pointer;
+    background: var(--surface-2);
+  }
+  .sec-redact .row-toggle input[type="checkbox"] {
+    margin-top: 2px;
+    transform: scale(1.05);
+    cursor: pointer;
+  }
+  .sec-redact .row-toggle strong {
+    display: block;
+    font-size: 12.5px;
+    color: var(--text);
+  }
+  .sec-redact .row-toggle small {
+    display: block;
+    font-size: 11px;
+    color: var(--text-faint);
+    margin-top: 2px;
+    line-height: 1.4;
+  }
+  .redact-kinds {
+    margin: 6px 0 10px;
+    font-size: 11.5px;
+  }
+  .redact-kinds summary {
+    cursor: pointer;
+    color: var(--text-faint);
+    user-select: none;
+  }
+  .redact-kinds .kind-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 8px 0 0;
+    padding: 0;
+    list-style: none;
+  }
+  .redact-kinds .kind-list li code {
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 3px 7px;
+    border-radius: 4px;
+    background: var(--surface-3);
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+  .redact-preview {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px dashed var(--border);
+  }
+  .redact-preview textarea {
+    width: 100%;
+    resize: vertical;
+    min-height: 56px;
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--text);
+    box-sizing: border-box;
+  }
+  .redact-preview-actions {
+    display: flex;
+    gap: 6px;
+    margin: 6px 0 0;
+  }
+  .redact-output {
+    margin-top: 10px;
+    padding: 8px 10px;
+    background: var(--surface-2);
+    border-radius: 6px;
+    border: 1px solid var(--border);
+  }
+  .redact-output pre {
+    font-family: var(--mono);
+    font-size: 12px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin: 4px 0 0;
+    color: var(--text);
+  }
+  .redact-output-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+    align-items: center;
+  }
+  .redact-pill {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--warn) 18%, transparent);
+    border: 1px solid color-mix(in srgb, var(--warn) 36%, transparent);
+    color: var(--warn);
+    letter-spacing: 0.2px;
+  }
+  .redact-hint {
+    align-self: center;
+    margin-left: auto;
+    font-size: 11.5px;
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+    border-radius: 999px;
+    padding: 3px 10px;
+  }
   .drawer-section { margin-bottom: 18px; }
   /* Doctor modal — green/red diagnostic screen accessible from kebab. */
   .doctor-modal {
@@ -3684,3 +3806,103 @@
 [data-theme="dark"] .wiki-card .scope-pill-openclaw { background: rgba(  34, 197,  94, .25); border-color: rgba(  34, 197,  94, .45); color: rgb( 74, 222, 128); }
 
 .wiki-toolbar select[title] { min-width: 110px; }
+
+  /* Storage budget section — toggle row + last-compact chip. */
+  .sec-storage .row-toggle {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 8px 10px;
+    margin: 6px 0;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    cursor: pointer;
+    background: var(--surface-2);
+  }
+  .sec-storage .row-toggle input[type="checkbox"] {
+    margin-top: 2px;
+    transform: scale(1.05);
+    cursor: pointer;
+  }
+  .sec-storage .storage-meter {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface-2);
+  }
+  .sec-storage .storage-meter span {
+    font-size: 11.5px;
+    color: var(--text-faint);
+  }
+  .sec-storage .storage-meter strong {
+    font-size: 12.5px;
+    color: var(--text);
+  }
+
+  /* Contradictions panel — surfaced above the wiki grid when there
+     are pages flagged as potentially conflicting. Each row shows
+     both titles side-by-side and exposes the two main actions:
+     merge (default), or mark-not-a-conflict (escape hatch). */
+  .wiki-contradictions {
+    margin: 14px 0 6px;
+    padding: 12px 14px;
+    border: 1px solid color-mix(in srgb, var(--warn, #d6a04a) 45%, transparent);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--warn, #d6a04a) 10%, transparent);
+  }
+  .wiki-contradictions .wc-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .wiki-contradictions h4 {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .wiki-contradictions .wc-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .wiki-contradictions .wc-row {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    padding: 8px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .wiki-contradictions .wc-pair {
+    font-size: 12.5px;
+    color: var(--text);
+  }
+  .wiki-contradictions .wc-pair .vs {
+    margin: 0 6px;
+    color: var(--text-faint);
+    font-size: 11px;
+  }
+  .wiki-contradictions .wc-summary-row {
+    font-size: 11.5px;
+    color: var(--text-faint);
+    line-height: 1.4;
+  }
+  .wiki-contradictions .wc-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 4px;
+  }
+  .wiki-contradictions .btn.small {
+    padding: 4px 10px;
+    font-size: 11.5px;
+  }

@@ -1448,6 +1448,133 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
             "elapsed_ms": round(report.elapsed_ms, 1),
         }
 
+    @app.post("/api/admin/compact")
+    def admin_compact(force: bool = False, mode: str = "heuristic"):
+        """Run a single compaction pass over the memory store.
+
+        ``force=True`` ignores the age filter — useful for a one-shot
+        "tidy up after a heavy ingest burst" trigger from the UI.
+        ``mode`` switches between ``heuristic`` (cheap, scheduled) and
+        ``llm`` (slower, higher-quality fusion). The LLM mode is a
+        no-op for now and reserved for the future fusion pass.
+        """
+        from ..jobs.compact import Compactor
+        from ..jobs.scheduler import ConsolidatorScheduler
+        # Make sure we run on a worker thread so the request returns
+        # fast even when there are tens of thousands of rows.
+        sched: ConsolidatorScheduler | None = getattr(app.state, "scheduler", None)
+
+        def _do() -> dict:
+            c = Compactor(store, mode=mode)
+            report = c.run(force=force)
+            return report.to_dict()
+
+        if sched is not None:
+            return sched.run_blocking("compact", _do)
+        return _do()
+
+    @app.get("/api/admin/storage")
+    def admin_storage():
+        """Storage usage + per-table breakdown + budget info.
+
+        Polled by the dashboard so the user can see when the store is
+        approaching its ceiling *before* it crosses it.
+        """
+        breakdown = store.storage_breakdown()
+        cfg = store.get_setting("storage_budget", {}) or {}
+        return {
+            "db_size_bytes": breakdown.get("db_size_bytes", 0),
+            "breakdown": breakdown,
+            "budget": {
+                "max_bytes": int(cfg.get("max_bytes") or 0),
+                "max_memories": int(cfg.get("max_memories") or 0),
+                "auto_compact": bool(cfg.get("auto_compact", False)),
+                "compact_interval_hours": int(cfg.get("compact_interval_hours") or 24),
+            },
+            "last_compact": store.get_setting("last_compact", {}) or {},
+        }
+
+    @app.post("/api/admin/storage/budget")
+    def admin_storage_budget(body: dict):
+        """Persist the storage budget config.
+
+        Body keys (all optional, merged into existing config):
+
+          * ``max_bytes`` int       - hard ceiling; auto-prune when exceeded
+          * ``max_memories`` int    - soft ceiling on row count
+          * ``auto_compact`` bool   - run compact on the scheduler cadence
+          * ``compact_interval_hours`` int - cadence in hours (default 24)
+        """
+        current = store.get_setting("storage_budget", {}) or {}
+        allowed_keys = {"max_bytes", "max_memories", "auto_compact", "compact_interval_hours"}
+        for k in allowed_keys:
+            if k in body:
+                current[k] = body[k]
+        store.set_setting("storage_budget", current)
+        # Wake the scheduler so it picks up the new cadence.
+        sched = getattr(app.state, "scheduler", None)
+        if sched is not None and hasattr(sched, "reload_config"):
+            sched.reload_config()
+        return {"ok": True, "budget": current}
+
+    @app.get("/api/wiki/contradictions")
+    def wiki_contradictions():
+        """Return every wiki page that has at least one partner in
+        its ``contradicting_ids`` list, with the partner summaries
+        inline. The UI uses this to render the "needs review" list
+        on the Wiki page.
+        """
+        from ..jobs.contradiction import list_contradictions
+        rows = list_contradictions(store)
+        return {"count": len(rows), "items": rows}
+
+    @app.post("/api/wiki/contradictions/scan")
+    def wiki_contradictions_scan(threshold: float = 0.45):
+        """Re-scan every wiki page for contradictions. Cheap for
+        <1000 pages; intended for manual triggers from the UI after
+        the user adds or edits pages."""
+        from ..jobs.contradiction import scan_all
+        return scan_all(store, threshold=threshold)
+
+    @app.post("/api/wiki/{page_id}/merge")
+    def wiki_merge(page_id: str, body: dict):
+        """Merge ``page_id`` with the page in ``body.loser_id``.
+
+        Body keys:
+
+          * ``loser_id`` (str) — the page to dissolve into ``page_id``
+          * ``merged_body`` (str, optional)
+          * ``merged_summary`` (str, optional)
+          * ``merged_key_facts`` (list[str], optional)
+          * ``merged_importance`` (float, optional)
+          * ``merged_tags`` (list[str], optional)
+
+        The winner keeps its id; the loser is deleted. The winner's
+        ``contradicting_ids`` column is cleared because the conflict
+        is resolved.
+        """
+        loser_id = body.get("loser_id") or body.get("loserId")
+        if not loser_id:
+            raise HTTPException(400, "loser_id is required")
+        return store.merge_wiki_pages(
+            winner_id=page_id,
+            loser_id=loser_id,
+            merged_body=body.get("merged_body") or body.get("mergedBody"),
+            merged_summary=body.get("merged_summary") or body.get("mergedSummary"),
+            merged_key_facts=body.get("merged_key_facts") or body.get("mergedKeyFacts"),
+            merged_importance=body.get("merged_importance") or body.get("mergedImportance"),
+            merged_tags=body.get("merged_tags") or body.get("mergedTags"),
+        )
+
+    @app.post("/api/wiki/{page_id}/resolve")
+    def wiki_resolve(page_id: str):
+        """Clear a page's ``contradicting_ids`` so it disappears
+        from the contradiction list. Use when the user inspects and
+        decides the two pages are not actually in conflict.
+        """
+        ok = store.resolve_contradiction(page_id)
+        return {"ok": bool(ok)}
+
     @app.post("/api/admin/consolidate-now")
     def consolidate_now():
         """Trigger the configured consolidator scheduler immediately.
@@ -1503,6 +1630,85 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
                 "max_idle_seconds": 3600,
                 "max_poll_seconds": 60,
             },
+        }
+
+    @app.get("/api/admin/redact")
+    def redact_config_get():
+        """Return the current redaction settings.
+
+        ``enabled`` controls whether ``MemoryPipeline._write`` strips
+        secrets before they hit the long-term store. The setting
+        also disables the ``<private>...</private>`` span stripping
+        (a downstream consumer would still see the markers, but the
+        body inside isn't removed).
+
+        The ``counts`` field is empty here — the per-pipeline-run
+        counter lives on the live ingest pipeline. See the live
+        ``/api/admin/redact/live`` endpoint.
+        """
+        cfg = store.get_setting("redact", {}) or {}
+        return {
+            "enabled": bool(cfg.get("enabled", True)),
+            "kinds": cfg.get("kinds") or [
+                "private_key_block",
+                "openai_key", "openai_project_key", "openai_service_key",
+                "anthropic_key", "gemini_key", "github_pat", "slack_token",
+                "aws_access_key", "jwt", "bearer_token", "generic_high_entropy",
+            ],
+            "private_spans": bool(cfg.get("private_spans", True)),
+        }
+
+    @app.post("/api/admin/redact")
+    def redact_config_post(body: dict):
+        """Persist redaction settings.
+
+        Body fields (all optional):
+          * ``enabled`` (bool)   — global on/off for secret redaction
+          * ``kinds`` (list[str])— disable specific pattern kinds
+          * ``private_spans`` (bool) — honour ``<private>...</private>``
+        """
+        if not isinstance(body, dict):
+            raise HTTPException(400, "body must be an object")
+        current = store.get_setting("redact", {}) or {}
+        new_cfg = dict(current)
+        if "enabled" in body:
+            new_cfg["enabled"] = bool(body["enabled"])
+        if "private_spans" in body:
+            new_cfg["private_spans"] = bool(body["private_spans"])
+        if "kinds" in body:
+            kinds = body["kinds"]
+            if not isinstance(kinds, list):
+                raise HTTPException(400, "kinds must be a list of strings")
+            new_cfg["kinds"] = [str(k) for k in kinds]
+        store.set_setting("redact", new_cfg)
+        return {"ok": True, "redact": new_cfg}
+
+    @app.post("/api/admin/redact/preview")
+    def redact_preview(body: dict):
+        """Show what the live redaction pipeline WOULD do on an
+        arbitrary text snippet.
+
+        Body: ``{"text": "..."}``
+        Returns: ``{"text": "...redacted...",
+                     "counts": {"openai_key": 1, ...},
+                     "total": 1,
+                     "total_chars": 51}``
+
+        The intent is to let the UI show a side-by-side preview so
+        users can see (and tune) what their pipeline produces
+        without having to ingest a real transcript.
+        """
+        from ..privacy import redact_text, RedactionSummary
+        if not isinstance(body, dict) or "text" not in body:
+            raise HTTPException(400, "body must be {text: ...}")
+        text = str(body.get("text") or "")
+        summary = RedactionSummary()
+        out = redact_text(text, summary=summary)
+        return {
+            "text": out,
+            "counts": summary.counts,
+            "total": summary.total,
+            "total_chars": summary.total_chars,
         }
 
     @app.post("/api/admin/ingest/config")

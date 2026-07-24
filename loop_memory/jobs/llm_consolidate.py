@@ -138,30 +138,44 @@ No prose, no markdown outside the JSON, no trailing commentary.
 
 WIKI_SYSTEM_PROMPT = """You are a knowledge curator. You will be given a
 batch of memory records (already filtered for noise and rewritten for
-clarity) from a developer\'s AI-coding sessions. Your job is to write a
-small set of polished, durable *wiki pages* — long-form notes that
+clarity) from a developer\'s AI-coding sessions. Your job is to write
+a small set of polished, durable *wiki pages* — long-form notes that
 capture what the developer knows / is doing / has decided so far.
 
-Each wiki page must:
+# Quality contract
 
-  - Be self-contained and read well on its own (no "as mentioned above").
-  - Cover ONE coherent topic; do not cram unrelated facts together.
-  - Use a clear, neutral tone. Prefer present tense for current state,
-    past tense for historical facts.
-  - Include concrete details (file paths, function names, dollar
-    amounts, dates) when they appear in the source memories.
-  - Be 2-6 short paragraphs or a tight bulleted list — *not* an essay.
-  - Cite the contributing memory ids in ``evidence_ids`` so the user
-    can audit the source.
+  - **Completeness first.** A wiki page must capture the FULL fact the
+    user expressed. NEVER cut a fact off mid-sentence, drop the answer
+    half of an X-and-Y fact, or replace concrete detail with
+    "..." / "etc.". If the source memory says the user uses SQLite,
+    Redis, and Memcached for caching, the page must mention all three.
+  - **Split unrelated facts into separate pages.** If the source
+    memories describe two independent decisions (e.g. "uses
+    Postgres" AND "prefers tabs over spaces"), output TWO pages,
+    not one combined page. Slug-merge is handled downstream so
+    over-splitting is safe.
+  - **Each page is a coherent topic**, not a transcript. Pages read
+    like a senior engineer\'s notes, not a chat log.
+  - **Be self-contained.** No "as mentioned above". No references to
+    "the previous message". Every page must be readable in isolation.
+  - **Use concrete details** when they appear in the source: file
+    paths, function names, version numbers, dollar amounts, dates,
+    named libraries, error messages. Drop generic prose.
 
-Output strict JSON of the form:
+# Format
+
+Each wiki page covers ONE topic and is 2-6 short paragraphs OR a tight
+bulleted list — not an essay, not a one-liner.
+
+Output STRICT JSON of the form:
 {
   "pages": [
     {
       "slug": "kebab-case-3-to-5-words",
       "title": "Short descriptive title",
-      "summary": "One-sentence TL;DR",
-      "body": "Markdown body. Use short paragraphs or bullets.",
+      "summary": "1-3 sentence TL;DR capturing the WHOLE fact",
+      "body": "Markdown body with short paragraphs or bullets. NEVER truncate. Always finish every sentence.",
+      "key_facts": ["single-sentence fact 1", "single-sentence fact 2"],
       "tags": ["project-name", "topic"],
       "importance": 0.6,
       "evidence_ids": ["mem_id_1", "mem_id_2"]
@@ -169,15 +183,23 @@ Output strict JSON of the form:
   ]
 }
 
-Hard rules:
-  - Produce BETWEEN 1 AND 6 pages. If the source memories don\'t form a
-    coherent topic, return an empty ``pages`` array.
-  - Slugs must be unique within the response and kebab-case lowercase.
+``key_facts`` is MANDATORY and is used downstream for retrieval +
+contradiction detection. One fact per bullet. Each fact must be a
+complete sentence, self-contained, and contain the answer the user
+expressed (not just the question).
+
+# Hard rules
+
+  - Produce BETWEEN 1 AND 8 pages. Empty array is acceptable if no
+    source memories form a coherent topic.
+  - Slugs must be unique within the response, kebab-case lowercase,
+    3-7 words. Rename if two pages would collide.
   - Do NOT invent details that aren\'t in the source memories.
+  - Do NOT compress a multi-fact paragraph into a single phrase.
+    "Uses X for Y and Z for W" must stay "uses X for Y, Z for W".
   - If the same topic was already covered in a previous wiki page,
-    still include it here — the system will merge by slug and bump the
-    version.
-  - No prose outside the JSON.
+    still include it here — downstream merge handles versioning.
+  - No prose outside the JSON. No markdown fences around the JSON.
 """
 
 
@@ -588,7 +610,42 @@ class LLMConsolidator:
             if not isinstance(evidence, list):
                 evidence = []
             evidence = [str(x) for x in evidence if x][:50]
-            summary = (p.get("summary") or "").strip()[:400]
+            # Summary used to be [:400]-truncated, which silently
+            # dropped the answer half of compound facts. We now keep
+            # the full text. The UI cards render summary as a
+            # clamp-on-overflow block so long summaries still look
+            # clean, but every sentence the LLM produced survives.
+            summary = (p.get("summary") or "").strip()
+            if len(summary) > 2000:
+                summary = summary[:2000].rstrip() + "…"
+
+            # Body: no artificial cap. The model was already told to
+            # keep it tight. If the LLM returned more than 16 KB we
+            # still truncate to a soft cap with a marker so the page
+            # never explodes storage.
+            body = body
+            if len(body) > 16000:
+                body = body[:16000].rstrip() + "\n\n*[truncated by storage cap]*"
+
+            # ``key_facts``: machine-readable list of single-sentence
+            # facts. Used by:
+            #   - contradiction detection (compare fact N of new page
+            #     to fact M of existing page)
+            #   - Wiki card rendering (one bullet per key fact)
+            #   - downstream search / ask commands (one row per fact)
+            # Filter out empty / non-string entries; cap at 12 to
+            # bound the per-page fan-out.
+            raw_facts = p.get("key_facts") or []
+            if not isinstance(raw_facts, list):
+                raw_facts = []
+            key_facts = []
+            for f in raw_facts:
+                if isinstance(f, str):
+                    txt = f.strip()
+                    if txt and len(txt) <= 1000:
+                        key_facts.append(txt)
+                if len(key_facts) >= 12:
+                    break
 
             existing = self.store.get_wiki_page_by_slug(slug)
             # Default scope = the source clients of the evidence
@@ -601,6 +658,7 @@ class LLMConsolidator:
             self.store.upsert_wiki_page(
                 slug=slug, title=title, body=body, summary=summary,
                 tags=tags, importance=importance, evidence_ids=evidence,
+                key_facts=key_facts,
                 run_id=run_id,
                 scope=scope_val,
             )
