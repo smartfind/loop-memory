@@ -1416,6 +1416,380 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
             raise HTTPException(400, f"unknown action {action!r}")
         return result
 
+    # ------------------------------------------------------------------
+    # /api/v1/memories — Universal Agent Memory API
+    # ------------------------------------------------------------------
+    # Designed for any Agent (Codex / Claude / Hermes / OpenClaw /
+    # LangChain / AutoGPT / a custom internal bot) to remember facts,
+    # recall context, give feedback, and forget — without coupling to
+    # the in-process store or the existing /api/* surface. Idempotent
+    # writes are keyed on (agent_id, user_id, external_id) so a retry
+    # of the same tool call updates the row in place.
+    #
+    # This block is intentionally placed alongside the legacy
+    # ``/api/memories`` routes for discoverability — the OpenAPI doc
+    # at ``/openapi.json`` lists every route side-by-side.
+    # ------------------------------------------------------------------
+
+    @app.post("/api/v1/memories")
+    def v1_create_memory(body: dict):
+        """Idempotent remember(). Body: {text, kind?, importance?,
+        tags?, source?, session_id?, external_id?, agent_id?, user_id?,
+        ttl?}. When ``external_id`` is set, the (agent_id, user_id,
+        external_id) tuple must be unique; re-pushing updates the
+        row in place.
+        """
+        text = (body.get("text") or "").strip()
+        if not text:
+            raise HTTPException(400, "text is required")
+        kind = (body.get("kind") or "fact").strip()
+        importance = body.get("importance")
+        try:
+            importance_f = float(importance) if importance is not None else 0.5
+        except (TypeError, ValueError):
+            raise HTTPException(400, f"importance must be a number, got {importance!r}")
+        importance_f = max(0.0, min(1.0, importance_f))
+        ttl = body.get("ttl")
+        try:
+            ttl_f = float(ttl) if ttl is not None else None
+        except (TypeError, ValueError):
+            raise HTTPException(400, f"ttl must be a number, got {ttl!r}")
+        ext = body.get("external_id")
+        if ext is not None:
+            ext = str(ext).strip() or None
+        _ca = body.get("created_at")
+        try:
+            _ca_f = float(_ca) if _ca is not None else None
+        except (TypeError, ValueError):
+            raise HTTPException(400, "created_at must be a number, got " + repr(_ca))
+        stored = store.upsert_memory(
+            kind=kind,
+            text=text,
+            importance=importance_f,
+            source=body.get("source"),
+            session_id=body.get("session_id"),
+            tags=list(body.get("tags") or []),
+            agent_id=body.get("agent_id"),
+            user_id=body.get("user_id"),
+            external_id=ext,
+            ttl=ttl_f,
+        )
+        return _memory_to_dict(stored)
+
+    @app.post("/api/v1/memories:batch")
+    def v1_create_memories_batch(body: dict):
+        """Bulk remember(). Body: {items: [ {...same as single...}, ... ]}.
+
+        Returns a per-item list with either the created memory or an
+        error string. The HTTP status is always 200 so a single
+        malformed item doesn't fail the whole batch — callers should
+        inspect each ``items[].error`` field.
+        """
+        items = body.get("items") or []
+        if not isinstance(items, list):
+            raise HTTPException(400, "items must be a list")
+        if len(items) > 500:
+            raise HTTPException(400, "batch size capped at 500 per request")
+        out = []
+        for raw in items:
+            try:
+                if not isinstance(raw, dict):
+                    raise ValueError("item must be an object")
+                text = (raw.get("text") or "").strip()
+                if not text:
+                    raise ValueError("text is required")
+                ext = raw.get("external_id")
+                if ext is not None:
+                    ext = str(ext).strip() or None
+                importance = raw.get("importance")
+                try:
+                    importance_f = float(importance) if importance is not None else 0.5
+                except (TypeError, ValueError):
+                    raise ValueError(f"importance must be a number, got {importance!r}")
+                importance_f = max(0.0, min(1.0, importance_f))
+                _ca = raw.get("created_at")
+                try:
+                    _ca_f = float(_ca) if _ca is not None else None
+                except (TypeError, ValueError):
+                    raise ValueError("created_at must be a number, got " + repr(_ca))
+                stored = store.upsert_memory(
+                    kind=(raw.get("kind") or "fact").strip(),
+                    text=text,
+                    importance=importance_f,
+                    source=raw.get("source"),
+                    session_id=raw.get("session_id"),
+                    tags=list(raw.get("tags") or []),
+                    agent_id=raw.get("agent_id"),
+                    user_id=raw.get("user_id"),
+                    external_id=ext,
+                    created_at=_ca_f,
+                )
+                out.append(_memory_to_dict(stored))
+            except Exception as e:
+                out.append({"error": str(e), "input": raw})
+        return {"items": out, "count": len(out)}
+
+    @app.get("/api/v1/memories")
+    def v1_list_memories(
+        agent_id: str | None = None,
+        user_id: str | None = None,
+        session_id: str | None = None,
+        kind: str | None = None,
+        external_id: str | None = None,
+        min_score: float | None = None,
+        q: str | None = None,
+        limit: int = 50,
+    ):
+        """List memories with simple filters. ``external_id`` is exact-
+        match; combine with ``agent_id`` / ``user_id`` to address a
+        specific row pushed by an external Agent."""
+        rows = store.list_memories(
+            agent_id=agent_id,
+            user_id=user_id,
+            session_id=session_id,
+            kind=kind,
+            external_id=external_id,
+            min_score=min_score,
+            query=q,
+            limit=min(max(limit, 1), 500),
+        )
+        return {"memories": [_memory_to_dict(m) for m in rows], "count": len(rows)}
+
+    @app.get("/api/v1/recall")
+    def v1_recall(
+        q: str,
+        limit: int = 8,
+        include: str = "memories,wiki,entities",
+        source: str | None = None,
+        agent_id: str | None = None,
+        user_id: str | None = None,
+        mode: str = "hybrid",
+    ):
+        """Unified recall filtered to a single Agent namespace.
+
+        ``agent_id`` and ``user_id`` are optional narrowing filters
+        applied on top of the existing BM25+semantic+entity hybrid
+        pipeline. Memories with no ``agent_id`` set are treated as
+        "global" and visible to every caller (matches the SDK
+        semantics).
+        """
+        wanted = tuple(s.strip() for s in include.split(",") if s.strip())
+        if not wanted:
+            wanted = ("memories", "wiki", "entities")
+        if mode == "legacy" or not hasattr(store, "recall_hybrid"):
+            r = store.recall(q, limit=limit, include=wanted, bump_signals=True)
+        else:
+            r = store.recall_hybrid(
+                q, limit=limit, include=wanted,
+                bump_signals=True, source=source, level=1,
+            )
+        if agent_id is not None or user_id is not None:
+            def _own(m: dict) -> bool:
+                ag = m.get("agent_id")
+                ur = m.get("user_id")
+                # Global memories (no agent_id) are visible to all.
+                if ag is None and ur is None:
+                    return True
+                if agent_id is not None and ag not in (None, agent_id):
+                    return False
+                if user_id is not None and ur not in (None, user_id):
+                    return False
+                return True
+            r["memories"] = [m for m in r.get("memories", []) if _own(m)]
+        return {
+            "query": q,
+            "tokens": r.get("tokens", []),
+            "memories": r.get("memories", []),
+            "wiki": r.get("wiki", []),
+            "entities": r.get("entities", []),
+            "mode": mode,
+            "source": source,
+            "temporal_intent": r.get("temporal_intent", "any"),
+            "temporal_confidence": r.get("temporal_confidence", 0.0),
+        }
+
+    @app.post("/api/v1/memories/{mid}/feedback")
+    def v1_feedback(mid: str, body: dict):
+        """Record 👍/👎 on a memory by id. Body: {value, reason?}."""
+        value = (body.get("value") or "up").strip().lower()
+        if value not in ("up", "down", "ignore"):
+            raise HTTPException(400, "value must be up|down|ignore")
+        row = store.get_memory(mid)
+        if row is None:
+            raise HTTPException(404, "memory not found")
+        try:
+            store.record_signal(mid, positive=(value == "up"))
+        except Exception as e:
+            raise HTTPException(500, f"signal failed: {e}")
+        deleted = 0
+        if value == "ignore":
+            deleted = store.delete_memory(mid)
+        return {"ok": True, "value": value, "deleted": deleted}
+
+    @app.post("/api/v1/memories/feedback")
+    def v1_feedback_by_external(body: dict):
+        """Record 👍/👎 on a memory addressed by ``(agent_id, user_id,
+        external_id)``. Body: {external_id, agent_id?, user_id?,
+        value, reason?}. Returns 404 when no memory matches.
+        """
+        ext = (body.get("external_id") or "").strip()
+        if not ext:
+            raise HTTPException(400, "external_id is required")
+        agent_id = body.get("agent_id")
+        user_id = body.get("user_id")
+        row = store.find_memory_by_external_id(agent_id or "", ext, user_id=user_id)
+        if row is None:
+            raise HTTPException(404, "no memory matches that external_id")
+        value = (body.get("value") or "up").strip().lower()
+        if value not in ("up", "down", "ignore"):
+            raise HTTPException(400, "value must be up|down|ignore")
+        store.record_signal(row.id, positive=(value == "up"))
+        deleted = 0
+        if value == "ignore":
+            deleted = store.delete_memory(row.id)
+        return {"ok": True, "memory_id": row.id, "value": value, "deleted": deleted}
+
+    @app.delete("/api/v1/memories")
+    def v1_delete_memory_by_external(
+        external_id: str,
+        agent_id: str | None = None,
+        user_id: str | None = None,
+    ):
+        """Delete a memory by its external triple. Returns 404 if no
+        row matches so the Agent can retry with a corrected tuple."""
+        if not external_id:
+            raise HTTPException(400, "external_id is required")
+        row = store.find_memory_by_external_id(agent_id or "", external_id, user_id=user_id)
+        if row is None:
+            raise HTTPException(404, "no memory matches that external_id")
+        deleted = store.delete_memory(row.id)
+        return {"deleted": deleted, "memory_id": row.id}
+
+    # ------------------------------------------------------------------
+    # /api/v1 — graph, cognitive sleep, export/import/fork (v7)
+    # ------------------------------------------------------------------
+    # Closes the gaps the article called out: 3D adaptive scoring,
+    # semantic graph edges, cognitive audit, white-box MEMORY.md
+    # bundles, and a fork primitive so any Agent can snapshot the
+    # wiki and `git revert` later.
+
+    @app.post("/api/v1/graph/edges")
+    def v1_graph_edges(body: dict):
+        """Upsert a high-signal semantic relation."""
+        from ..jobs.graph import upsert_semantic_edge
+        src = (body.get("src") or "").strip()
+        dst = (body.get("dst") or "").strip()
+        if not src or not dst or src == dst:
+            raise HTTPException(400, "src and dst must be distinct non-empty names")
+        try:
+            weight = float(body.get("weight", 0.5))
+        except (TypeError, ValueError):
+            raise HTTPException(400, f"weight must be a number, got {body.get('weight')!r}")
+        info = upsert_semantic_edge(
+            store, src, dst,
+            kind=(body.get("kind") or "relates_to").strip() or "relates_to",
+            weight=max(0.0, min(1.5, weight)),
+            evidence_id=body.get("evidence_id"),
+        )
+        return info
+
+    @app.get("/api/v1/graph/subgraph")
+    def v1_graph_subgraph(q: str, max_nodes: int = 32, max_edges: int = 64):
+        from ..jobs.graph import subgraph_for
+        sg = subgraph_for(store, q, max_nodes=max_nodes, max_edges=max_edges)
+        return sg.to_dict()
+
+    @app.post("/api/v1/graph/rebuild")
+    def v1_graph_rebuild():
+        from ..graph.build import KnowledgeGraph
+        KnowledgeGraph(store).rebuild(clear=True)
+        n = store.rebuild_entity_mentions()
+        return {"entity_mentions": n}
+
+    @app.post("/api/v1/cognitive/sleep")
+    def v1_cognitive_sleep(body: dict):
+        from ..jobs.cognitive import cognitive_sleep
+        rpt = cognitive_sleep(
+            store,
+            apply=bool(body.get("apply", False)),
+            stale_days=int(body.get("stale_days", 90)),
+            min_score=float(body.get("min_score", 0.2)),
+            min_importance=float(body.get("min_importance", 0.3)),
+            low_value=float(body.get("low_value", 0.3)),
+            merge_threshold=float(body.get("merge_threshold", 0.92)),
+            limit=int(body.get("limit", 1000)),
+            record_audit=bool(body.get("record_audit", True)),
+        )
+        return rpt.to_dict()
+
+    @app.get("/api/v1/cognitive/audit")
+    def v1_cognitive_audit(kind: str | None = None, action: str | None = None,
+                            limit: int = 200):
+        rows = store.list_audit(kind=kind, action=action, limit=limit)
+        return {"rows": rows, "count": len(rows)}
+
+    @app.post("/api/v1/cognitive/audit/revert")
+    def v1_cognitive_audit_revert(body: dict):
+        aid = (body.get("id") or "").strip()
+        if not aid:
+            raise HTTPException(400, "id is required")
+        store.record_audit(
+            kind="revert", action="reverted",
+            target_kind="memory", target_id=aid,
+            reason="user marked audit row as reverted",
+        )
+        return {"ok": True}
+
+    @app.post("/api/v1/export")
+    def v1_export(body: dict):
+        from ..export import export_bundle
+        out_dir = (body.get("out_dir") or "").strip()
+        if not out_dir:
+            raise HTTPException(400, "out_dir is required")
+        try:
+            r = export_bundle(
+                store, out_dir,
+                agent_id=body.get("agent_id") or None,
+                user_id=body.get("user_id") or None,
+                scope=body.get("scope") or "global",
+                min_importance=float(body.get("min_importance") or 0.0),
+            )
+        except Exception as e:
+            raise HTTPException(500, f"export failed: {e}")
+        return r.to_dict()
+
+    @app.post("/api/v1/import")
+    def v1_import(body: dict):
+        from ..export import import_bundle
+        in_dir = (body.get("in_dir") or "").strip()
+        if not in_dir:
+            raise HTTPException(400, "in_dir is required")
+        try:
+            r = import_bundle(
+                store, in_dir,
+                agent_id=body.get("agent_id") or None,
+                user_id=body.get("user_id") or None,
+                dry_run=bool(body.get("dry_run", False)),
+            )
+        except FileNotFoundError as e:
+            raise HTTPException(404, str(e))
+        except Exception as e:
+            raise HTTPException(500, f"import failed: {e}")
+        return r.to_dict()
+
+    @app.post("/api/v1/fork")
+    def v1_fork(body: dict):
+        from ..export import fork_snapshot
+        return fork_snapshot(store, branch_tag=(body.get("branch_tag") or None))
+
+    @app.get("/api/v1/wiki/versions")
+    def v1_wiki_versions(page_id: str | None = None,
+                         branch_tag: str | None = None, limit: int = 200):
+        rows = store.list_wiki_versions(
+            page_id=page_id, branch_tag=branch_tag, limit=limit,
+        )
+        return {"rows": rows, "count": len(rows)}
+
     @app.delete("/api/memories/{mid}")
     def delete_memory(mid: str):
         n = store.delete_memory(mid)

@@ -286,6 +286,9 @@ def memory_to_dict(m) -> dict:
         "created_at": m.created_at,
         "updated_at": getattr(m, "updated_at", None) or m.created_at,
         "tags": m.tags,
+        "agent_id": getattr(m, "agent_id", None),
+        "user_id": getattr(m, "user_id", None),
+        "external_id": getattr(m, "external_id", None),
     }
 
 

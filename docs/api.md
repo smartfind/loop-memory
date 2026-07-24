@@ -111,6 +111,37 @@ appropriate 4xx/5xx status.
 }
 ```
 
+### Universal Agent Memory — `/api/v1/memories`
+
+Small, stable surface for any Agent (Codex, Claude, Hermes, OpenClaw,
+or a custom bot) to remember, recall, feedback, and forget without
+the legacy transcript-pipeline paths. See `docs/agent-memory-api.md`
+for the full design; the route table is:
+
+| Method | Path | Body / Query | Purpose |
+| --- | --- | --- | --- |
+| POST   | `/api/v1/memories`           | `{text, kind?, importance?, tags?, source?, session_id?, external_id?, agent_id?, user_id?, ttl?}` | Idempotent remember |
+| POST   | `/api/v1/memories:batch`     | `{items: [...]}` (≤ 500) | Bulk remember with per-item error |
+| GET    | `/api/v1/memories`           | `agent_id?, user_id?, session_id?, kind?, external_id?, min_score?, q?, limit?` | List with filters |
+| GET    | `/api/v1/recall`             | `q, limit?, include?, source?, agent_id?, user_id?, mode?` | Hybrid recall, optionally scoped to a single Agent namespace |
+| POST   | `/api/v1/memories/{id}/feedback` | `{value, reason?}` | 👍/👎 by id |
+| POST   | `/api/v1/memories/feedback`  | `{value, external_id, agent_id?, user_id?, reason?}` | 👍/👎 by external triple |
+| DELETE | `/api/v1/memories`           | `?external_id=&agent_id=&user_id=` | Forget by external triple |
+| DELETE | `/api/v1/memories/{id}`      | — | Forget by id |
+| POST   | `/api/v1/graph/edges`        | `{src, dst, kind?, weight?, evidence_id?}` | Add a semantic edge |
+| GET    | `/api/v1/graph/subgraph`     | `?q=…&max_nodes?&max_edges?` | Retrieve a grounded subgraph |
+| POST   | `/api/v1/graph/rebuild`      | `{}` | Rebuild entity mentions and graph links |
+| POST   | `/api/v1/cognitive/sleep`    | `{apply?, stale_days?, min_score?, …}` | Suggest or apply cognitive cleanup |
+| GET    | `/api/v1/cognitive/audit`    | `?kind=&action=&limit=` | Read cleanup decisions |
+| POST   | `/api/v1/cognitive/audit/revert` | `{id}` | Mark an audit decision reverted |
+| POST   | `/api/v1/export`             | `{out_dir, agent_id?, user_id?, scope?, min_importance?}` | Write a portable memory bundle |
+| POST   | `/api/v1/import`             | `{in_dir, agent_id?, user_id?, dry_run?}` | Import a memory bundle |
+| POST   | `/api/v1/fork`               | `{branch_tag?}` | Snapshot Wiki pages into a branch |
+| GET    | `/api/v1/wiki/versions`      | `?page_id=&branch_tag=&limit=` | Read Wiki version history |
+
+The graph, cognitive, export/import, fork, SDK, CLI, and MCP details are
+documented in [`docs/universal-agent-memory.md`](universal-agent-memory.md).
+
 ## Versioning & stability
 
 - The `/api/*` namespace is considered stable for the `0.x` series. Breaking
