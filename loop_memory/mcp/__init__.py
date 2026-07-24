@@ -48,6 +48,21 @@ def _store() -> MemoryStore:
     return MemoryStore(db)
 
 
+def _agent_context() -> tuple[str | None, str | None]:
+    """Return the (agent_id, user_id) tuple for this MCP session.
+
+    The defaults come from environment variables so a process started
+    per-client (``loop-memory mcp`` launched by Codex, Claude Code,
+    Hermes, …) can stamp every write with its own identity without
+    the LLM having to remember to set it on every call.
+    """
+    import os
+    return (
+        os.environ.get("LOOP_MEMORY_AGENT_ID") or None,
+        os.environ.get("LOOP_MEMORY_USER_ID") or None,
+    )
+
+
 def _clip(text: str, n: int) -> str:
     t = (text or "").strip()
     if len(t) <= n:
@@ -225,6 +240,256 @@ def _err(s: str) -> dict[str, Any]:
     return {"type": "text", "text": f"⚠ {s}"}
 
 
+
+
+
+# ---------------------------------------------------------------------------
+# Write surface — the universal Agent Memory contract
+# ---------------------------------------------------------------------------
+# Until now the MCP server was strictly read-only. Any Agent that
+# wanted to push a fact into long-term memory had to shell out to
+# ``loop-memory write`` or hit ``/api/v1/memories`` over HTTP. These
+# three tools close that gap and make the MCP server self-sufficient
+# for write→read round-trips from any MCP-aware client.
+
+
+def tool_remember(arguments: dict[str, Any]) -> list[dict[str, Any]]:
+    """Push a memory into long-term storage.
+
+    Args:
+        text: required memory body.
+        kind: ``fact`` (default) / ``preference`` / ``decision`` /
+              ``reflection`` / ``plan`` / ``episode``.
+        importance: 0..1; default 0.5.
+        tags: list of strings.
+        source: free-form source pointer (e.g. tool name, URL).
+        session_id: optional session id this memory belongs to.
+        external_id: optional stable id; re-calling with the same
+                     ``(agent_id, user_id, external_id)`` updates
+                     the row in place. ``agent_id`` / ``user_id``
+                     come from ``LOOP_MEMORY_AGENT_ID`` /
+                     ``LOOP_MEMORY_USER_ID`` env when not given.
+    """
+    text = (arguments.get("text") or "").strip()
+    if not text:
+        return [_err("missing 'text' argument")]
+    kind = (arguments.get("kind") or "fact").strip()
+    importance = arguments.get("importance", 0.5)
+    try:
+        importance_f = float(importance)
+    except (TypeError, ValueError):
+        return [_err(f"importance must be a number, got {importance!r}")]
+    importance_f = max(0.0, min(1.0, importance_f))
+    tags = arguments.get("tags") or []
+    if not isinstance(tags, list):
+        return [_err("tags must be a list of strings")]
+    ext = arguments.get("external_id")
+    if ext is not None:
+        ext = str(ext).strip() or None
+    agent_id, user_id = _agent_context()
+    agent_id = arguments.get("agent_id") or agent_id
+    user_id = arguments.get("user_id") or user_id
+    session_id = arguments.get("session_id")
+    source = arguments.get("source")
+    try:
+        row = _store().upsert_memory(
+            kind=kind,
+            text=text,
+            importance=importance_f,
+            tags=[str(t) for t in tags],
+            source=source,
+            session_id=session_id,
+            agent_id=agent_id,
+            user_id=user_id,
+            external_id=ext,
+        )
+    except Exception as e:
+        return [_err(f"remember() failed: {e}")]
+    out = (
+        f"✅ remembered ({row.id})\n"
+        f"  text: {_clip(text, 160)}\n"
+        f"  kind={row.kind} importance={row.importance:.2f} "
+        f"agent_id={agent_id or '-'} external_id={row.external_id or '-'}"
+    )
+    return [_text(out)]
+
+
+def tool_forget(arguments: dict[str, Any]) -> list[dict[str, Any]]:
+    """Delete a memory by id or by ``(agent_id, user_id, external_id)``.
+
+    Returns the number of rows removed (0 or 1).
+    """
+    mid = (arguments.get("id") or "").strip() or None
+    ext = arguments.get("external_id")
+    if ext is not None:
+        ext = str(ext).strip() or None
+    if not mid and not ext:
+        return [_err("forget() needs 'id' or 'external_id'")]
+    agent_id, user_id = _agent_context()
+    agent_id = arguments.get("agent_id") or agent_id
+    user_id = arguments.get("user_id") or user_id
+    store = _store()
+    if not mid and ext:
+        row = store.find_memory_by_external_id(
+            agent_id or "", ext, user_id=user_id,
+        )
+        if row is None:
+            return [_text(f"No memory matches external_id={ext!r} for this agent.")]
+        mid = row.id
+    n = store.delete_memory(mid)
+    return [_text(f"forget() → deleted={n} (id={mid})")]
+
+
+def tool_feedback(arguments: dict[str, Any]) -> list[dict[str, Any]]:
+    """Record 👍/👎 on a memory by id or by external tuple.
+
+    ``value`` is 'up' / 'down' / 'ignore'. Returns whether the
+    signal was recorded.
+    """
+    value = (arguments.get("value") or "up").strip().lower()
+    if value not in ("up", "down", "ignore"):
+        return [_err("value must be up|down|ignore")]
+    mid = (arguments.get("id") or "").strip() or None
+    ext = arguments.get("external_id")
+    if ext is not None:
+        ext = str(ext).strip() or None
+    if not mid and not ext:
+        return [_err("feedback() needs 'id' or 'external_id'")]
+    agent_id, user_id = _agent_context()
+    agent_id = arguments.get("agent_id") or agent_id
+    user_id = arguments.get("user_id") or user_id
+    store = _store()
+    if not mid and ext:
+        row = store.find_memory_by_external_id(
+            agent_id or "", ext, user_id=user_id,
+        )
+        if row is None:
+            return [_text(f"No memory matches external_id={ext!r} for this agent.")]
+        mid = row.id
+    try:
+        store.record_signal(mid, positive=(value == "up"))
+    except Exception as e:
+        return [_err(f"feedback() failed: {e}")]
+    deleted = 0
+    if value == "ignore":
+        deleted = store.delete_memory(mid)
+    return [_text(f"feedback({value}) → memory_id={mid} deleted={deleted}")]
+
+
+
+
+
+# ---------------------------------------------------------------------------
+# Universal Agent Memory v7 — graph + cognitive tools
+# ---------------------------------------------------------------------------
+
+
+def tool_remember_edge(arguments: dict[str, Any]) -> list[dict[str, Any]]:
+    """Push a high-signal semantic relation between two entities.
+
+    Mirrors ``MemoryClient.remember_edge``. ``src`` and ``dst``
+    are entity names; ``kind`` defaults to ``relates_to`` and
+    ``weight`` to 0.5. The ``LOOP_MEMORY_AGENT_ID`` env is *not*
+    auto-applied to graph edges because they're a public schema,
+    not private memory.
+    """
+    src = (arguments.get("src") or "").strip()
+    dst = (arguments.get("dst") or "").strip()
+    if not src or not dst or src == dst:
+        return [_err("'src' and 'dst' must be distinct non-empty names")]
+    kind = (arguments.get("kind") or "relates_to").strip() or "relates_to"
+    try:
+        weight = float(arguments.get("weight", 0.5))
+    except (TypeError, ValueError):
+        return [_err(f"weight must be a number, got {arguments.get('weight')!r}")]
+    try:
+        from ..jobs.graph import upsert_semantic_edge
+        upsert_semantic_edge(
+            _store(), src, dst, kind=kind,
+            weight=max(0.0, min(1.5, weight)),
+            evidence_id=arguments.get("evidence_id"),
+        )
+    except Exception as e:
+        return [_err(f"remember_edge failed: {e}")]
+    return [_text(
+        f"edge({src} -[{kind}, w={weight:.2f}]-> {dst}) ✓"
+    )]
+
+
+def tool_subgraph(arguments: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return a small subgraph relevant to a free-text query."""
+    query = (arguments.get("query") or "").strip()
+    if not query:
+        return [_err("'query' is required")]
+    try:
+        from ..jobs.graph import subgraph_for
+        sg = subgraph_for(_store(), query)
+    except Exception as e:
+        return [_err(f"subgraph failed: {e}")]
+    nodes = ", ".join(n.get("name", "") for n in sg.nodes)
+    edges = ", ".join(f"{e['src']}→{e['dst']}" for e in sg.edges[:10])
+    return [_text(
+        f"# Subgraph for {query!r}\n"
+        f"nodes ({len(sg.nodes)}): {nodes or '(none)'}\n"
+        f"edges ({len(sg.edges)}): {edges or '(none)'}\n"
+        f"backing memories: {len(sg.memory_ids)}"
+    )]
+
+
+def tool_cognitive_sleep(arguments: dict[str, Any]) -> list[dict[str, Any]]:
+    """Run the cognitive sleep sweep. ``apply=true`` actually
+    deletes the suggested memories; default is dry-run.
+
+    Returns a count summary plus a short list of the top actions
+    so the LLM can decide whether to call apply=true.
+    """
+    apply = bool(arguments.get("apply", False))
+    try:
+        from ..jobs.cognitive import cognitive_sleep
+        rpt = cognitive_sleep(
+            _store(), apply=apply,
+            stale_days=int(arguments.get("stale_days", 90)),
+            min_score=float(arguments.get("min_score", 0.2)),
+            min_importance=float(arguments.get("min_importance", 0.3)),
+            low_value=float(arguments.get("low_value", 0.3)),
+        )
+    except Exception as e:
+        return [_err(f"cognitive_sleep failed: {e}")]
+    top = rpt.actions[:5]
+    out = [
+        f"# Cognitive sleep ({'applied' if apply else 'dry-run'})",
+        f"counts: {rpt.counts}",
+        f"total: {len(rpt.actions)} actions in {rpt.elapsed_ms:.1f}ms",
+        "",
+    ]
+    for a in top:
+        snippet = (a.target_text or "").replace("\n", " ")[:80]
+        out.append(f"- [{a.kind}] {snippet}  ({a.reason})")
+    return [_text("\n".join(out))]
+
+
+def tool_audit(arguments: dict[str, Any]) -> list[dict[str, Any]]:
+    """Read the cognitive audit trail. Filters: ``kind``, ``action``,
+    ``limit`` (default 50)."""
+    try:
+        rows = _store().list_audit(
+            kind=arguments.get("kind") or None,
+            action=arguments.get("action") or None,
+            limit=int(arguments.get("limit", 50)),
+        )
+    except Exception as e:
+        return [_err(f"audit failed: {e}")]
+    if not rows:
+        return [_text("No audit rows yet — run `cognitive_sleep` first.")]
+    lines = [f"# Audit ({len(rows)} rows)"]
+    for r in rows[:20]:
+        snippet = (r.get("target_text") or "").replace("\n", " ")[:80]
+        lines.append(
+            f"- [{r.get('action','?')}/{r.get('kind','?')}] {snippet}"
+        )
+    return [_text("\n".join(lines))]
+
+
 TOOLS = [
     {
         "name": "recall",
@@ -300,6 +565,138 @@ TOOLS = [
             "properties": {},
         },
     },
+    {
+        "name": "remember",
+        "description": (
+            "Push a single memory into the user's long-term store. Use this "
+            "when the user shares a stable preference, decision, fact, or "
+            "reflection that should survive across sessions. ``external_id`` "
+            "makes the call idempotent: re-pushing the same external_id "
+            "updates the row in place. ``importance`` is 0..1 (default 0.5). "
+            "If ``LOOP_MEMORY_AGENT_ID`` is set in the environment, every "
+            "call is auto-stamped with that agent id so different Agents "
+            "don't overwrite each other."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "Memory body (required)"},
+                "kind": {"type": "string", "description": "fact|preference|decision|reflection|plan|episode (default fact)"},
+                "importance": {"type": "number", "description": "0..1 (default 0.5)"},
+                "tags": {"type": "array", "items": {"type": "string"}, "description": "Optional tags"},
+                "source": {"type": "string", "description": "Free-form source pointer"},
+                "session_id": {"type": "string", "description": "Session this memory belongs to"},
+                "external_id": {"type": "string", "description": "Stable id for idempotent re-pushes"},
+                "agent_id": {"type": "string", "description": "Override LOOP_MEMORY_AGENT_ID for this call"},
+                "user_id": {"type": "string", "description": "Override LOOP_MEMORY_USER_ID for this call"},
+            },
+            "required": ["text"],
+        },
+    },
+    {
+        "name": "forget",
+        "description": (
+            "Delete a memory by id or by its ``(agent_id, user_id, "
+            "external_id)`` triple. Returns the number of rows removed."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string", "description": "Internal memory id"},
+                "external_id": {"type": "string", "description": "Stable external id"},
+                "agent_id": {"type": "string", "description": "Agent namespace (overrides env)"},
+                "user_id": {"type": "string", "description": "User namespace (overrides env)"},
+            },
+        },
+    },
+    {
+        "name": "feedback",
+        "description": (
+            "Record 👍/👎 on a memory. ``value`` is 'up' (boost), "
+            "'down' (demote), or 'ignore' (demote + soft-delete). "
+            "Address by id or by ``(agent_id, user_id, external_id)``."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "value": {"type": "string", "description": "up|down|ignore (default up)"},
+                "id": {"type": "string", "description": "Internal memory id"},
+                "external_id": {"type": "string", "description": "Stable external id"},
+                "agent_id": {"type": "string"},
+                "user_id": {"type": "string"},
+            },
+            "required": ["value"],
+        },
+    },
+    {
+        "name": "remember_edge",
+        "description": (
+            "Push a high-signal semantic relation between two entities "
+            "(Mem0's graph-memory differentiator). E.g. "
+            "``{src: User, dst: Hangzhou, kind: lives_in, weight: 0.9}``."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "src": {"type": "string", "description": "Source entity name (required)"},
+                "dst": {"type": "string", "description": "Destination entity name (required)"},
+                "kind": {"type": "string", "description": "lives_in|works_on|uses|prefers|decided|...|relates_to (default)"},
+                "weight": {"type": "number", "description": "0..1.5 (default 0.5)"},
+                "evidence_id": {"type": "string", "description": "Optional memory id backing this edge"},
+            },
+            "required": ["src", "dst"],
+        },
+    },
+    {
+        "name": "subgraph",
+        "description": (
+            "Return a small subgraph (entities + edges + backing "
+            "memory ids) relevant to a free-text query. Use to ground "
+            "a prompt on the user\'s knowledge graph before answering."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Free-text query (required)"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "cognitive_sleep",
+        "description": (
+            "Run the cognitive sweep: identify stale, low-value, "
+            "near-duplicate, and contradicted memories. ``apply=true`` "
+            "actually deletes the suggestions; the default dry-run "
+            "just lists them so the model can decide. Every action "
+            "is recorded in the audit trail."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "apply": {"type": "boolean", "description": "Actually delete (default false / dry-run)"},
+                "stale_days": {"type": "integer", "description": "Stale cutoff in days (default 90)"},
+                "min_score": {"type": "number", "description": "Score below which a memory is stale (default 0.2)"},
+                "min_importance": {"type": "number", "description": "Importance below which a memory is stale (default 0.3)"},
+                "low_value": {"type": "number", "description": "Score+0.5*importance below which a memory is low-value (default 0.3)"},
+            },
+        },
+    },
+    {
+        "name": "audit",
+        "description": (
+            "Read the cognitive audit trail. ``kind`` and ``action`` "
+            "filter; ``limit`` caps the rows."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string", "description": "stale|low_value|merge|contradict|forget|revert"},
+                "action": {"type": "string", "description": "suggest|applied|reverted"},
+                "limit": {"type": "integer", "description": "Max rows (default 50)"},
+            },
+        },
+    },
 ]
 
 
@@ -309,6 +706,13 @@ TOOL_DISPATCH = {
     "get_wiki": tool_get_wiki,
     "recent_memories": tool_recent_memories,
     "wiki_summary": tool_wiki_summary,
+    "remember": tool_remember,
+    "forget": tool_forget,
+    "feedback": tool_feedback,
+    "remember_edge": tool_remember_edge,
+    "subgraph": tool_subgraph,
+    "cognitive_sleep": tool_cognitive_sleep,
+    "audit": tool_audit,
 }
 
 

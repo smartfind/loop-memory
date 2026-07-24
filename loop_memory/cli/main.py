@@ -15,15 +15,25 @@ Usage:
     loop-memory inject [query]     # dump long-term context block (for SessionStart hooks)
     loop-memory install-hooks      # auto-write MCP + SessionStart hooks for known clients
     loop-memory consolidate-now    # ask the running server to trigger a pass right now
-    loop-memory export             # write distilled wiki as markdown to ~/loop-memory-export-<date>.md
+    loop-memory export             # legacy markdown export (no positional path)
     loop-memory digest [--out PATH] # compact knowledge digest for AGENTS.md (≤ max-chars bytes)
     loop-memory ask "what about…"  # print a paste-ready context block for any LLM client
+    loop-memory cognitive-sleep [--apply]  # dry-run / apply cognitive sweep (v7)
+    loop-memory audit [--kind X] [--action Y]  # read the cognitive audit trail
+    loop-memory export <out_dir>  # write a MEMORY.md bundle (v7)
+    loop-memory export-bundle <out_dir>  # explicit v7 bundle alias
+    loop-memory import <in_dir>   # re-hydrate a bundle
+    loop-memory fork [--branch-tag T]  # snapshot every wiki page
+    loop-memory graph-edge <src> <dst> [--kind K] [--weight W]  # push a relation
+    loop-memory subgraph <query>  # print a small subgraph
+    loop-memory graph-rebuild  # rebuild entities + entity_mentions
 """
 
 from __future__ import annotations
 
 import sys
 
+from .commands import cognitive as cognitive_cmd
 from .commands import diag as diag_cmd
 from .commands import graph as graph_cmd
 from .commands import hooks as hooks_cmd
@@ -37,6 +47,19 @@ from .commands import write as write_cmd
 _upsert_block = hooks_cmd._upsert_block
 cmd_inject = read_cmd.run_inject
 
+
+def _run_export(args: list[str]) -> int:
+    """Keep the legacy markdown export and expose the v7 bundle export.
+
+    A positional output directory selects the v7 bundle. The historical
+    ``--out`` / ``--q`` form remains available so existing scripts keep
+    producing a single markdown file.
+    """
+    if not args or any(flag in args for flag in ("--out", "--q")):
+        return read_cmd.run_export(args)
+    return cognitive_cmd.run_export(args)
+
+
 # Dispatch table: command name -> (callable, optional module doc).
 # Each module's ``run_<name>`` function takes ``args: list[str]`` and
 # returns an integer exit code. Keep the keys matching the docstring
@@ -48,7 +71,7 @@ COMMANDS = {
     "ingest": write_cmd.run_ingest,
     "consolidate": write_cmd.run_consolidate,
     "consolidate-now": write_cmd.run_consolidate_now,
-    "export": read_cmd.run_export,
+    "export": _run_export,
     "digest": read_cmd.run_digest,
     "ask": read_cmd.run_ask,
     "rescore": write_cmd.run_rescore,
@@ -62,6 +85,15 @@ COMMANDS = {
     "doctor": diag_cmd.run_doctor,
     "status": diag_cmd.run_status,
     "openclaw-setup": diag_cmd.run_openclaw_setup,
+    # Universal Agent Memory v7 — graph, cognitive, export, fork
+    "cognitive-sleep": cognitive_cmd.run_cognitive_sleep,
+    "audit": cognitive_cmd.run_audit,
+    "export-bundle": cognitive_cmd.run_export,
+    "import": cognitive_cmd.run_import,
+    "fork": cognitive_cmd.run_fork,
+    "graph-edge": cognitive_cmd.run_graph_edge,
+    "subgraph": cognitive_cmd.run_subgraph,
+    "graph-rebuild": cognitive_cmd.run_graph_rebuild,
 }
 
 

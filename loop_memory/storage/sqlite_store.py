@@ -65,13 +65,20 @@ CREATE TABLE IF NOT EXISTS memories (
     score       REAL NOT NULL DEFAULT 0.5,
     ttl         REAL,
     tags        TEXT,
-    embedding   BLOB
+    embedding   BLOB,
+    agent_id    TEXT,
+    user_id     TEXT,
+    external_id TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_mem_session  ON memories(session_id);
 CREATE INDEX IF NOT EXISTS idx_mem_created  ON memories(created_at);
 CREATE INDEX IF NOT EXISTS idx_mem_score    ON memories(score);
 CREATE INDEX IF NOT EXISTS idx_mem_kind     ON memories(kind);
+-- Per-agent (agent_id, user_id, external_id) indexes are created
+-- in _init_schema *after* the ALTER TABLE that adds the columns,
+-- so opening an old DB doesn't fail with "no such column: agent_id".
+-- See _init_schema for the migration block.
 
 -- FTS5 mirror of memories.text + tags. We keep it in sync via triggers
 -- (see end of this schema block) so every INSERT/UPDATE/DELETE on
@@ -236,6 +243,63 @@ END;
 -- positive: explicit user 👍 (or implicit: kept after LLM re-eval)
 -- negative: explicit user 👎 (or implicit: deleted after LLM re-eval)
 -- last_recalled_at: last time it was returned by a query
+-- Universal Agent Memory v7: wiki versioning, cognitive audit
+-- trail, and per-(user, agent) bearer tokens. All additive, all
+-- nullable, all with sensible defaults so existing rows are
+-- untouched.
+CREATE TABLE IF NOT EXISTS wiki_versions (
+    id          TEXT PRIMARY KEY,
+    page_id     TEXT NOT NULL,
+    version     INTEGER NOT NULL,
+    title       TEXT NOT NULL,
+    body        TEXT NOT NULL,
+    summary     TEXT,
+    tags        TEXT,
+    importance  REAL NOT NULL DEFAULT 0.5,
+    key_facts   TEXT,
+    scope       TEXT,
+    branched_at REAL NOT NULL,
+    branch_tag  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_wv_page ON wiki_versions(page_id, version);
+CREATE INDEX IF NOT EXISTS idx_wv_branch ON wiki_versions(branch_tag);
+
+-- Cognitive audit: every "should I forget / merge / contradict" call
+-- writes one row here. The dashboard reads from this table to show
+-- "agent decided to forget X" history; CLI ``loop-memory audit``
+-- dumps it.
+CREATE TABLE IF NOT EXISTS cognitive_audit (
+    id          TEXT PRIMARY KEY,
+    ts          REAL NOT NULL,
+    kind        TEXT NOT NULL,   -- 'forget'|'merge'|'contradict'|'stale'|'low_value'
+    action      TEXT NOT NULL,   -- 'suggest'|'applied'|'reverted'
+    target_kind TEXT NOT NULL,   -- 'memory'|'wiki_page'
+    target_id   TEXT,
+    target_text TEXT,
+    reason      TEXT,
+    score       REAL,
+    payload     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ca_ts ON cognitive_audit(ts);
+CREATE INDEX IF NOT EXISTS idx_ca_kind ON cognitive_audit(kind, action);
+
+-- Per-(user, agent) bearer tokens. Optional; the local server keeps
+-- the route open by default. Loop-memory serve with --auth
+-- --token-required enables it; the SDK auto-attaches the bearer
+-- header when ``MemoryClient.http(..., token=...)`` is given.
+CREATE TABLE IF NOT EXISTS auth_tokens (
+    id          TEXT PRIMARY KEY,
+    user_id     TEXT,
+    agent_id    TEXT,
+    label       TEXT,
+    token_hash  TEXT NOT NULL,
+    created_at  REAL NOT NULL,
+    last_used_at REAL,
+    expires_at  REAL,
+    revoked     INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_at_user ON auth_tokens(user_id, agent_id);
+
 CREATE TABLE IF NOT EXISTS memory_signals (
     memory_id        TEXT PRIMARY KEY,
     recall_count     INTEGER NOT NULL DEFAULT 0,
@@ -336,6 +400,9 @@ class StoredMemory:
     ttl: float | None
     tags: list[str]
     embedding: list[float] | None
+    agent_id: str | None = None
+    user_id: str | None = None
+    external_id: str | None = None
 
 
 @dataclass
@@ -375,7 +442,7 @@ class MemoryStore:
     The zero-dep claim holds — Python ships with sqlite3 and struct.
     """
 
-    SCHEMA_VERSION = "5"
+    SCHEMA_VERSION = "7"
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path).expanduser()
@@ -418,6 +485,26 @@ class MemoryStore:
                 c.execute("ALTER TABLE wiki_pages ADD COLUMN key_facts TEXT")
             if "contradicting_ids" not in cols:
                 c.execute("ALTER TABLE wiki_pages ADD COLUMN contradicting_ids TEXT")
+
+            # Universal Agent Memory migration: add per-agent identity
+            # columns to memories. Bumping SCHEMA_VERSION from "5" → "6"
+            # so a future downgrade is loud.
+            mem_cols = {row["name"] for row in c.execute("PRAGMA table_info(memories)").fetchall()}
+            if "agent_id" not in mem_cols:
+                c.execute("ALTER TABLE memories ADD COLUMN agent_id TEXT")
+            if "user_id" not in mem_cols:
+                c.execute("ALTER TABLE memories ADD COLUMN user_id TEXT")
+            if "external_id" not in mem_cols:
+                c.execute("ALTER TABLE memories ADD COLUMN external_id TEXT")
+            # Indexes must run after the ALTER TABLE so the columns
+            # they reference actually exist on legacy DBs.
+            c.execute("CREATE INDEX IF NOT EXISTS idx_mem_agent    ON memories(agent_id)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_mem_user     ON memories(user_id)")
+            c.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_mem_external "
+                "ON memories(agent_id, user_id, external_id) "
+                "WHERE external_id IS NOT NULL AND external_id != ''"
+            )
 
             # One-shot FTS5 tokenizer migration. ``CREATE VIRTUAL TABLE
             # IF NOT EXISTS`` will *not* rebuild an existing FTS5 table
@@ -807,28 +894,62 @@ class MemoryStore:
         ttl: float | None = None,
         tags: list[str] | None = None,
         embedding: list[float] | None = None,
+        agent_id: str | None = None,
+        user_id: str | None = None,
+        external_id: str | None = None,
     ) -> StoredMemory:
+        """Create or update a memory.
+
+        Two idempotency paths:
+
+        * by ``id`` (caller supplies a UUID-like id)
+        * by ``(agent_id, user_id, external_id)`` tuple — any Agent
+          that re-pushes the same ``external_id`` updates the row in
+          place instead of duplicating it. This is the path used by
+          the universal ``MemoryClient.remember()`` SDK and the
+          ``/api/v1/memories`` endpoint.
+
+        Either input may be ``None`` (the unique index excludes
+        NULL/empty external_ids, so a memory with no external_id
+        cannot collide and gets a fresh row).
+        """
         import json
 
         now = time.time()
-        mid = id or uuid.uuid4().hex
+        ext = (external_id or "").strip() or None
         ts = created_at or now
         uts = updated_at or ts
         tags_json = json.dumps(tags or [])
         score = self.compute_score(importance, ts, now)
         with self._conn() as c:
+            # Re-route by external_id when the caller did not pin an id.
+            if id is None and ext and agent_id is not None:
+                row = c.execute(
+                    "SELECT id FROM memories "
+                    "WHERE agent_id IS ? AND user_id IS ? AND external_id = ?",
+                    (agent_id, user_id, ext),
+                ).fetchone()
+                if row is not None:
+                    id = row["id"]
+            mid = id or uuid.uuid4().hex
             c.execute(
                 """INSERT INTO memories
                    (id, session_id, kind, text, importance, source,
-                    created_at, updated_at, score, ttl, tags, embedding)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                    created_at, updated_at, score, ttl, tags, embedding,
+                    agent_id, user_id, external_id)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(id) DO UPDATE SET
                      text=excluded.text,
                      importance=excluded.importance,
                      updated_at=excluded.updated_at,
                      score=excluded.score,
                      tags=excluded.tags,
-                     embedding=COALESCE(excluded.embedding, memories.embedding)""",
+                     embedding=COALESCE(excluded.embedding, memories.embedding),
+                     agent_id=COALESCE(excluded.agent_id, memories.agent_id),
+                     user_id=COALESCE(excluded.user_id, memories.user_id),
+                     external_id=COALESCE(excluded.external_id, memories.external_id),
+                     session_id=COALESCE(excluded.session_id, memories.session_id),
+                     source=COALESCE(excluded.source, memories.source)""",
                 (
                     mid,
                     session_id,
@@ -842,6 +963,9 @@ class MemoryStore:
                     ttl,
                     tags_json,
                     _to_blob(embedding),
+                    agent_id,
+                    user_id,
+                    ext,
                 ),
             )
         item = self.get_memory(mid)
@@ -865,6 +989,9 @@ class MemoryStore:
         since: float | None = None,
         until: float | None = None,
         ids: list[str] | None = None,
+        agent_id: str | None = None,
+        user_id: str | None = None,
+        external_id: str | None = None,
     ) -> list[StoredMemory]:
         clauses: list[str] = []
         params: list = []
@@ -893,6 +1020,15 @@ class MemoryStore:
             placeholders = ",".join("?" for _ in ids)
             clauses.append(f"id IN ({placeholders})")
             params.extend(ids)
+        if agent_id is not None:
+            clauses.append("agent_id = ?")
+            params.append(agent_id)
+        if user_id is not None:
+            clauses.append("user_id = ?")
+            params.append(user_id)
+        if external_id is not None:
+            clauses.append("external_id = ?")
+            params.append(external_id)
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         with self._conn() as c:
             rows = c.execute(
@@ -900,6 +1036,37 @@ class MemoryStore:
                 (*params, limit),
             ).fetchall()
             return [self._row_to_memory(r) for r in rows]
+
+    def find_memory_by_external_id(
+        self,
+        agent_id: str,
+        external_id: str,
+        user_id: str | None = None,
+    ) -> StoredMemory | None:
+        """Look up a memory by its (agent_id, user_id, external_id) tuple.
+
+        Returns ``None`` when no row matches. Used by the SDK + REST
+        API so external systems can update / delete / feedback on
+        memories they pushed without needing the internal row id.
+        """
+        if not agent_id or not external_id:
+            return None
+        with self._conn() as c:
+            if user_id is None:
+                row = c.execute(
+                    "SELECT * FROM memories "
+                    "WHERE agent_id = ? AND external_id = ? "
+                    "ORDER BY created_at DESC LIMIT 1",
+                    (agent_id, external_id),
+                ).fetchone()
+            else:
+                row = c.execute(
+                    "SELECT * FROM memories "
+                    "WHERE agent_id = ? AND user_id = ? AND external_id = ? "
+                    "ORDER BY created_at DESC LIMIT 1",
+                    (agent_id, user_id, external_id),
+                ).fetchone()
+        return self._row_to_memory(row) if row else None
 
     # ---- Unified recall across memories + wiki + entities -----------
     @staticmethod
@@ -1147,8 +1314,15 @@ class MemoryStore:
         include: tuple[str, ...] = ("memories", "wiki", "entities"),
         bump_signals: bool = True,
         level: int = 1,
+        adaptive: bool = False,
     ) -> dict[str, list[dict]]:
         """RRF-fused recall across BM25 + semantic + entity channels.
+
+        ``adaptive=True`` blends the 4D AdaptiveScore (importance +
+        recency + usage + graph_degree) and applies the graph boost
+        from ``jobs.graph.graph_boost``. Off by default to keep the
+        existing dashboard + MCP behaviour byte-identical.
+        RRF-fused recall across BM25 + semantic + entity channels.
 
         ``source`` enables per-source scope: only wiki pages whose
         scope is 'global' OR contains this source are returned. If
@@ -1281,6 +1455,50 @@ class MemoryStore:
         out["temporal_intent"] = t_intent
         out["temporal_confidence"] = round(t_conf, 2)
 
+        # --- 3D adaptive scoring + graph boost ----------------------
+        # ``adaptive=True`` blends the 4D AdaptiveScore (importance +
+        # recency + usage + graph_degree) with the existing RRF
+        # score. The graph boost is a separate multiplier in
+        # [0, 1.5] computed from the query's entity neighbourhood;
+        # it can dominate when the memory shares multiple entities
+        # with the query. Implementation: 60% RRF + 40% adaptive
+        # blend, multiplied by (1 + graph_boost). This is the
+        # "third dimension" the article calls out as Mem0's
+        # differentiator from plain RAG.
+        if adaptive and out["memories"]:
+            try:
+                from ..jobs.graph import (
+                    graph_boost as _gb,
+                    adaptive_score as _as,
+                )  # type: ignore
+            except Exception:
+                _gb = _as = None  # type: ignore
+            if _gb is not None and _as is not None:
+                mem_ids = [m["id"] for m in out["memories"]]
+                boosts = _gb(self, query, mem_ids)
+                now_ts = _time.time()
+                for m in out["memories"]:
+                    last_recalled = m.get("last_recalled_at")
+                    s_ = _as(
+                        importance=m.get("importance") or 0.5,
+                        created_at=m.get("created_at") or now_ts,
+                        now=now_ts,
+                        recall_count=int(m.get("recall_count") or 0),
+                        last_recalled_at=last_recalled,
+                        graph_degree=len(boosts[m["id"]].matched_entities)
+                                      if m["id"] in boosts else 0,
+                    )
+                    g_boost = boosts[m["id"]].boost if m["id"] in boosts else 0.0
+                    blended = (0.6 * (m.get("score") or 0) + 0.4 * s_.blended)
+                    new_score = blended * (1.0 + g_boost)
+                    m["score"] = round(new_score, 4)
+                    m["_adaptive"] = s_.to_dict()
+                    m["_graph_boost"] = g_boost
+                    if m["id"] in boosts:
+                        m["_graph_entities"] = boosts[m["id"]].matched_entities
+                out["memories"].sort(key=lambda m: -m["score"])
+                out["adaptive"] = True
+
         if bump_signals and out["memories"]:
             now = _time.time()
             with self._conn() as c:
@@ -1370,6 +1588,7 @@ class MemoryStore:
             rows = c.execute(
                 f"""SELECT m.id, m.kind, m.text, m.importance, m.score, m.source,
                           m.tags, m.created_at, m.updated_at,
+                          m.agent_id, m.user_id, m.external_id,
                           COALESCE(s.recall_count, 0) AS recall_count
                    FROM memories m
                    LEFT JOIN memory_signals s ON s.memory_id = m.id
@@ -1412,6 +1631,9 @@ class MemoryStore:
                 "tags": tags,
                 "created_at": float(r["created_at"] or 0),
                 "recall_count": int(r["recall_count"] or 0),
+                "agent_id": r["agent_id"] if "agent_id" in r.keys() else None,
+                "user_id": r["user_id"] if "user_id" in r.keys() else None,
+                "external_id": r["external_id"] if "external_id" in r.keys() else None,
                 "score": round(base_score * t_mult, 4),
                 "_temporal_multiplier": round(t_mult, 3),
                 "preview": full_text[:240],
@@ -1529,6 +1751,151 @@ class MemoryStore:
     # match against both the full prefixed name and the suffix after
     # the colon.
     # ----------------------------------------------------------------
+    def entity_by_name(self, name: str) -> dict | None:
+        """Look up a single entity row by its canonical name.
+
+        Returns ``None`` if the entity is unknown. Used by the graph
+        job (``subgraph_for``) to attach ``kind`` / ``weight`` to
+        nodes it materialises from a query.
+        """
+        n = (name or "").strip()
+        if not n:
+            return None
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT * FROM entities WHERE name = ? LIMIT 1",
+                (n,),
+            ).fetchone()
+        if not row:
+            return None
+        return dict(row)
+
+    def related_entities(self, name: str, limit: int = 32) -> list[str]:
+        """Return the entity names connected to ``name`` via a relation.
+
+        Walks both ``src = name`` and ``dst = name`` so the caller
+        doesn't have to know which side the entity landed on.
+        """
+        n = (name or "").strip()
+        if not n:
+            return []
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT src, dst FROM relations WHERE src = ? OR dst = ? LIMIT ?",
+                (n, n, limit),
+            ).fetchall()
+        out: list[str] = []
+        for r in rows:
+            other = r["dst"] if r["src"] == n else r["src"]
+            if other and other != n and other not in out:
+                out.append(other)
+        return out[:limit]
+
+    def upsert_entity_mention(self, memory_id: str, entity_name: str,
+                                *, weight: float = 0.5) -> bool:
+        """Record that ``memory_id`` mentions ``entity_name``.
+
+        Idempotent: (memory_id, entity_id) is the primary key. Returns
+        True if a new row was inserted, False if it already existed
+        (in which case the existing weight is left alone — the first
+        mention is the strongest signal).
+        """
+        n = (entity_name or "").strip()
+        if not memory_id or not n:
+            return False
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT id FROM entities WHERE name = ?", (n,),
+            ).fetchone()
+            if not row:
+                return False
+            try:
+                c.execute(
+                    "INSERT INTO entity_mentions (memory_id, entity_id, weight, created_at) "
+                    "VALUES (?, ?, ?, ?)",
+                    (memory_id, row["id"], float(weight), time.time()),
+                )
+                return True
+            except sqlite3.IntegrityError:
+                return False
+
+    def rebuild_entity_mentions(self) -> int:
+        """Re-extract entities from every memory text and write the
+        (memory_id, entity_id) rows needed by ``graph_boost`` and the
+        knowledge-graph UI.
+
+        Idempotent: re-running clears the previous mentions first.
+        Returns the number of new mention rows.
+        """
+        # We reuse the lightweight graph extractor. Keeping the
+        # import local avoids a circular import at module load.
+        from ..graph.extract import extract_entities
+        n_inserted = 0
+        with self._conn() as c:
+            c.execute("DELETE FROM entity_mentions")
+            rows = c.execute(
+                "SELECT id, text, tags, source FROM memories"
+            ).fetchall()
+            for r in rows:
+                ents = extract_entities(r["text"] or "")
+                for name, _kind in ents:
+                    ent = c.execute(
+                        "SELECT id FROM entities WHERE name = ?", (name,),
+                    ).fetchone()
+                    if not ent:
+                        continue
+                    try:
+                        c.execute(
+                            "INSERT INTO entity_mentions (memory_id, entity_id, weight, created_at) "
+                            "VALUES (?, ?, 0.5, ?)",
+                            (r["id"], ent["id"], time.time()),
+                        )
+                        n_inserted += 1
+                    except sqlite3.IntegrityError:
+                        pass
+        return n_inserted
+
+    def memory_ids_for_entity(self, name: str, limit: int = 64) -> list[str]:
+        """Return the memory ids that mention the given entity.
+
+        Joins ``entity_mentions`` → ``entities`` so callers can look
+        up the backing memories of a graph node in O(1) without
+        re-running entity extraction on the original text.
+        """
+        n = (name or "").strip()
+        if not n:
+            return []
+        with self._conn() as c:
+            rows = c.execute(
+                """SELECT em.memory_id
+                   FROM entity_mentions em
+                   JOIN entities e ON e.id = em.entity_id
+                   WHERE e.name = ?
+                   ORDER BY em.weight DESC
+                   LIMIT ?""",
+                (n, limit),
+            ).fetchall()
+        return [r["memory_id"] for r in rows if r["memory_id"]]
+
+    def graph_subgraph_for_query(
+        self,
+        query: str,
+        *,
+        max_hops: int = 1,
+        max_nodes: int = 32,
+        max_edges: int = 64,
+    ) -> dict:
+        """Convenience wrapper: same as
+        ``loop_memory.jobs.graph.subgraph_for`` but inlined so the
+        store can serve it from a single SQL path. The graph job
+        uses this when it wants to stay inside the store's
+        transaction boundary.
+        """
+        from ..jobs.graph import subgraph_for as _sg  # type: ignore
+        sg = _sg(self, query, max_hops=max_hops,
+                 max_nodes=max_nodes, max_edges=max_edges)
+        return sg.to_dict()
+
     def search_entities_by_names(self, names: list[str], limit: int = 20) -> list[dict]:
         if not names:
             return []
@@ -1643,6 +2010,9 @@ class MemoryStore:
             ttl=row["ttl"],
             tags=tags,
             embedding=_from_blob(row["embedding"]),
+            agent_id=row["agent_id"] if "agent_id" in row.keys() else None,
+            user_id=row["user_id"] if "user_id" in row.keys() else None,
+            external_id=row["external_id"] if "external_id" in row.keys() else None,
         )
 
     # --- wiki pages -------------------------------------------------------
@@ -2216,6 +2586,355 @@ class MemoryStore:
             r1 = c.execute("DELETE FROM entities").rowcount
             c.execute("DELETE FROM relations")
             return r1
+
+    # --- Universal Agent Memory v7 ----------------------------------
+    # Methods for the three new tables (wiki_versions, cognitive_audit,
+    # auth_tokens). All keep the same return-shape conventions as the
+    # rest of the file: dataclasses for memory-shaped rows, dicts for
+    # raw query results.
+
+    # ----- wiki_versions ----------------------------------------------
+
+    def snapshot_wiki_version(
+        self,
+        page_id: str,
+        *,
+        branch_tag: str | None = None,
+    ) -> dict | None:
+        """Snapshot the current state of a wiki page into ``wiki_versions``.
+
+        Called on every ``upsert_wiki_page`` and whenever the user
+        runs ``MemoryClient.fork(branch_tag=...)``. Returns the new
+        version row, or ``None`` if the page doesn't exist.
+        """
+        page = self.get_wiki_page(page_id)
+        if page is None:
+            return None
+        import json
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT COALESCE(MAX(version), 0) AS v FROM wiki_versions WHERE page_id=?",
+                (page_id,),
+            ).fetchone()
+            next_v = int(row["v"] or 0) + 1
+            wid = uuid.uuid4().hex
+            c.execute(
+                """INSERT INTO wiki_versions
+                   (id, page_id, version, title, body, summary, tags,
+                    importance, key_facts, scope, branched_at, branch_tag)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    wid,
+                    page_id,
+                    next_v,
+                    page.get("title") or "",
+                    page.get("body") or "",
+                    page.get("summary") or "",
+                    json.dumps(page.get("tags") or []),
+                    float(page.get("importance") or 0.5),
+                    json.dumps(page.get("key_facts") or []),
+                    page.get("scope") or "global",
+                    time.time(),
+                    branch_tag,
+                ),
+            )
+        return {
+            "id": wid,
+            "page_id": page_id,
+            "version": next_v,
+            "title": page.get("title") or "",
+            "summary": page.get("summary") or "",
+            "tags": page.get("tags") or [],
+            "importance": float(page.get("importance") or 0.5),
+            "scope": page.get("scope") or "global",
+            "branch_tag": branch_tag,
+        }
+
+    def list_wiki_versions(
+        self,
+        page_id: str | None = None,
+        *,
+        branch_tag: str | None = None,
+        limit: int = 200,
+    ) -> list[dict]:
+        """Return version history, newest first."""
+        clauses: list[str] = []
+        params: list = []
+        if page_id is not None:
+            clauses.append("page_id = ?")
+            params.append(page_id)
+        if branch_tag is not None:
+            clauses.append("branch_tag = ?")
+            params.append(branch_tag)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        import json
+        with self._conn() as c:
+            rows = c.execute(
+                f"SELECT * FROM wiki_versions {where} "
+                "ORDER BY branched_at DESC LIMIT ?",
+                (*params, limit),
+            ).fetchall()
+        out: list[dict] = []
+        for r in rows:
+            try:
+                tags = json.loads(r["tags"]) if r["tags"] else []
+            except Exception:
+                tags = []
+            try:
+                kf = json.loads(r["key_facts"]) if r["key_facts"] else []
+            except Exception:
+                kf = []
+            out.append({
+                "id": r["id"],
+                "page_id": r["page_id"],
+                "version": int(r["version"] or 1),
+                "title": r["title"] or "",
+                "summary": r["summary"] or "",
+                "tags": tags,
+                "importance": float(r["importance"] or 0.5),
+                "key_facts": kf,
+                "scope": r["scope"] or "global",
+                "branched_at": float(r["branched_at"] or 0),
+                "branch_tag": r["branch_tag"],
+            })
+        return out
+
+    def get_wiki_version(self, version_id: str) -> dict | None:
+        import json
+        with self._conn() as c:
+            r = c.execute(
+                "SELECT * FROM wiki_versions WHERE id=?", (version_id,),
+            ).fetchone()
+        if not r:
+            return None
+        try:
+            tags = json.loads(r["tags"]) if r["tags"] else []
+        except Exception:
+            tags = []
+        try:
+            kf = json.loads(r["key_facts"]) if r["key_facts"] else []
+        except Exception:
+            kf = []
+        return {
+            "id": r["id"],
+            "page_id": r["page_id"],
+            "version": int(r["version"] or 1),
+            "title": r["title"] or "",
+            "body": r["body"] or "",
+            "summary": r["summary"] or "",
+            "tags": tags,
+            "importance": float(r["importance"] or 0.5),
+            "key_facts": kf,
+            "scope": r["scope"] or "global",
+            "branched_at": float(r["branched_at"] or 0),
+            "branch_tag": r["branch_tag"],
+        }
+
+    # ----- cognitive_audit -------------------------------------------
+
+    def record_audit(
+        self,
+        *,
+        kind: str,
+        action: str,
+        target_kind: str,
+        target_id: str | None = None,
+        target_text: str | None = None,
+        reason: str | None = None,
+        score: float | None = None,
+        payload: dict | None = None,
+    ) -> dict:
+        """Append one row to ``cognitive_audit``.
+
+        ``kind`` is the trigger category — ``forget``, ``merge``,
+        ``contradict``, ``stale``, ``low_value``. ``action`` is the
+        disposition — ``suggest`` (we proposed it but didn't touch
+        data), ``applied`` (the SDK / CLI ran the cleanup), or
+        ``reverted`` (the user undid it).
+        """
+        import json
+        aid = uuid.uuid4().hex
+        ts = time.time()
+        with self._conn() as c:
+            c.execute(
+                """INSERT INTO cognitive_audit
+                   (id, ts, kind, action, target_kind, target_id,
+                    target_text, reason, score, payload)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    aid,
+                    ts,
+                    kind,
+                    action,
+                    target_kind,
+                    target_id,
+                    target_text,
+                    reason,
+                    score,
+                    json.dumps(payload or {}),
+                ),
+            )
+        return {
+            "id": aid,
+            "ts": ts,
+            "kind": kind,
+            "action": action,
+            "target_kind": target_kind,
+            "target_id": target_id,
+            "target_text": target_text,
+            "reason": reason,
+            "score": score,
+            "payload": payload or {},
+        }
+
+    def list_audit(
+        self,
+        *,
+        kind: str | None = None,
+        action: str | None = None,
+        limit: int = 200,
+    ) -> list[dict]:
+        clauses: list[str] = []
+        params: list = []
+        if kind:
+            clauses.append("kind = ?")
+            params.append(kind)
+        if action:
+            clauses.append("action = ?")
+            params.append(action)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        import json
+        with self._conn() as c:
+            rows = c.execute(
+                f"SELECT * FROM cognitive_audit {where} "
+                "ORDER BY ts DESC LIMIT ?",
+                (*params, limit),
+            ).fetchall()
+        out: list[dict] = []
+        for r in rows:
+            try:
+                pj = json.loads(r["payload"]) if r["payload"] else {}
+            except Exception:
+                pj = {}
+            out.append({
+                "id": r["id"],
+                "ts": float(r["ts"] or 0),
+                "kind": r["kind"],
+                "action": r["action"],
+                "target_kind": r["target_kind"],
+                "target_id": r["target_id"],
+                "target_text": r["target_text"],
+                "reason": r["reason"],
+                "score": r["score"],
+                "payload": pj,
+            })
+        return out
+
+    # ----- auth_tokens -----------------------------------------------
+
+    def issue_token(
+        self,
+        *,
+        user_id: str | None = None,
+        agent_id: str | None = None,
+        label: str | None = None,
+        expires_in: float | None = None,
+    ) -> dict:
+        """Mint a bearer token scoped to ``(user_id, agent_id)``.
+
+        Returns ``{"id", "token", "user_id", "agent_id", "label",
+        "created_at", "expires_at"}``. The token is only available
+        at issue time — the store keeps a SHA-256 hash so it can be
+        verified but never recovered.
+        """
+        import hashlib
+        import secrets
+        token = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        tid = uuid.uuid4().hex
+        now = time.time()
+        exp = (now + expires_in) if expires_in else None
+        with self._conn() as c:
+            c.execute(
+                """INSERT INTO auth_tokens
+                   (id, user_id, agent_id, label, token_hash,
+                    created_at, expires_at, revoked)
+                   VALUES (?,?,?,?,?,?,?,0)""",
+                (tid, user_id, agent_id, label, token_hash, now, exp),
+            )
+        return {
+            "id": tid,
+            "token": token,
+            "user_id": user_id,
+            "agent_id": agent_id,
+            "label": label,
+            "created_at": now,
+            "expires_at": exp,
+        }
+
+    def verify_token(self, token: str) -> dict | None:
+        """Return the token row if ``token`` is valid, else ``None``."""
+        import hashlib
+        if not token:
+            return None
+        h = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        now = time.time()
+        with self._conn() as c:
+            r = c.execute(
+                "SELECT * FROM auth_tokens WHERE token_hash=? AND revoked=0",
+                (h,),
+            ).fetchone()
+        if not r:
+            return None
+        if r["expires_at"] and float(r["expires_at"]) < now:
+            return None
+        # Best-effort: bump last_used_at. We don't fail if it errors
+        # — verification is the contract.
+        try:
+            with self._conn() as c:
+                c.execute(
+                    "UPDATE auth_tokens SET last_used_at=? WHERE id=?",
+                    (now, r["id"]),
+                )
+        except Exception:
+            pass
+        return {
+            "id": r["id"],
+            "user_id": r["user_id"],
+            "agent_id": r["agent_id"],
+            "label": r["label"],
+            "created_at": float(r["created_at"] or 0),
+            "expires_at": r["expires_at"],
+        }
+
+    def revoke_token(self, token_id: str) -> bool:
+        with self._conn() as c:
+            cur = c.execute(
+                "UPDATE auth_tokens SET revoked=1 WHERE id=? AND revoked=0",
+                (token_id,),
+            )
+            return cur.rowcount > 0
+
+    def list_tokens(self) -> list[dict]:
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT id, user_id, agent_id, label, created_at, "
+                "last_used_at, expires_at, revoked FROM auth_tokens "
+                "ORDER BY created_at DESC"
+            ).fetchall()
+        return [
+            {
+                "id": r["id"],
+                "user_id": r["user_id"],
+                "agent_id": r["agent_id"],
+                "label": r["label"],
+                "created_at": float(r["created_at"] or 0),
+                "last_used_at": r["last_used_at"],
+                "expires_at": r["expires_at"],
+                "revoked": bool(r["revoked"]),
+            }
+            for r in rows
+        ]
 
     # --- maintenance ------------------------------------------------------
 

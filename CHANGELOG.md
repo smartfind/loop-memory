@@ -1,5 +1,66 @@
 ## [Unreleased]
 
+### Universal Agent Memory v7 — graph, cognitive, MEMORY.md, multi-tenant SDK
+Closes the four gaps the article《LangChain、AgentScope、Mem0 深度横评：谁才是 Agent 的真正记忆系统？》called out against Mem0.
+
+- **Graph memory + 3D adaptive scoring**
+  - new jobs.graph.upsert_semantic_edge(src, dst, kind, weight, evidence_id) — Mem0-style high-signal relations
+  - jobs.graph.graph_boost + jobs.graph.adaptive_score wired into recall_hybrid(adaptive=True)
+  - jobs.graph.subgraph_for(query) returns nodes / edges / 1-hop neighbours + backing memory ids
+  - new entity_mentions table maintained by MemoryStore.rebuild_entity_mentions()
+- **Cognitive sleep** (jobs.cognitive.cognitive_sleep)
+  - heuristic sweep: stale / low_value / merge (with short-text containment) / contradict
+  - every decision lands in cognitive_audit for replay / revert
+  - apply=True actually deletes; False only lists suggestions
+- **MEMORY.md white-box export** (export.memory_md.export_bundle / import_bundle / fork_snapshot)
+  - directory layout: MEMORY.md + pages/*.md + memories.jsonl + graph.json + sessions.json + meta.json + INDEX.md
+  - git init works for versioning; loop-memory fork --branch-tag v1.0 is a release tag
+- **Multi-tenant SDK** (MemoryClient.for_user(uid) / for_agent(aid))
+  - MemoryNamespace proxies the 4 core verbs + graph / cognitive / export
+  - HTTP backend is zero-dep (urllib stdlib)
+- **HTTP (/api/v1/*)**: graph/edges, graph/subgraph, graph/rebuild, cognitive/sleep, cognitive/audit, cognitive/audit/revert, export, import, fork, wiki/versions
+- **MCP (loop-memory mcp)**: new tools remember_edge, subgraph, cognitive_sleep, audit
+- **CLI**: loop-memory cognitive-sleep | audit | export | export-bundle | import | fork | graph-edge | subgraph | graph-rebuild; `export --out/--q` remains backward compatible
+- **Schema v7**: new tables wiki_versions, cognitive_audit, auth_tokens. SCHEMA_VERSION 6 to 7. Migration is ALTER TABLE + CREATE INDEX IF NOT EXISTS, no-op on existing DBs
+- **Tests**: v7 coverage now includes the CLI compatibility suite; total 315 tests pass
+- **Docs**: docs/universal-agent-memory.md is the v7 canonical doc
+
+
+### Universal Agent Memory — SDK + `/api/v1/memories` + MCP write tools
+- **Identity columns on `memories`**: `agent_id`, `user_id`, `external_id`,
+  plus a `UNIQUE (agent_id, user_id, external_id)` index so re-pushing
+  the same external triple updates the row in place. `ALTER TABLE`
+  migration in `_init_schema`; `SCHEMA_VERSION` bumps from `"5"` to `"6"`.
+  Existing rows are treated as "global" (NULL on all three) and stay
+  visible to every Agent.
+- **Python SDK (`loop_memory/sdk.py`)**: protocol-agnostic
+  `MemoryClient` with two backends — in-process (wraps a
+  `MemoryStore` directly) and HTTP (zero-dep, stdlib only). 4-verb
+  contract: `remember`, `recall`, `feedback`, `forget`, plus
+  `remember_batch` and `list` helpers. `Memory` and `RecallHit`
+  dataclasses are JSON-serialisable so an Agent can pass them
+  straight to an LLM prompt.
+- **`/api/v1/memories` surface**: `POST` (idempotent), `POST:batch`,
+  `GET` (filtered list), `GET /api/v1/recall` (hybrid recall with
+  optional `agent_id` / `user_id` namespace filter),
+  `POST /api/v1/memories/{id}/feedback`,
+  `POST /api/v1/memories/feedback` (by external triple), and two
+  `DELETE` variants. All routes show up in `/openapi.json`.
+- **MCP write tools**: `remember`, `forget`, `feedback` join the
+  existing read-only `recall` / `list_wiki` / `get_wiki` /
+  `recent_memories` / `wiki_summary`. Stamps every call with
+  `LOOP_MEMORY_AGENT_ID` / `LOOP_MEMORY_USER_ID` env when set, so
+  any MCP-aware client gets a stable identity without per-call
+  config.
+- **New tests**: `tests/test_agent_memory_sdk.py` (in-process SDK
+  + HTTP backend wiring), `tests/test_agent_memory_api.py`
+  (FastAPI round-trip), and `McpWriteToolTests` in
+  `tests/test_mcp.py` cover the write surface end-to-end.
+- **Docs**: `docs/agent-memory-api.md` is the canonical design
+  doc; `docs/api.md` lists the new routes in the write-surface
+  table.
+
+
 ### Distillation policy v2 — completeness over compactness
 - **Stage 3 (`_CLUSTER_SYSTEM`) and Stage 4 (`_WIKI_SYSTEM`) prompts no
   longer hard-cap title / summary / body / distill lengths.** The previous
@@ -415,5 +476,3 @@ commands.
   `$LOOP_MEMORY_DB` mid-process and have the next call see the new
   path. Resolves the long-standing `test_inject_emits_wiki_block`
   and `test_cli_ask_prints_block` flakes.
-
-

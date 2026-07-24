@@ -106,6 +106,9 @@ following — every other project we looked at lacks at least one:
 | Distillation that prefers *completeness over compression* | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Distillation that runs on a schedule **and** on demand | ✅ both | ✅ schedule | ✅ both | ✅ schedule | ❌ |
 | Knowledge graph (entities + relations) | ✅ light | ✅ Neo4j | ✅ | ✅ native graph | ✅ ChromaDB |
+| Cognitive sleep with auditable cleanup | ✅ v7 | ⚠ | ✅ | ⚠ | ❌ |
+| Git-friendly `MEMORY.md` export / fork | ✅ v7 | ⚠ hosted | ⚠ | ✅ file-based | ❌ |
+| Universal SDK + HTTP + MCP contract | ✅ v7 | ✅ | ⚠ | ✅ | ⚠ |
 | OpenAI-compatible multi-provider LLM (incl. MiniMax) | ✅ | ✅ | ✅ | ✅ | ⚠ |
 | Open-source, MIT, no hosted tier required | ✅ | ✅ (cloud SKUs dominant) | ✅ | ⚠ AGPLv3 | ✅ |
 
@@ -128,6 +131,8 @@ Hermes, clawx) can read and write, we built this for you.
 | --- | --- |
 | [docs/architecture.md](docs/architecture.md) | Layered view of the subpackages, the 5-stage evolution pipeline, the request lifecycle, and how secrets and settings are separated between the SQLite store and a local permission-restricted secrets file |
 | [docs/api.md](docs/api.md) | HTTP API reference — every route, request body, and response shape the UI consumes |
+| [docs/agent-memory-api.md](docs/agent-memory-api.md) | Stable four-verb SDK / HTTP / MCP contract for any Agent |
+| [docs/universal-agent-memory.md](docs/universal-agent-memory.md) | v7 graph memory, cognitive sleep, portable bundles, namespaces, and MCP/CLI extensions |
 | [docs/providers.md](docs/providers.md) | LLM provider reference — built-in providers, defaults, base URLs, and how to add a new one |
 | [docs/auto-capture.md](docs/auto-capture.md) | Hooking Codex / Claude / Hermes / OpenClaw watchers (filesystem, launchd, systemd, cron) |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Local dev loop, pytest, where secrets live, how to add a provider/source |
@@ -290,7 +295,7 @@ automatically:
 | -------------------------------- | ---------------------------------------------------------------------------- |
 | `loop-memory install-hooks`      | Auto-detect `~/.codex`, `~/.claude`, `~/.hermes` and write MCP + SessionStart hook configs in place. Idempotent — re-run any time. |
 | `loop-memory inject [query]`     | Print a `# Long-term memory context` markdown block (distilled wiki + recent relevant memories) for a SessionStart hook. |
-| `loop-memory mcp`                | Run the **stdio MCP server** that exposes `recall` / `list_wiki` / `get_wiki` / `recent_memories` / `wiki_summary` to any MCP-aware client. |
+| `loop-memory mcp`                | Run the **stdio MCP server** with memory, graph, and cognitive tools (`recall`, `remember`, `forget`, `feedback`, `remember_edge`, `subgraph`, `cognitive_sleep`, `audit`, and wiki tools). |
 
 Quick setup on a fresh machine:
 
@@ -430,7 +435,7 @@ loop_memory/
 ## Run the tests
 
 ```bash
-python -m unittest discover tests -v
+python -m pytest -q
 ```
 
 
@@ -455,8 +460,13 @@ new session in any LLM client.
 ### 2. Whole wiki export
 
 ```bash
-loop-memory export            # writes ~/loop-memory-export-<date>.md
+# Legacy single-file markdown export (kept for existing scripts)
+loop-memory export
 loop-memory export --out ~/Notes/user.md --q "preferences"
+
+# v7 portable bundle: MEMORY.md + pages + memories + graph + metadata
+loop-memory export ~/Notes/loop-memory-bundle
+loop-memory export-bundle ~/Notes/loop-memory-bundle
 ```
 
 Or in the UI: open the **Wiki** tab → click **⇩ Export**. A markdown file

@@ -27,6 +27,9 @@ flowchart TD
     Security[security/] --> Storage
     MCP[mcp/] --> Storage
     MCP --> Engine
+    SDK[sdk.py + sdk_extensions.py] --> Storage
+    Export[export/] --> Storage
+    Jobs --> Graph
 ```
 
 ## Subpackage responsibilities
@@ -48,15 +51,23 @@ flowchart TD
   `MemoryPipeline`.
 - **`jobs/`** — background work. `Consolidator` (rescore + gc + dedupe),
   `LLMConsolidator` (LLM-driven cleanup), `EvolutionConsolidator` (5-stage
-  pipeline), `ConsolidatorScheduler` (APScheduler-based runner).
+  pipeline), `ConsolidatorScheduler` (APScheduler-based runner), plus v7
+  semantic graph scoring and cognitive sleep cleanup.
 - **`graph/`** — entity/relation extraction and the read-side `KnowledgeGraph`.
 - **`serve/`** — FastAPI app and helpers. `app.create_app()` wires ~40 routes
   to handlers in `handlers.py`. `watcher.py` polls the filesystem for new
   transcripts.
 - **`cli/`** — `main.main(argv)` is a 1-line dispatcher; each subcommand lives
-  in `cli/commands/` (read / write / serve / hooks / graph).
+  in `cli/commands/` (read / write / serve / hooks / graph / cognitive). The
+  positional `export <dir>` form writes a v7 bundle; the legacy `export
+  --out <file> [--q <query>]` form remains available.
 - **`mcp/`** — stdio MCP server exposing `recall`, `list_wiki`, `get_wiki`,
-  `ask`, `inject` to the host LLM client.
+  `ask`, `inject`, memory write tools, semantic graph tools, and cognitive
+  audit tools to the host LLM client.
+- **`sdk.py` / `sdk_extensions.py`** — shared in-process and HTTP
+  `MemoryClient` contract, namespaces, graph operations, cognitive sleep, and
+  portable bundle helpers.
+- **`export/`** — white-box `MEMORY.md` bundle export/import and Wiki forks.
 - **`security/`** — local secret storage abstraction backed by
   `~/.loop_memory/secrets.json` with mode `0600`.
 - **`examples/`** — `demo.py` end-to-end smoke test used by CI.
@@ -115,7 +126,7 @@ sequenceDiagram
 
 ## Testing
 
-- 162 tests across 18 files (all run via `pytest -q`).
+- 315 tests across 22 files (all run via `pytest -q`).
 - New code should ship with at least one focused unit test in `tests/`.
 - CI (`.github/workflows/tests.yml`) runs ruff + mypy (advisory) + pytest
   with a 60% coverage floor.
