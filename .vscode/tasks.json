@@ -1,0 +1,44 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Python: tests",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/pytest",
+      "args": [
+        "-q"
+      ],
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Python: Ruff check",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/ruff",
+      "args": [
+        "check",
+        "loop_memory",
+        "tests"
+      ],
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Loop Memory: server",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/python",
+      "args": [
+        "-m",
+        "loop_memory.cli.main",
+        "serve",
+        "--port",
+        "7767"
+      ],
+      "isBackground": true,
+      "problemMatcher": []
+    }
+  ]
+}
