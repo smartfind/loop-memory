@@ -15,9 +15,17 @@ dist/
 .env
 .env.*
 !.env.example
+.envrc
 *.db
 *.sqlite
 *.sqlite3
 *.log
 *.bak
+*.key
+*.pem
 secrets.json
+.codex/
+.claude/
+.loop_memory/
+credentials.json
+work/
