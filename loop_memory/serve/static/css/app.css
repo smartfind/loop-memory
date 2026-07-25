@@ -3828,11 +3828,15 @@
 .wiki-toolbar select[title] { min-width: 110px; }
 
   /* Storage budget section — toggle row + last-compact chip. */
+  .sec-storage .storage-cadence-grid {
+    align-items: start;
+  }
   .sec-storage .storage-meter {
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    padding: 8px 10px;
+    align-self: start;
+    gap: 2px;
+    padding: 7px 10px;
     border: 1px solid var(--border);
     border-radius: 8px;
     background: var(--surface-2);
@@ -3843,6 +3847,7 @@
   }
   .sec-storage .storage-meter strong {
     font-size: 12.5px;
+    line-height: 1.35;
     color: var(--text);
   }
 
