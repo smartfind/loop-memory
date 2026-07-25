@@ -992,6 +992,7 @@ export const Settings = defineComponent({
     <!-- Actions (Run now / Preview) -->
     <section>
       <h3>{{ t('settings.section.actions') }}</h3>
+      <p class="sec-scope">{{ t('settings.section.actionsHint') }}</p>
       <div class="action-row" style="gap:8px;flex-wrap:wrap;">
         <button class="btn primary" type="button" @click="onRunNow">{{ t('settings.runNow') }}</button>
         <button class="btn ghost" type="button" @click="onPreview">{{ t('settings.preview') }}</button>

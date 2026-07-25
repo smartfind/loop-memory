@@ -419,6 +419,7 @@
   "settings.score": "Re-score importance",
   "settings.scoreHint": "Re-compute importance using current rules (importance × recency × use) for every stored memory.",
   "settings.section.actions": "Manual Actions",
+  "settings.section.actionsHint": "Trigger a consolidation run manually. Run now writes the result; Preview only shows what would be kept, dropped, or merged without changing the memory store.",
   "settings.section.behaviour": "Consolidation Behaviour",
   "settings.section.provider": "LLM Provider",
   "settings.section.runs": "Recent Runs",

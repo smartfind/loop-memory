@@ -419,6 +419,7 @@
   "settings.score": "重新打分",
   "settings.scoreHint": "用当前规则重新计算每条记忆的分数（重要度 × 时效 × 使用）。",
   "settings.section.actions": "手动操作",
+  "settings.section.actionsHint": "手动触发一次整理任务。立即整理会写入实际结果；预览只展示预计保留、丢弃和合并的内容，不会修改记忆库。",
   "settings.section.behaviour": "整理任务行为",
   "settings.section.provider": "大模型提供方",
   "settings.section.runs": "最近运行",
