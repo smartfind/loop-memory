@@ -1582,33 +1582,49 @@
   /* Redaction section — toggles, kind list, preview pane. The
      "live" chip mirrors the ingest-hint chip styling so both
      sections feel consistent. */
-  .sec-redact .row-toggle {
+  .sec-redact .row-toggle,
+  .sec-storage .row-toggle {
     display: flex;
     align-items: flex-start;
-    gap: 10px;
-    padding: 8px 10px;
+    gap: 9px;
+    padding: 9px 10px;
     margin: 6px 0;
     border: 1px solid var(--border);
     border-radius: 8px;
     cursor: pointer;
     background: var(--surface-2);
   }
-  .sec-redact .row-toggle input[type="checkbox"] {
-    margin-top: 2px;
-    transform: scale(1.05);
+  .sec-redact .row-toggle input[type="checkbox"],
+  .sec-storage .row-toggle input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    flex: 0 0 16px;
+    margin: 1px 0 0;
+    padding: 0;
+    border: 0;
+    accent-color: var(--accent);
     cursor: pointer;
   }
-  .sec-redact .row-toggle strong {
+  .sec-redact .row-toggle > span,
+  .sec-storage .row-toggle > span {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+  }
+  .sec-redact .row-toggle strong,
+  .sec-storage .row-toggle strong {
     display: block;
     font-size: 12.5px;
     color: var(--text);
+    line-height: 1.35;
   }
-  .sec-redact .row-toggle small {
+  .sec-redact .row-toggle small,
+  .sec-storage .row-toggle small {
     display: block;
     font-size: 11px;
     color: var(--text-faint);
     margin-top: 2px;
-    line-height: 1.4;
+    line-height: 1.35;
   }
   .redact-kinds {
     margin: 6px 0 10px;
@@ -3812,22 +3828,6 @@
 .wiki-toolbar select[title] { min-width: 110px; }
 
   /* Storage budget section — toggle row + last-compact chip. */
-  .sec-storage .row-toggle {
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
-    padding: 8px 10px;
-    margin: 6px 0;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    cursor: pointer;
-    background: var(--surface-2);
-  }
-  .sec-storage .row-toggle input[type="checkbox"] {
-    margin-top: 2px;
-    transform: scale(1.05);
-    cursor: pointer;
-  }
   .sec-storage .storage-meter {
     display: flex;
     flex-direction: column;
