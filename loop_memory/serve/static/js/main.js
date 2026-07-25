@@ -8,7 +8,7 @@
  * If a future iteration wants SFC + HMR, swap the CDN for the Vite
  * dev server; the component sources are already structured to fit.
  */
-import { createApp } from 'https://unpkg.com/vue@3.4.38/dist/vue.esm-browser.prod.js';
+import { createApp } from './lib/vue.esm-browser.prod.js';
 import { App } from './App.js';
 
 const root = document.getElementById('app');

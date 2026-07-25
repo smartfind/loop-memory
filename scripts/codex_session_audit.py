@@ -27,8 +27,7 @@ CTX_WINDOW_DEFAULT = 258_400  # tokens, matches the current MiniMax-M3 window
 def iter_sessions(root: Path):
     if not root.exists():
         return
-    for path in sorted(root.rglob("rollout-*.jsonl")):
-        yield path
+    yield from sorted(root.rglob("rollout-*.jsonl"))
 
 def audit_file(path: Path) -> dict:
     """Read a session JSONL once and pull token_count peaks + size.

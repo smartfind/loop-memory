@@ -7,10 +7,13 @@
  * function that hand-built HTML strings — Vue's template syntax is
  * significantly easier to scan and edit.
  */
-import { defineComponent, ref, computed, onMounted, onUnmounted, watch } from 'https://unpkg.com/vue@3.4.38/dist/vue.esm-browser.prod.js';
-import { store, t, toast, escapeHtml, fmtTime } from '../store.js';
+import { defineComponent, ref, computed, onMounted, onUnmounted, watch } from '../lib/vue.esm-browser.prod.js';
+import { defineAsyncComponent } from '../lib/vue.esm-browser.prod.js';
+import { store, t, toast, fmtTime } from '../store.js';
 import { api } from '../api.js';
-import { WikiEditor } from './WikiEditor.js';
+// WikiEditor is heavy and only used when the user clicks "edit" on a
+// page — lazy-load it so the rest of Wiki stays cheap.
+const WikiEditor = defineAsyncComponent(() => import('./WikiEditor.js'));
 
 export const Wiki = defineComponent({
   name: 'Wiki',
@@ -226,18 +229,32 @@ export const Wiki = defineComponent({
         editing.value = null;
         await refresh();
       } catch (e) {
-        alert(t('wiki.saveError') + ': ' + e.message);
+        toast(t('wiki.saveError') + ': ' + e.message, 4000);
       }
     }
 
+    // Inline confirmation modal — replaces the legacy browser confirm() so
+    // destructive actions stay within the app chrome (no native dialog
+    // blocking the page). Stored as a single ref so the template only
+    // needs to render one modal regardless of how many confirm call sites
+    // there are.
+    const confirmDialog = ref(null);
+    function showConfirm(opts) { confirmDialog.value = opts; }
+    function hideConfirm() { confirmDialog.value = null; }
+
     async function removePage(p) {
-      if (!confirm(t('wiki.confirmDelete'))) return;
-      try {
-        await api.deleteWiki(p.id);
-        await refresh();
-      } catch (e) {
-        alert(t('wiki.deleteError') + ': ' + e.message);
-      }
+      showConfirm({
+        title: t('wiki.confirmDeleteTitle') || t('wiki.confirmDelete'),
+        message: t('wiki.confirmDeleteMsg') || t('wiki.confirmDelete'),
+        onConfirm: async () => {
+          try {
+            await api.deleteWiki(p.id);
+            await refresh();
+          } catch (e) {
+            toast(t('wiki.deleteError') + ': ' + e.message, 4000);
+          }
+        },
+      });
     }
 
     async function openWikiBySlug(slug) {
@@ -422,6 +439,7 @@ export const Wiki = defineComponent({
       refresh, expand, edit, onNew, onExport, onImportClick, importing, exporting, saveEdit, removePage, fmtTime,
       contradictions, contrLoading, showContradictions, refreshContradictions, scanContradictions, resolveContradiction, quickMerge,
       isGlobal, toggleCardGlobal, toggleMasterGlobal, masterGlobal, bulkBusy,
+      confirmDialog, showConfirm, hideConfirm,
     };
   },
   template: /* html */ `
@@ -564,6 +582,19 @@ export const Wiki = defineComponent({
                 :page-id="editing"
                 @save="saveEdit"
                 @cancel="editing = null" />
+
+    <!-- Inline confirmation modal — replaces the legacy browser confirm() so
+         destructive actions stay inside the app shell. -->
+    <div v-if="confirmDialog" class="modal-backdrop" @click.self="hideConfirm">
+      <div class="modal" style="max-width:360px">
+        <header class="modal-head"><h3>{{ confirmDialog.title }}</h3></header>
+        <div class="modal-body">{{ confirmDialog.message }}</div>
+        <footer class="modal-foot">
+          <button class="btn ghost" @click="hideConfirm">{{ t('action.cancel') }}</button>
+          <button class="btn primary" @click="() => { confirmDialog.onConfirm(); hideConfirm(); }">{{ t('action.confirm') }}</button>
+        </footer>
+      </div>
+    </div>
   </div>
 </div>
   `,

@@ -5,7 +5,7 @@
  * a plain reactive() object is easier to maintain than a state library.
  * Components import { store, persistPrefs } and read / mutate.
  */
-import { reactive, watch, computed } from 'https://unpkg.com/vue@3.4.38/dist/vue.esm-browser.prod.js';
+import { reactive, watch, computed } from './lib/vue.esm-browser.prod.js';
 
 const STORE_KEY = 'loop_memory_prefs_v1';
 
@@ -220,6 +220,31 @@ export function escapeHtml(s) {
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+// ---- HTML sanitizer for v-html (XSS protection) ----
+// Minimal allowlist sanitizer — only permits safe Markdown-rendered tags.
+// Strips all event handlers, javascript: URLs, and dangerous attributes.
+const _SANITIZE_RE = /<(\/?)(script|style|iframe|object|embed|form|input|button|select|textarea|a\s+[^>]*href\s*=\s*["']?javascript:[^>]*|svg\s+[^>]*>|math\s+[^>]*>)|(\s+on\w+\s*=|javascript:)|(<\/?[a-z][^>]*\s+[^>]*>)/gi;
+
+export function sanitizeHtml(dirty) {
+  if (dirty == null) return '';
+  let s = String(dirty);
+  // Step 1: Remove script, style, iframe, object, embed, form tags entirely
+  s = s.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
+  s = s.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
+  s = s.replace(/<iframe[^>]*>[\s\S]*?<\/iframe>/gi, '');
+  s = s.replace(/<object[^>]*>[\s\S]*?<\/object>/gi, '');
+  s = s.replace(/<embed[^>]*>/gi, '');
+  s = s.replace(/<form[^>]*>[\s\S]*?<\/form>/gi, '');
+  // Step 2: Remove on* event handlers and javascript: URLs from tags
+  s = s.replace(/\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*)/gi, '');
+  s = s.replace(/href\s*=\s*["']?\s*javascript:[^"'\s>]+/gi, 'href="#"');
+  // Step 3: Remove svg/math elements with event handlers (common XSS vector)
+  s = s.replace(/<(svg|math)[^>]*>[\s\S]*?<\/\1>/gi, '');
+  // Step 4: Remove data: URLs except for safe image types
+  s = s.replace(/src\s*=\s*["']?\s*data:(?!image\/(png|jpeg|jpg|gif|webp)):[^"'\s>]+/gi, 'src="#"');
+  return s;
+}
+
 export function timeAgo(ts) {
   if (!ts) return '—';
   const d = Date.now() / 1000 - Number(ts);
@@ -234,4 +259,30 @@ export function fmtTime(ts) {
   if (!ts) return '—';
   const d = new Date(Number(ts) * 1000);
   return d.toLocaleString();
+}
+
+// ---- shared numeric / string formatting helpers ----
+// Moved here from Dashboard.js so both Dashboard and Timeline (and any
+// future component) can share one implementation.
+export function fmtNum(v) { return Number(v || 0).toLocaleString(); }
+
+export function truncate(s, n = 28) {
+  if (!s) return '';
+  return s.length > n ? s.slice(0, n - 1) + '…' : s;
+}
+
+export function shortenPath(s, max = 22) {
+  if (!s) return '';
+  return s.length > max ? '…' + s.slice(-(max - 1)) : s;
+}
+
+// Format a duration in seconds as "Nd Nh" / "Nh Nm" / "Nm".
+export function fmtDuration(sec) {
+  sec = Math.max(0, Math.floor(sec || 0));
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor((sec % 86400) / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
 }

@@ -23,7 +23,7 @@
  *     connected edges (top 20 by weight) and evidence memories.
  *   - Bottom legend strip (Wiki/Tag/Concept/Acronym colored dots).
  */
-import { defineComponent, ref, onMounted, onUnmounted, watch, nextTick, computed } from 'https://unpkg.com/vue@3.4.38/dist/vue.esm-browser.prod.js';
+import { defineComponent, ref, onMounted, onUnmounted, watch, nextTick, computed } from '../lib/vue.esm-browser.prod.js';
 import { store, t, toast } from '../store.js';
 import { api } from '../api.js';
 
