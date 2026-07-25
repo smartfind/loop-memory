@@ -37,6 +37,14 @@ class ServeAppSmokeTests(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.json(), [])
 
+    def test_csp_allows_self_hosted_vue_template_compiler(self) -> None:
+        r = self.client.get("/")
+        self.assertEqual(r.status_code, 200)
+        csp = r.headers["content-security-policy"]
+        self.assertIn("script-src 'self' 'unsafe-eval'", csp)
+        self.assertNotIn("unpkg.com", csp)
+        self.assertNotIn("'unsafe-inline'", csp.split("style-src", 1)[0])
+
     def test_admin_rescore_returns_updated(self) -> None:
         r = self.client.post("/api/admin/rescore")
         self.assertEqual(r.status_code, 200)

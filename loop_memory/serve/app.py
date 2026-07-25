@@ -106,10 +106,10 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
-        # CSP: restrict script sources, disable inline JS eval
+        # CSP: scripts are self-hosted; Vue's browser compiler requires unsafe-eval.
         csp = (
             "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline' https://unpkg.com; "
+            "script-src 'self' 'unsafe-eval'; "
             "style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data: https:; "
             "connect-src 'self'; "
