@@ -4,8 +4,13 @@
  * The active tab lives in `store.activeTab` so other components can react
  * to it. URL `?tab=` is read on app boot and written back when the user
  * switches, so a deep-link to a specific view round-trips.
+ *
+ * Each tab is rendered as a real <button role="tab"> (instead of a plain
+ * <div>) so screen readers, keyboard focus, and the native Enter/Space
+ * activation all work without any extra JS. The container carries
+ * role="tablist" so the group is announced as a tab list.
  */
-import { defineComponent, computed, watch } from 'https://unpkg.com/vue@3.4.38/dist/vue.esm-browser.prod.js';
+import { defineComponent, computed, watch } from '../lib/vue.esm-browser.prod.js';
 import { store, t } from '../store.js';
 
 export const Tabs = defineComponent({
@@ -28,14 +33,17 @@ export const Tabs = defineComponent({
     return { tabs, store, setTab };
   },
   template: /* html */ `
-<nav class="tabs">
-  <div v-for="tb in tabs" :key="tb.id"
-       class="tab" :class="{ active: store.activeTab === tb.id }"
-       :data-tab="tb.id"
-       @click="setTab(tb.id)">
+<nav class="tabs" role="tablist">
+  <button v-for="tb in tabs" :key="tb.id"
+          type="button"
+          class="tab" :class="{ active: store.activeTab === tb.id }"
+          :data-tab="tb.id"
+          role="tab"
+          :aria-selected="store.activeTab === tb.id"
+          @click="setTab(tb.id)">
     <span>{{ tb.label }}</span>
     <span class="badge" v-if="tb.badge">{{ tb.badge }}</span>
-  </div>
+  </button>
 </nav>
   `,
 });

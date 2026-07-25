@@ -22,12 +22,20 @@ function buildUrl(path, params) {
   return url;
 }
 
+// Auth token for protected endpoints (set by Settings after login)
+let _authToken = localStorage.getItem('loop_auth_token') || null;
+export function setAuthToken(t) { _authToken = t; if (t) localStorage.setItem('loop_auth_token', t); else localStorage.removeItem('loop_auth_token'); }
+export function getAuthToken() { return _authToken; }
+// Re-export for use by store.js / Settings.js
+export { setAuthToken, getAuthToken };
+
 export async function fetchJSON(path, opts = {}) {
   const { method = 'GET', params, body, headers = {}, timeoutMs = 30000, cache } = opts;
   const url = buildUrl(path, params);
   const ctrl = new AbortController();
   const tid = setTimeout(() => ctrl.abort(), timeoutMs);
   const finalHeaders = { 'Accept': 'application/json', ...headers };
+  if (_authToken) finalHeaders['Authorization'] = 'Bearer ' + _authToken;
   if (body !== undefined && !(body instanceof FormData)) {
     finalHeaders['Content-Type'] = 'application/json';
   }
@@ -175,4 +183,9 @@ export const api = {
   // Graph entity memories (memories that mention this entity).
   graphEntityMemories: (name, limit = 10) =>
     fetchJSON(`/api/graph/entity/${encodeURIComponent(name)}/memories`, { params: { limit } }),
+
+  // Auth token management
+  authTokenStatus:  () => fetchJSON('/api/admin/auth/token'),
+  authTokenCreate:  () => fetchJSON('/api/admin/auth/token', { method: 'POST' }),
+  authTokenDelete:  () => fetchJSON('/api/admin/auth/token', { method: 'DELETE' }),
 };

@@ -1577,34 +1577,54 @@
   }
   /* Redaction section — toggles, kind list, preview pane. The
      "live" chip mirrors the ingest-hint chip styling so both
-     sections feel consistent. */
-  .sec-redact .row-toggle {
+     sections feel consistent. Toggle sits on the RIGHT, label
+     and description on the LEFT — descriptions appear BELOW
+     the label, never above it. */
+  .sec-redact .row-toggle,
+  .sec-storage .row-toggle,
+  .sec-behaviour .row-toggle {
     display: flex;
     align-items: flex-start;
-    gap: 10px;
-    padding: 8px 10px;
+    gap: 12px;
+    padding: 10px 12px;
     margin: 6px 0;
     border: 1px solid var(--border);
     border-radius: 8px;
     cursor: pointer;
     background: var(--surface-2);
   }
-  .sec-redact .row-toggle input[type="checkbox"] {
+  .sec-redact .row-toggle > span,
+  .sec-storage .row-toggle > span,
+  .sec-behaviour .row-toggle > span {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: block;
+  }
+  .sec-redact .row-toggle input[type="checkbox"],
+  .sec-storage .row-toggle input[type="checkbox"],
+  .sec-behaviour .row-toggle input[type="checkbox"] {
+    margin-left: auto;
+    flex: 0 0 auto;
     margin-top: 2px;
     transform: scale(1.05);
     cursor: pointer;
   }
-  .sec-redact .row-toggle strong {
+  .sec-redact .row-toggle strong,
+  .sec-storage .row-toggle strong,
+  .sec-behaviour .row-toggle strong {
     display: block;
     font-size: 12.5px;
     color: var(--text);
+    font-weight: 600;
   }
-  .sec-redact .row-toggle small {
+  .sec-redact .row-toggle small,
+  .sec-storage .row-toggle small,
+  .sec-behaviour .row-toggle small {
     display: block;
-    font-size: 11px;
+    font-size: 11.5px;
     color: var(--text-faint);
-    margin-top: 2px;
-    line-height: 1.4;
+    margin-top: 3px;
+    line-height: 1.45;
   }
   .redact-kinds {
     margin: 6px 0 10px;
@@ -1962,23 +1982,6 @@
     grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 12px;
   }
-  .kpi-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 14px 16px;
-    display: flex; flex-direction: column; gap: 4px;
-    position: relative; overflow: hidden;
-    transition: transform .15s ease, border-color .15s ease;
-  }
-  .kpi-card:hover { border-color: var(--accent-soft); transform: translateY(-1px); }
-  .kpi-label { font-size: 11px; text-transform: uppercase; letter-spacing: 1.1px; color: var(--text-mute); font-weight: 600; }
-  .kpi-val   { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--text); line-height: 1.1; }
-  .kpi-sub   { font-size: 11px; color: var(--text-faint); }
-  .kpi-card::after {
-    content: ""; position: absolute; left: 0; top: 0; bottom: 0;
-    width: 3px; background: var(--accent); opacity: 0.35;
-  }
 
   .flow-card {
     background: var(--surface);
@@ -2314,30 +2317,6 @@
 /* Cleaner stats pills (no separator line, just spacing). */
 .stats-pill-sep { display: none; }
 .stats-pill { padding: 4px 8px; }
-
-/* KPI cards: gradient top accent + subtle inner shadow + visible sparkline. */
-.kpi-card {
-  position: relative;
-  background: linear-gradient(180deg, var(--surface) 0%, color-mix(in srgb, var(--surface) 92%, var(--accent-soft)) 100%);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 14px 16px 12px;
-  box-shadow: 0 1px 0 rgba(255,255,255,.04) inset, 0 4px 14px rgba(0,0,0,.04);
-  transition: transform .15s ease, box-shadow .15s ease;
-}
-.kpi-card::before {
-  content: ""; position: absolute; left: 14px; right: 14px; top: 0;
-  height: 3px; border-radius: 0 0 4px 4px;
-  background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 50%, transparent));
-  opacity: .8;
-}
-.kpi-card:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0,0,0,.07); }
-.kpi-label { font-size: 10px; letter-spacing: .04em; text-transform: uppercase; color: var(--text-mute); font-weight: 600; }
-.kpi-val   { font-size: 30px; font-weight: 700; line-height: 1.05; margin-top: 6px; color: var(--text); }
-.kpi-sub   { font-size: 11px; color: var(--text-mute); margin-top: 4px; }
-.kpi-spark { display: block; width: 100%; height: 28px; margin-top: 6px; }
-.kpi-spark path { stroke: var(--accent); stroke-width: 1.6; fill: none; stroke-linejoin: round; stroke-linecap: round; }
-.kpi-spark .fill { fill: color-mix(in srgb, var(--accent) 14%, transparent); stroke: none; }
 
 /* Memory data flow: clean horizontal pipeline with curved connectors. */
 .flow-card {
@@ -3808,22 +3787,6 @@
 .wiki-toolbar select[title] { min-width: 110px; }
 
   /* Storage budget section — toggle row + last-compact chip. */
-  .sec-storage .row-toggle {
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
-    padding: 8px 10px;
-    margin: 6px 0;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    cursor: pointer;
-    background: var(--surface-2);
-  }
-  .sec-storage .row-toggle input[type="checkbox"] {
-    margin-top: 2px;
-    transform: scale(1.05);
-    cursor: pointer;
-  }
   .sec-storage .storage-meter {
     display: flex;
     flex-direction: column;
@@ -3840,6 +3803,35 @@
   .sec-storage .storage-meter strong {
     font-size: 12.5px;
     color: var(--text);
+  }
+
+  /* Settings-subsection — visual grouping used by Storage /
+     Redaction / Behaviour to cluster related knobs beneath a
+     small sub-heading. Has a thin top divider so the boundary
+     reads even with dense backgrounds. */
+  .settings-subsection {
+    margin: 12px 0 8px;
+    padding: 10px 12px 4px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface);
+  }
+  .settings-subsection + .settings-subsection {
+    margin-top: 14px;
+  }
+  .settings-subsection-head {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-faint);
+    margin: 0 0 8px;
+  }
+  .sec-storage .storage-cadence-grid,
+  .sec-behaviour .behaviour-switches {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
   }
 
   /* Contradictions panel — surfaced above the wiki grid when there
@@ -3906,3 +3898,13 @@
     padding: 4px 10px;
     font-size: 11.5px;
   }
+
+/* Respect user's motion reduction preference */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -15,9 +15,11 @@
  *   icons inside each node, and a file-anchor strip below.
  * - WriteGuard header shows uptime (time since first audit record).
  */
-import { defineComponent, ref, computed, onMounted, onUnmounted } from 'https://unpkg.com/vue@3.4.38/dist/vue.esm-browser.prod.js';
-import { store, t, timeAgo, toast, escapeHtml, callAction } from '../store.js';
+import { defineComponent, ref, computed, onMounted, onUnmounted } from '../lib/vue.esm-browser.prod.js';
+import { store, t, timeAgo, toast, escapeHtml, sanitizeHtml, callAction, fmtNum, truncate, shortenPath, fmtDuration } from '../store.js';
 import { api } from '../api.js';
+import { RingMeter } from './RingMeter.js';
+import { SectionTitle } from './SectionTitle.js';
 
 const SVGNS = 'http://www.w3.org/2000/svg';
 const KIND_TONE = {
@@ -86,30 +88,13 @@ const ARCH = (() => {
   return { W, H, cx, cy, R, positions, arcs, spokes, anchors };
 })();
 
-function fmtNum(v) { return Number(v || 0).toLocaleString(); }
-function truncate(s, n = 28) {
-  if (!s) return '';
-  return s.length > n ? s.slice(0, n - 1) + '…' : s;
-}
+// fmtNum, truncate, shortenPath, fmtDuration now live in store.js (shared
+// with Timeline). Only safeArr stays local — it's a Dashboard-only guard.
 function safeArr(x) { return Array.isArray(x) ? x : []; }
-function shortenPath(s, max = 22) {
-  if (!s) return '';
-  return s.length > max ? '…' + s.slice(-(max - 1)) : s;
-}
-
-// Format a duration in seconds as "Nd Nh" / "Nh Nm" / "Nm Ns".
-function fmtDuration(sec) {
-  sec = Math.max(0, Math.floor(sec || 0));
-  const d = Math.floor(sec / 86400);
-  const h = Math.floor((sec % 86400) / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  if (d > 0) return `${d}d ${h}h`;
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
-}
 
 export const Dashboard = defineComponent({
   name: 'Dashboard',
+  components: { RingMeter, SectionTitle },
   setup() {
     const insights = ref(null);
     const weeklyReport = ref(null);
@@ -384,7 +369,8 @@ export const Dashboard = defineComponent({
       if (!weeklyReport.value) return '';
       const think = renderWeeklyThinking(weeklyReport.value.thinking);
       const body = renderWeeklyMarkdown(weeklyReport.value.markdown);
-      return think + body;
+      // Sanitize before v-html to prevent XSS
+      return sanitizeHtml(think + body);
     });
 
     onMounted(() => {
@@ -396,12 +382,6 @@ export const Dashboard = defineComponent({
       loadWeekly(weeklyDays.value);
     });
     onUnmounted(() => { if (pollHandle) clearInterval(pollHandle); });
-
-    function ring(pct) {
-      const v = Math.max(0, Math.min(1, (pct || 0) / 100));
-      const r = 22, c = 2 * Math.PI * r;
-      return { dash: c, offset: c * (1 - v) };
-    }
 
     function donutArcPaths(rows) {
       const items = safeArr(rows);
@@ -630,6 +610,16 @@ export const Dashboard = defineComponent({
       });
     }
 
+    // Memoized derived views. These were previously plain functions invoked
+    // directly in the template (trendPoints 3x, donutArcPaths 2x with two
+    // different inputs, lifecycleSegments 2x per render). Wrapping them in
+    // computed caches the geometry between the 6s polls so we don't rebuild
+    // SVG paths on every unrelated re-render.
+    const trendPointsData = computed(() => trendPoints(insights.value?.distribution?.trend));
+    const donutArcPathsTypes = computed(() => donutArcPaths(insights.value?.distribution?.types));
+    const donutArcPathsSources = computed(() => donutArcPaths(insights.value?.sources));
+    const lifecycleSegmentsData = computed(() => lifecycleSegments(insights.value?.stages));
+
     // Uptime derived from the oldest LLM audit record (matches the
     // legacy behaviour of "server has been recording for N").
     const guardUptime = computed(() => {
@@ -720,9 +710,10 @@ export const Dashboard = defineComponent({
       KIND_TONE, STATUS_TONE, SOURCE_COLORS, STAGE_DEFS, SVGNS, ARCH,
       fmtNum, truncate, timeAgo, sparkPath, fmtDuration, shortenPath,
       guardUptime, hist, sourceIcon,
-      ring, donutArcPaths, trendPoints, ingestBars, ingestPeakHour, barsFor,
+      ingestBars, ingestPeakHour, barsFor,
       scoreDistributionTotal, peakScoreRange, scoreBars,
-      sourceBars, pipelineBars, lifecycleSegments,
+      sourceBars, pipelineBars,
+      trendPointsData, donutArcPathsTypes, donutArcPathsSources, lifecycleSegmentsData,
       onRefresh: refresh,
       onRunEvolution: () => callAction('llmRun'),
     };
@@ -757,12 +748,8 @@ export const Dashboard = defineComponent({
 
     <!-- 1. KPI tiles (11) + ring meters -->
     <div class="ins-section" v-if="insights">
-      <div class="ins-section-title">
-        <span class="ico">📊</span>
-        <span>{{ t('dash.ins.statsTitle') }}</span>
-        <span class="bar"></span>
-        <span class="right">{{ fmtNum(insights.overview && insights.overview.total) }} {{ t('dash.kpi.totalLabel') }}</span>
-      </div>
+      <SectionTitle ico="📊" :title="t('dash.ins.statsTitle')"
+        :right="fmtNum(insights.overview && insights.overview.total) + ' ' + t('dash.kpi.totalLabel')" />
 
       <div class="ins-kpi-11">
         <div class="ins-kpi-primary">
@@ -831,61 +818,27 @@ export const Dashboard = defineComponent({
       </div>
 
       <div class="ins-rings">
-        <div class="ins-ring-card">
-          <svg class="irc-svg" viewBox="0 0 64 64">
-            <circle cx="32" cy="32" r="22" class="ins-ring-track"></circle>
-            <circle cx="32" cy="32" r="22" class="ins-ring-arc green"
-              :stroke-dasharray="ring(insights.overview && insights.overview.occupation).dash"
-              :stroke-dashoffset="ring(insights.overview && insights.overview.occupation).offset"></circle>
-            <text x="32" y="34" class="ins-ring-text">{{ ((insights.overview && insights.overview.occupation) || 0).toFixed(0) }}%</text>
-          </svg>
-          <div class="irc-info">
-            <div class="irc-label"><span class="ico">💎</span>{{ t('dash.ring.occ') }}</div>
-            <div class="irc-val">{{ ((insights.overview && insights.overview.occupation) || 0).toFixed(0) }}%</div>
-            <div class="irc-sub">{{ t('dash.ring.occSub') }}</div>
-          </div>
-        </div>
-        <div class="ins-ring-card">
-          <svg class="irc-svg" viewBox="0 0 64 64">
-            <circle cx="32" cy="32" r="22" class="ins-ring-track"></circle>
-            <circle cx="32" cy="32" r="22" class="ins-ring-arc blue"
-              :stroke-dasharray="ring(insights.overview && insights.overview.citation).dash"
-              :stroke-dashoffset="ring(insights.overview && insights.overview.citation).offset"></circle>
-            <text x="32" y="34" class="ins-ring-text">{{ ((insights.overview && insights.overview.citation) || 0).toFixed(0) }}%</text>
-          </svg>
-          <div class="irc-info">
-            <div class="irc-label"><span class="ico">🔗</span>{{ t('dash.ring.cite') }}</div>
-            <div class="irc-val">{{ ((insights.overview && insights.overview.citation) || 0).toFixed(0) }}%</div>
-            <div class="irc-sub">{{ t('dash.ring.citeSub') }}</div>
-          </div>
-        </div>
-        <div class="ins-ring-card">
-          <svg class="irc-svg" viewBox="0 0 64 64">
-            <circle cx="32" cy="32" r="22" class="ins-ring-track"></circle>
-            <circle cx="32" cy="32" r="22" class="ins-ring-arc rose"
-              :stroke-dasharray="ring(insights.overview && insights.overview.decay).dash"
-              :stroke-dashoffset="ring(insights.overview && insights.overview.decay).offset"></circle>
-            <text x="32" y="34" class="ins-ring-text">{{ ((insights.overview && insights.overview.decay) || 0).toFixed(0) }}%</text>
-          </svg>
-          <div class="irc-info">
-            <div class="irc-label"><span class="ico">📉</span>{{ t('dash.ring.decay') }}</div>
-            <div class="irc-val">{{ ((insights.overview && insights.overview.decay) || 0).toFixed(0) }}%</div>
-            <div class="irc-sub">{{ t('dash.ring.decaySub') }}</div>
-          </div>
-        </div>
+        <RingMeter :label="t('dash.ring.occ')"
+          :value="(insights.overview && insights.overview.occupation) || 0"
+          color="#10b981" icon="💎"
+          :sub="t('dash.ring.occSub')" />
+        <RingMeter :label="t('dash.ring.cite')"
+          :value="(insights.overview && insights.overview.citation) || 0"
+          color="#3b82f6" icon="🔗"
+          :sub="t('dash.ring.citeSub')" />
+        <RingMeter :label="t('dash.ring.decay')"
+          :value="(insights.overview && insights.overview.decay) || 0"
+          color="#f43f5e" icon="📉"
+          :sub="t('dash.ring.decaySub')" />
       </div>
     </div>
 
     <!-- 2. Lifecycle -->
     <div class="ins-section" v-if="insights">
-      <div class="ins-section-title">
-        <span class="ico">🔁</span>
-        <span>{{ t('dash.lc.title') }}</span>
-        <span class="bar"></span>
-        <span class="right">{{ t('dash.lc.totalLabel') }} {{ fmtNum(Object.values(insights.stages || {}).reduce((a,b)=>a+(b||0),0)) }}</span>
-      </div>
+      <SectionTitle ico="🔁" :title="t('dash.lc.title')"
+        :right="t('dash.lc.totalLabel') + ' ' + fmtNum(Object.values(insights.stages || {}).reduce((a,b)=>a+(b||0),0))" />
       <div class="ins-lifecycle">
-        <div v-for="(seg, index) in lifecycleSegments(insights.stages)" :key="seg.key"
+        <div v-for="(seg, index) in lifecycleSegmentsData" :key="seg.key"
              class="ins-lc-stage" :class="{ active: seg.count > 0 }" :data-tone="seg.tone">
           <div class="ins-lc-icon" :data-tone="seg.tone">{{ seg.icon }}</div>
           <div class="ins-lc-val">{{ fmtNum(seg.count) }}</div>
@@ -895,7 +848,7 @@ export const Dashboard = defineComponent({
                class="ins-lc-flow"
                :style="{
                  '--from-tone': seg.toneColor,
-                 '--to-tone': lifecycleSegments(insights.stages)[index + 1].toneColor
+                 '--to-tone': lifecycleSegmentsData[index + 1].toneColor
                }"
                aria-hidden="true">
             <span class="ins-lc-ball p1"></span>
@@ -908,12 +861,7 @@ export const Dashboard = defineComponent({
 
     <!-- 3. Self-improvement Pulse -->
     <div class="ins-section" v-if="insights && insights.pulse">
-      <div class="ins-section-title">
-        <span class="ico">🧬</span>
-        <span>{{ t('dash.pulse.title') }}</span>
-        <span class="bar"></span>
-        <span class="right">{{ t('dash.pulse.sub') }}</span>
-      </div>
+      <SectionTitle ico="🧬" :title="t('dash.pulse.title')" :right="t('dash.pulse.sub')" />
       <div class="ins-pulse">
         <div class="ins-pulse-card">
           <div class="ins-pulse-head">
@@ -976,12 +924,7 @@ export const Dashboard = defineComponent({
 
     <!-- 4. Compression + Granularity -->
     <div class="ins-section" v-if="insights">
-      <div class="ins-section-title">
-        <span class="ico">🗜</span>
-        <span>{{ t('dash.cmp.title') }}</span>
-        <span class="bar"></span>
-        <span class="right">{{ t('dash.cmp.sub') }}</span>
-      </div>
+      <SectionTitle ico="🗜" :title="t('dash.cmp.title')" :right="t('dash.cmp.sub')" />
       <div class="ins-grid-2">
         <div class="ins-compression">
           <div class="ins-pulse-title" style="margin-bottom:8px;"><span class="label-icon">🗜</span>{{ t('dash.cmp.memComp') }}</div>
@@ -1061,19 +1004,14 @@ export const Dashboard = defineComponent({
 
     <!-- 5. Distribution -->
     <div class="ins-section" v-if="insights && insights.distribution">
-      <div class="ins-section-title">
-        <span class="ico">📈</span>
-        <span>{{ t('dash.dist.title') }}</span>
-        <span class="bar"></span>
-        <span class="right">{{ t('dash.dist.sub') }}</span>
-      </div>
+      <SectionTitle ico="📈" :title="t('dash.dist.title')" :right="t('dash.dist.sub')" />
       <div class="ins-distrib">
         <div class="ins-dist-card">
           <div class="ins-dist-title">📊 {{ t('common.types') }}</div>
           <svg class="ins-donut-svg" viewBox="0 0 130 130">
             <g transform="rotate(-90 65 65)">
               <circle cx="65" cy="65" r="46" fill="none" stroke="var(--surface-2)" stroke-width="14"></circle>
-              <circle v-for="(a, i) in donutArcPaths(insights.distribution.types)" :key="i"
+              <circle v-for="(a, i) in donutArcPathsTypes" :key="i"
                 cx="65" cy="65" r="46" fill="none"
                 :stroke="a.color" stroke-width="14"
                 :stroke-dasharray="a.dasharray" :stroke-dashoffset="a.dashoffset"></circle>
@@ -1115,11 +1053,11 @@ export const Dashboard = defineComponent({
               </linearGradient>
             </defs>
             <line x1="0" y1="132" x2="300" y2="132" class="ins-trend-axis" />
-            <path :d="trendPoints(insights.distribution.trend).area" fill="url(#dist-trend-grad)"></path>
-            <path :d="trendPoints(insights.distribution.trend).line" class="ins-trend-line" fill="none" stroke="var(--accent)" stroke-width="2"></path>
-            <g v-for="(t, i) in trendPoints(insights.distribution.trend).ticks" :key="i">
-              <circle :cx="t.x" :cy="132 - (t.value / Math.max(1, trendPoints(insights.distribution.trend).max)) * 122" r="2.4" fill="var(--accent)"></circle>
-              <text :x="t.x" :y="trendPoints(insights.distribution.trend).labelY" text-anchor="middle" font-size="9" fill="var(--text-faint)">{{ t.label }}</text>
+            <path :d="trendPointsData.area" fill="url(#dist-trend-grad)"></path>
+            <path :d="trendPointsData.line" class="ins-trend-line" fill="none" stroke="var(--accent)" stroke-width="2"></path>
+            <g v-for="(t, i) in trendPointsData.ticks" :key="i">
+              <circle :cx="t.x" :cy="132 - (t.value / Math.max(1, trendPointsData.max)) * 122" r="2.4" fill="var(--accent)"></circle>
+              <text :x="t.x" :y="trendPointsData.labelY" text-anchor="middle" font-size="9" fill="var(--text-faint)">{{ t.label }}</text>
             </g>
           </svg>
         </div>
@@ -1128,12 +1066,7 @@ export const Dashboard = defineComponent({
 
     <!-- 6. Sources + Wiki + Ingest -->
     <div class="ins-section" v-if="insights">
-      <div class="ins-section-title">
-        <span class="ico">📡</span>
-        <span>{{ t('dash.src.title') }}</span>
-        <span class="bar"></span>
-        <span class="right">{{ t('dash.src.sub') }}</span>
-      </div>
+      <SectionTitle ico="📡" :title="t('dash.src.title')" :right="t('dash.src.sub')" />
       <div class="ins-sources-row">
         <div class="ins-src-card">
           <div class="ins-src-title">📡 {{ t('dash.src.bySource') }}</div>
@@ -1141,7 +1074,7 @@ export const Dashboard = defineComponent({
             <svg class="ins-src-donut" viewBox="0 0 130 130">
               <g transform="rotate(-90 65 65)">
                 <circle cx="65" cy="65" r="46" fill="none" stroke="var(--surface-2)" stroke-width="14"></circle>
-                <circle v-for="(a, i) in donutArcPaths(insights.sources)" :key="i"
+                <circle v-for="(a, i) in donutArcPathsSources" :key="i"
                   cx="65" cy="65" r="46" fill="none"
                   :stroke="a.color" stroke-width="14"
                   :stroke-dasharray="a.dasharray" :stroke-dashoffset="a.dashoffset"></circle>
@@ -1203,12 +1136,7 @@ export const Dashboard = defineComponent({
 
     <!-- 7. Pipeline latency -->
     <div class="ins-section" v-if="insights && (insights.pipeline || []).length">
-      <div class="ins-section-title">
-        <span class="ico">⏱️</span>
-        <span>{{ t('dash.pipe.title') }}</span>
-        <span class="bar"></span>
-        <span class="right">{{ t('dash.pipe.sub') }}</span>
-      </div>
+      <SectionTitle ico="⏱️" :title="t('dash.pipe.title')" :right="t('dash.pipe.sub')" />
       <div class="ins-pipe">
         <div v-for="row in pipelineBars(insights.pipeline)" :key="row.stage" class="ins-pipe-row">
           <div class="ins-pipe-name"><span class="ico">📦</span>{{ t('dash.pipe.stage.' + row.stage, row.stage) }}</div>
@@ -1221,12 +1149,7 @@ export const Dashboard = defineComponent({
 
     <!-- 8. Health + Weekly -->
     <div class="ins-section" v-if="insights">
-      <div class="ins-section-title">
-        <span class="ico">🩺</span>
-        <span>{{ t('dash.health.title') }}</span>
-        <span class="bar"></span>
-        <span class="right">{{ t('dash.health.sub') }}</span>
-      </div>
+      <SectionTitle ico="🩺" :title="t('dash.health.title')" :right="t('dash.health.sub')" />
       <div class="ins-health-row">
         <div class="ins-health-card ins-health-card--rich">
           <div class="ins-health-title">
@@ -1326,12 +1249,7 @@ export const Dashboard = defineComponent({
 
     <!-- 9. LLM Audit + WriteGuard -->
     <div class="ins-section" v-if="insights">
-      <div class="ins-section-title">
-        <span class="ico">🔬</span>
-        <span>{{ t('dash.audit.title') }}</span>
-        <span class="bar"></span>
-        <span class="right">{{ t('dash.audit.sub') }}</span>
-      </div>
+      <SectionTitle ico="🔬" :title="t('dash.audit.title')" :right="t('dash.audit.sub')" />
       <div class="ins-audit-row">
         <div class="ins-audit-card">
           <div class="ins-audit-title"><span>🤖 {{ t('dash.audit.llm') }}</span></div>
@@ -1368,12 +1286,7 @@ export const Dashboard = defineComponent({
 
     <!-- 10. Architecture loop diagram -->
     <div class="ins-section">
-      <div class="ins-section-title">
-        <span class="ico">🏗</span>
-        <span>{{ t('dash.arch.title') }}</span>
-        <span class="bar"></span>
-        <span class="right">{{ t('dash.arch.sub') }}</span>
-      </div>
+      <SectionTitle ico="🏗" :title="t('dash.arch.title')" :right="t('dash.arch.sub')" />
       <div class="ins-arch-wrap">
         <svg class="ins-arch-svg" viewBox="0 0 1200 660" preserveAspectRatio="xMidYMid meet">
           <defs>

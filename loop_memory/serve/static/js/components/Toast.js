@@ -1,7 +1,7 @@
 /**
  * Toast — bottom-center transient notification.
  */
-import { defineComponent, computed } from 'https://unpkg.com/vue@3.4.38/dist/vue.esm-browser.prod.js';
+import { defineComponent, computed } from '../lib/vue.esm-browser.prod.js';
 import { store } from '../store.js';
 
 export const Toast = defineComponent({
