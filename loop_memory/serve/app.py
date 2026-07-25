@@ -98,6 +98,23 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
     _CACHE_REVALIDATE = {'json', 'html', 'js', 'css'}
     _EXT_RE = _re.compile(r"\.([a-z0-9]+)(\?|$)", _re.IGNORECASE)
 
+    # The server is local-only (127.0.0.1). We mount an explicit
+    # CORS policy that denies all cross-origin browser callers, even
+    # though the default browser policy already does so. The intent is
+    # to make the policy obvious in code review and to avoid accidental
+    # enablement via a future PR. Token-bearing requests must be
+    # same-origin; non-browser clients (curl, the watchdog) are not
+    # affected because they don't enforce CORS.
+    from fastapi.middleware.cors import CORSMiddleware as _CORS
+    app.add_middleware(
+        _CORS,
+        allow_origins=[],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+        allow_headers=["Authorization", "Content-Type"],
+        allow_credentials=False,
+        max_age=600,
+    )
+
     @app.middleware("http")
     async def _security_headers(request, call_next):
         response = await call_next(request)
@@ -111,10 +128,12 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
             "default-src 'self'; "
             "script-src 'self' 'unsafe-eval'; "
             "style-src 'self' 'unsafe-inline'; "
-            "img-src 'self' data: https:; "
+            "img-src 'self' data:; "
             "connect-src 'self'; "
             "font-src 'self'; "
-            "frame-ancestors 'none';"
+            "frame-ancestors 'none'; "
+            "object-src 'none'; "
+            "base-uri 'self';"
         )
         response.headers["Content-Security-Policy"] = csp
         return response
@@ -162,14 +181,29 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
             import secrets as _secrets
             if not _secrets.compare_digest(token, expected):
                 return _J({"error": "Invalid token"}, status_code=401)
-        # CSRF check for state-changing requests
+        # CSRF check for state-changing requests. A real browser
+        # always sends an ``Origin`` header on POST/PUT/DELETE/PATCH,
+        # and ``Sec-Fetch-Site`` is set to ``same-origin`` (or
+        # ``none`` for file:// or some same-origin fetches). A request
+        # with **no** Origin is therefore either a non-browser client
+        # (curl, the watchdog) or a malicious same-network caller.
+        # We only enforce CSRF for browser-like requests; non-browser
+        # callers can still use the local API, but they must opt in
+        # by sending the bearer token.
         if request.method in ("POST", "PUT", "DELETE", "PATCH"):
             origin = request.headers.get("Origin", "")
             host = request.headers.get("Host", "")
-            # Allow if origin matches host (same-origin), or if no origin header
-            if origin and origin != f"http://{host}" and origin != f"https://{host}":
+            if origin:
+                if origin not in (f"http://{host}", f"https://{host}"):
+                    from fastapi.responses import JSONResponse as _J
+                    return _J({"error": "Cross-origin request not allowed"}, status_code=403)
+            elif request.headers.get("Sec-Fetch-Site") not in (None, "same-origin", "none"):
+                # Browser claims a cross-site context without sending Origin — reject.
                 from fastapi.responses import JSONResponse as _J
-                return _J({"error": "Cross-origin request not allowed"}, status_code=403)
+                return _J({"error": "Missing Origin header"}, status_code=403)
+            response = await call_next(request)
+            response.headers.setdefault("Vary", "Origin")
+            return response
         return await call_next(request)
 
     @app.middleware("http")
@@ -2538,7 +2572,7 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
                 raw = get_secret(account) or ""
                 if raw:
                     tail = raw[-4:] if len(raw) >= 4 else raw
-                    h = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:6]
+                    h = hashlib.sha1(raw.encode("utf-8"), usedforsecurity=False).hexdigest()[:6]
                     cfg["api_key_fingerprint"] = f"{tail}·{h}"
                 # Use the secret file mtime as a sane fallback so the chip
                 # shows a real timestamp instead of "—".
@@ -2587,7 +2621,7 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
                 # Never store the key itself.
                 import hashlib
                 tail = raw_key[-4:] if len(raw_key) >= 4 else raw_key
-                h = hashlib.sha1(raw_key.encode("utf-8")).hexdigest()[:6]
+                h = hashlib.sha1(raw_key.encode("utf-8"), usedforsecurity=False).hexdigest()[:6]
                 body["api_key_fingerprint"] = f"{tail}·{h}"
                 body["api_key_saved_at"] = time.time()
             body["api_key_account"] = account

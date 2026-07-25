@@ -49,7 +49,7 @@ class HashingEmbedder(BaseEmbedder):
         for n in range(self.ngram_range[0], self.ngram_range[1] + 1):
             for i in range(len(tokens) - n + 1):
                 gram = " ".join(tokens[i : i + n])
-                h = int(hashlib.md5(gram.encode("utf-8")).hexdigest(), 16)
+                h = int(hashlib.md5(gram.encode("utf-8"), usedforsecurity=False).hexdigest(), 16)
                 idx = h % self.dim
                 sign = 1.0 if (h >> 8) & 1 else -1.0
                 vec[idx] += sign

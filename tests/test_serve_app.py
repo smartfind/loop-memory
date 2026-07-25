@@ -225,5 +225,75 @@ class IndexRouteTests(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class SecurityHeadersTests(ServeAppSmokeTests):
+    """Covers the security headers and CSRF guard in
+    ``loop_memory/serve/app.py``. The CSP and Bearer-token tests live
+    elsewhere; this class focuses on what is easy to break by accident."""
+
+    def test_csp_includes_object_and_base_uri(self) -> None:
+        r = self.client.get("/")
+        csp = r.headers.get("Content-Security-Policy", "")
+        self.assertIn("object-src 'none'", csp)
+        self.assertIn("base-uri 'self'", csp)
+        self.assertNotIn("img-src 'self' data: https:", csp,
+                         "img-src must NOT include https: to block remote images")
+
+    def test_x_content_type_options_nosniff(self) -> None:
+        r = self.client.get("/api/stats")
+        self.assertEqual(r.headers.get("X-Content-Type-Options"), "nosniff")
+        self.assertEqual(r.headers.get("X-Frame-Options"), "DENY")
+        self.assertEqual(r.headers.get("Referrer-Policy"), "no-referrer")
+
+    def test_cors_preflight_rejects_unknown_origin(self) -> None:
+        r = self.client.options(
+            "/api/admin/auth/token",
+            headers={
+                "Origin": "https://attacker.example",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "authorization,content-type",
+            },
+        )
+        # No Access-Control-Allow-Origin should be returned for a
+        # foreign origin, because we mount an allow_origins=[] policy.
+        self.assertNotIn("access-control-allow-origin", {k.lower() for k in r.headers})
+
+    def test_csrf_blocks_cross_origin_post(self) -> None:
+        r = self.client.post(
+            "/api/admin/auth/token",
+            headers={"Origin": "https://attacker.example"},
+        )
+        self.assertEqual(r.status_code, 403)
+        self.assertIn("Cross-origin", r.json()["error"])
+
+    def test_csrf_allows_same_origin_post(self) -> None:
+        # Build a same-origin request; even if the route is missing or
+        # returns 404/405, the CSRF guard should let it through (so
+        # we only assert non-403).
+        r = self.client.post(
+            "/api/admin/auth/token",
+            headers={"Origin": "http://testserver"},
+        )
+        self.assertNotEqual(r.status_code, 403)
+
+    def test_csrf_rejects_post_with_cross_site_sec_fetch(self) -> None:
+        r = self.client.post(
+            "/api/admin/auth/token",
+            headers={"Sec-Fetch-Site": "cross-site"},
+        )
+        # Either CSRF rejection (403) or 404/405 is acceptable; the
+        # important thing is that we don't 200 with auth bypass.
+        self.assertIn(r.status_code, (403, 404, 405))
+
+    def test_auth_token_disabled_by_default(self) -> None:
+        # When no token is configured, the /api/admin/auth/token POST
+        # is still allowed (it's the public "create a token" endpoint
+        # itself). What we want to verify is that the middleware does
+        # NOT 401 the request just because there's no Authorization
+        # header — token enforcement is opt-in.
+        r = self.client.post("/api/admin/auth/token")
+        self.assertNotEqual(r.status_code, 401,
+                            "auth middleware should be a no-op when no token is set")
+
+
 if __name__ == "__main__":
     unittest.main()

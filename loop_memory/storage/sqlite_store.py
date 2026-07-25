@@ -3288,7 +3288,7 @@ class LLMAuditStore:
         import uuid
         try:
             aid = uuid.uuid4().hex
-            prompt_hash = hashlib.sha1((prompt or "").encode("utf-8")).hexdigest()[:16]
+            prompt_hash = hashlib.sha1((prompt or "").encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
             total = (prompt_tokens or 0) + (completion_tokens or 0)
             with self._store._conn() as c:
                 c.execute(

@@ -513,7 +513,7 @@ def _hash_embed(text: str, dim: int = 128) -> list[float]:
     if not tokens:
         return v
     for tok in tokens:
-        h = hashlib.md5(tok.encode("utf-8")).digest()
+        h = hashlib.md5(tok.encode("utf-8"), usedforsecurity=False).digest()
         idx = h[0] % dim
         sign = 1.0 if (h[1] & 1) else -1.0
         v[idx] += sign
@@ -935,7 +935,7 @@ class EvolutionConsolidator:
         cache_key = hashlib.sha1(
             (user_prompt + "||" + (getattr(self.provider, "model", "?") or "?")
              + "||cluster||" + str(float(cfg.get("temperature") or 0.2))).encode()
-        ).hexdigest()
+        , usedforsecurity=False).hexdigest()
         reply = self._cached_call(cache_key, _CLUSTER_SYSTEM, user_prompt, cfg, stats, kind="cluster")
 
         actions: dict[str, dict[str, Any]] = {}
@@ -1261,7 +1261,7 @@ class EvolutionConsolidator:
         cache_key = hashlib.sha1(
             (user_prompt + "||" + (getattr(self.provider, "model", "?") or "?")
              + "||wiki-evo||" + str(float(cfg.get("temperature") or 0.3))).encode()
-        ).hexdigest()
+        , usedforsecurity=False).hexdigest()
         reply = self._cached_call(cache_key, _WIKI_SYSTEM, user_prompt, cfg, stats, kind="wiki")
 
         parsed = _extract_json(reply or "")
@@ -1424,7 +1424,7 @@ class EvolutionConsolidator:
             slug_src = f"{kind_hint}-{topic}" if kind_hint else topic
             slug = re.sub(r"[^a-z0-9一-鿿-]+", "-", slug_src).strip("-").lower()[:60]
             if not slug:
-                slug = "auto-cluster-" + _h.md5(slug_src.encode("utf-8")).hexdigest()[:10]
+                slug = "auto-cluster-" + _h.md5(slug_src.encode("utf-8"), usedforsecurity=False).hexdigest()[:10]
             title = _title_from(topic_src, fallback_kind=kind_hint, max_len=58)
             summary = bullets[0].lstrip("- ")[:200].rstrip(" .,;:")
             if not summary:

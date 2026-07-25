@@ -552,7 +552,7 @@ class LLMConsolidator:
             + (getattr(self.provider, "model", "?") or "?")
             + "||wiki"
         )
-        cache_key = hashlib.sha1(cache_blob.encode("utf-8")).hexdigest()
+        cache_key = hashlib.sha1(cache_blob.encode("utf-8"), usedforsecurity=False).hexdigest()
         now = time.time()
         cached = self._cache.get(cache_key)
         if cached is not None and (now - self._cache_ts.get(cache_key, 0)) < self._cache_ttl:
@@ -786,7 +786,7 @@ class LLMConsolidator:
             + "||"
             + str(float(cfg.get("temperature") or 0.3))
         )
-        cache_key = hashlib.sha1(cache_blob.encode("utf-8")).hexdigest()
+        cache_key = hashlib.sha1(cache_blob.encode("utf-8"), usedforsecurity=False).hexdigest()
         now = time.time()
         cached = self._cache.get(cache_key)
         if cached is not None and (now - self._cache_ts.get(cache_key, 0)) < self._cache_ttl:
