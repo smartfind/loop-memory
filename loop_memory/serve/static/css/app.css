@@ -1577,34 +1577,54 @@
   }
   /* Redaction section — toggles, kind list, preview pane. The
      "live" chip mirrors the ingest-hint chip styling so both
-     sections feel consistent. */
-  .sec-redact .row-toggle {
+     sections feel consistent. Toggle sits on the RIGHT, label
+     and description on the LEFT — descriptions appear BELOW
+     the label, never above it. */
+  .sec-redact .row-toggle,
+  .sec-storage .row-toggle,
+  .sec-behaviour .row-toggle {
     display: flex;
     align-items: flex-start;
-    gap: 10px;
-    padding: 8px 10px;
+    gap: 12px;
+    padding: 10px 12px;
     margin: 6px 0;
     border: 1px solid var(--border);
     border-radius: 8px;
     cursor: pointer;
     background: var(--surface-2);
   }
-  .sec-redact .row-toggle input[type="checkbox"] {
+  .sec-redact .row-toggle > span,
+  .sec-storage .row-toggle > span,
+  .sec-behaviour .row-toggle > span {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: block;
+  }
+  .sec-redact .row-toggle input[type="checkbox"],
+  .sec-storage .row-toggle input[type="checkbox"],
+  .sec-behaviour .row-toggle input[type="checkbox"] {
+    margin-left: auto;
+    flex: 0 0 auto;
     margin-top: 2px;
     transform: scale(1.05);
     cursor: pointer;
   }
-  .sec-redact .row-toggle strong {
+  .sec-redact .row-toggle strong,
+  .sec-storage .row-toggle strong,
+  .sec-behaviour .row-toggle strong {
     display: block;
     font-size: 12.5px;
     color: var(--text);
+    font-weight: 600;
   }
-  .sec-redact .row-toggle small {
+  .sec-redact .row-toggle small,
+  .sec-storage .row-toggle small,
+  .sec-behaviour .row-toggle small {
     display: block;
-    font-size: 11px;
+    font-size: 11.5px;
     color: var(--text-faint);
-    margin-top: 2px;
-    line-height: 1.4;
+    margin-top: 3px;
+    line-height: 1.45;
   }
   .redact-kinds {
     margin: 6px 0 10px;
@@ -3767,22 +3787,6 @@
 .wiki-toolbar select[title] { min-width: 110px; }
 
   /* Storage budget section — toggle row + last-compact chip. */
-  .sec-storage .row-toggle {
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
-    padding: 8px 10px;
-    margin: 6px 0;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    cursor: pointer;
-    background: var(--surface-2);
-  }
-  .sec-storage .row-toggle input[type="checkbox"] {
-    margin-top: 2px;
-    transform: scale(1.05);
-    cursor: pointer;
-  }
   .sec-storage .storage-meter {
     display: flex;
     flex-direction: column;
@@ -3799,6 +3803,35 @@
   .sec-storage .storage-meter strong {
     font-size: 12.5px;
     color: var(--text);
+  }
+
+  /* Settings-subsection — visual grouping used by Storage /
+     Redaction / Behaviour to cluster related knobs beneath a
+     small sub-heading. Has a thin top divider so the boundary
+     reads even with dense backgrounds. */
+  .settings-subsection {
+    margin: 12px 0 8px;
+    padding: 10px 12px 4px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface);
+  }
+  .settings-subsection + .settings-subsection {
+    margin-top: 14px;
+  }
+  .settings-subsection-head {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-faint);
+    margin: 0 0 8px;
+  }
+  .sec-storage .storage-cadence-grid,
+  .sec-behaviour .behaviour-switches {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
   }
 
   /* Contradictions panel — surfaced above the wiki grid when there
