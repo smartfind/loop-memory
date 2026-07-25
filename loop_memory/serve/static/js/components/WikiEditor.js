@@ -6,7 +6,7 @@
  * typos and create new pages. Future iterations can grow the editor
  * without rewriting the surrounding list view.
  */
-import { defineComponent, ref, computed, watch } from 'https://unpkg.com/vue@3.4.38/dist/vue.esm-browser.prod.js';
+import { defineComponent, ref, computed, watch } from './lib/vue.esm-browser.prod.js';
 import { store, t } from '../store.js';
 import { api } from '../api.js';
 
@@ -27,13 +27,54 @@ export const WikiEditor = defineComponent({
     // 'global' is exclusive (mutually exclusive with per-client chips).
     const SCOPE_TOKENS = ['global', 'codex', 'claude', 'hermes', 'openclaw'];
     const scope = ref(['global']);
+    // Auto-save draft to localStorage so edits survive refresh
+    const DRAFT_KEY = 'loop_wiki_draft_v1';
+    let saveTimer = null;
+    function saveDraft() {
+      if (props.pageId !== 'new') return;  // only draft new pages
+      try {
+        localStorage.setItem(DRAFT_KEY, JSON.stringify({
+          title: title.value, summary: summary.value, body: body.value,
+          tags: tags.value, importance: importance.value, scope: scope.value,
+          savedAt: Date.now(),
+        }));
+      } catch (_) {}
+    }
+    function loadDraft() {
+      if (props.pageId !== 'new') return;
+      try {
+        const raw = localStorage.getItem(DRAFT_KEY);
+        if (!raw) return;
+        const d = JSON.parse(raw);
+        // Only restore if draft is < 24h old
+        if (d.savedAt && Date.now() - d.savedAt < 86400000) {
+          title.value = d.title || '';
+          summary.value = d.summary || '';
+          body.value = d.body || '';
+          tags.value = d.tags || '';
+          importance.value = d.importance ?? 0.5;
+          scope.value = d.scope || ['global'];
+        }
+      } catch (_) {}
+    }
+    function clearDraft() {
+      try { localStorage.removeItem(DRAFT_KEY); } catch (_) {}
+    }
+    // Debounced auto-save on any field change
+    function scheduleDraftSave() {
+      if (saveTimer) clearTimeout(saveTimer);
+      saveTimer = setTimeout(saveDraft, 1200);
+    }
+    watch([title, summary, body, tags, importance, scope], scheduleDraftSave, { deep: true });
 
     async function load() {
       if (props.pageId === 'new') {
-        title.value = ''; summary.value = ''; body.value = '- '; tags.value = ''; importance.value = 0.5;
-        scope.value = ['global'];
+        // Try to restore draft first, then clear it
+        loadDraft();
+        clearDraft();
         return;
       }
+      clearDraft();  // clear any stale draft on successful load
       loading.value = true;
       try {
         const p = await api.getWiki(props.pageId);

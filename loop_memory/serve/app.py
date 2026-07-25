@@ -99,6 +99,81 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
     _EXT_RE = _re.compile(r"\.([a-z0-9]+)(\?|$)", _re.IGNORECASE)
 
     @app.middleware("http")
+    async def _security_headers(request, call_next):
+        response = await call_next(request)
+        # Security headers on all responses
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+        # CSP: restrict script sources, disable inline JS eval
+        csp = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' https://unpkg.com; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: https:; "
+            "connect-src 'self'; "
+            "font-src 'self'; "
+            "frame-ancestors 'none';"
+        )
+        response.headers["Content-Security-Policy"] = csp
+        return response
+
+    # ---- Auth middleware: Bearer token + CSRF ----
+    # Reads auth token from settings. Public endpoints (read-only, no auth needed):
+    # GET /, /api/stats, /api/sessions, /api/sessions/counts, /api/recall,
+    # /api/memories (list only), /api/wiki (list only), /api/graph,
+    # /api/pipeline, /api/weekly-report, /api/llm-audit, /api/source-health,
+    # /api/write-guard, /api/diag, /api/install-hooks (GET), static files.
+    _PUBLIC_PATHS = frozenset((
+        '/', '/api/stats', '/api/sessions', '/api/sessions/counts',
+        '/api/recall', '/api/memories', '/api/wiki', '/api/graph',
+        '/api/pipeline', '/api/weekly-report', '/api/llm-audit',
+        '/api/source-health', '/api/write-guard', '/api/diag',
+        '/api/install-hooks', '/api/insights',
+    ))
+
+    def _is_public_path(path: str) -> bool:
+        if path in _PUBLIC_PATHS:
+            return True
+        if path.startswith('/static/') or path.startswith('/api/memories/'):
+            # GET /api/memories/{id} is not public (contains data)
+            return False
+        if path.startswith('/api/wiki/') and path not in (
+            '/api/wiki', '/api/wiki/contradictions', '/api/wiki/contradictions/scan',
+        ):
+            # Individual wiki page GETs are not public
+            return False
+        return False
+
+    @app.middleware("http")
+    async def _auth_middleware(request, call_next):
+        if _is_public_path(request.url.path):
+            return await call_next(request)
+        # Check Bearer token
+        auth_header = request.headers.get("Authorization", "")
+        expected = store.get_setting("loop_memory_auth_token") if hasattr(store, "get_setting") else None
+        if expected:
+            if not auth_header.startswith("Bearer "):
+                from fastapi.responses import JSONResponse as _J
+                return _J({"error": "Missing or invalid Authorization header"}, status_code=401)
+            token = auth_header[7:]
+            # Simple constant-time comparison
+            import secrets as _secrets
+            if not _secrets.compare_digest(token, expected):
+                return _J({"error": "Invalid token"}, status_code=401)
+        # CSRF check for state-changing requests
+        if request.method in ("POST", "PUT", "DELETE", "PATCH"):
+            origin = request.headers.get("Origin", "")
+            referer = request.headers.get("Referer", "")
+            host = request.headers.get("Host", "")
+            # Allow if origin matches referer, or if no origin (same-origin form post)
+            if origin and origin != f"http://{host}" and origin != f"https://{host}":
+                from fastapi.responses import JSONResponse as _J
+                return _J({"error": "Cross-origin request not allowed"}, status_code=403)
+        return await call_next(request)
+
+    @app.middleware("http")
     async def _static_cache_headers(request, call_next):
         response = await call_next(request)
         path = request.url.path
@@ -149,11 +224,12 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
         try:
             en_json = (static_dir / "i18n" / "en.json").read_text(encoding="utf-8")
             zh_json = (static_dir / "i18n" / "zh.json").read_text(encoding="utf-8")
-            # Escape any ``</script>`` that could appear inside the JSON
-            # (none today, but a single careless edit shouldn't break
-            # the whole page). The standard escape is ``<\/script>``.
-            en_safe = en_json.replace("</script>", "<\\/script>")
-            zh_safe = zh_json.replace("</script>", "<\\/script>")
+            # HTML-encode the JSON to prevent XSS when injected into <script> tags.
+            # Escape &, <, >, and " (all HTML special chars). Also handle </script>
+            # with a standard reverse-solidus escape so it can't close the tag.
+            import html as _html
+            en_safe = _html.escape(en_json, quote=True).replace("</script>", "<\\/script>")
+            zh_safe = _html.escape(zh_json, quote=True).replace("</script>", "<\\/script>")
             # Inject the two payloads right before main.js so they
             # exist when store.js evaluates.
             inject = (
@@ -2548,6 +2624,26 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
             "api_key_fingerprint": cfg.get("api_key_fingerprint", ""),
             "api_key_saved_at": cfg.get("api_key_saved_at", 0),
         }
+
+    @app.get("/api/admin/auth/token")
+    def auth_token_get():
+        """Check if auth token is configured."""
+        token = store.get_setting("loop_memory_auth_token")
+        return {"enabled": bool(token)}
+
+    @app.post("/api/admin/auth/token")
+    async def auth_token_post():
+        """Generate a new auth token. Requires current auth (or no auth set)."""
+        import secrets as _secrets
+        new_token = _secrets.token_urlsafe(32)
+        store.set_setting("loop_memory_auth_token", new_token)
+        return {"token": new_token}
+
+    @app.delete("/api/admin/auth/token")
+    def auth_token_delete():
+        """Remove auth token (disables auth)."""
+        store.delete_setting("loop_memory_auth_token")
+        return {"ok": True}
 
     @app.post("/api/admin/llm/test")
     async def llm_test_route(body: dict | None = None):

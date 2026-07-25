@@ -10,9 +10,9 @@
  * - Drawer foot has Reset / Cancel / Save buttons (legacy parity).
  * - Schedule includes weekday selector (visible when mode=weekly).
  */
-import { defineComponent, ref, computed, onMounted, watch, reactive } from 'https://unpkg.com/vue@3.4.38/dist/vue.esm-browser.prod.js';
+import { defineComponent, ref, computed, onMounted, watch, reactive } from './lib/vue.esm-browser.prod.js';
 import { store, t, toast, fmtTime, callAction } from '../store.js';
-import { api, ApiError } from '../api.js';
+import { api, ApiError, setAuthToken } from '../api.js';
 
 const WEEKDAYS = [
   { v: 0, k: 'weekday.mon' }, { v: 1, k: 'weekday.tue' },
@@ -96,6 +96,11 @@ export const Settings = defineComponent({
     const testResult = ref(null);
     const saving = ref(false);
     const savedHint = ref(false);
+    // API key show/hide toggle
+    const keyVisible = ref(false);
+    // Auth token management
+    const authEnabled = ref(false);
+    const authLoading = ref(false);
 
     // Recent runs + next-run + preview state (legacy parity)
     const runs = ref([]);
@@ -150,6 +155,11 @@ export const Settings = defineComponent({
         nextRun.value = status?.next_run || null;
       } catch (e) { /* ignore */ }
       await refreshRuns();
+      // Load auth token status
+      try {
+        const at = await api.authTokenStatus();
+        authEnabled.value = at.enabled || false;
+      } catch (e) { /* ignore */ }
     }
 
     async function refreshRuns() {
@@ -175,6 +185,28 @@ export const Settings = defineComponent({
       const p = selectedProvider.value;
       if (p && p.default_model) cfg.model = p.default_model;
       if (p && p.default_base_url && !cfg.base_url) cfg.base_url = p.default_base_url;
+    }
+
+    async function onToggleAuth() {
+      authLoading.value = true;
+      try {
+        if (authEnabled.value) {
+          await api.authTokenDelete();
+          authEnabled.value = false;
+          setAuthToken(null);
+          toast(t('settings.auth.disabled') || '客户端已禁用', 2000);
+        } else {
+          const r = await api.authTokenCreate();
+          authEnabled.value = true;
+          setAuthToken(r.token);
+          // Show token briefly then hide it
+          toast(t('settings.auth.enabled') || '客户端已启用，请将记录字典', 4000);
+        }
+      } catch (e) {
+        toast(t('common.error') + ': ' + e.message, 4000);
+      } finally {
+        authLoading.value = false;
+      }
     }
 
     async function onTest() {
@@ -599,9 +631,12 @@ export const Settings = defineComponent({
           </span>
         </span>
         <div class="api-key-row">
-          <input type="password" v-model="cfg.api_key"
+          <input :type="keyVisible ? 'text' : 'password'" v-model="cfg.api_key"
                  :placeholder="cfg.api_key_set ? t('settings.apiKey.edit') : t('settings.apiKey.placeholder')"
                  autocomplete="off" />
+          <button class="btn small ghost" @click="keyVisible = !keyVisible" type="button" :title="keyVisible ? t('common.hide') : t('common.show')">
+            {{ keyVisible ? '🙈' : '👁' }}
+          </button>
           <button class="btn small ghost" v-if="cfg.api_key_set" @click="onClearKey" type="button">
             {{ t('settings.apiKey.clear') }}
           </button>
@@ -875,6 +910,20 @@ export const Settings = defineComponent({
           <input type="checkbox" v-model="cfg.behaviour.dry_run" />
           <span>{{ t('settings.dryRun') }}</span>
         </label>
+      </div>
+    </section>
+
+    <!-- Security: Auth token -->
+    <section v-if="mode !== 'llm'">
+      <h3>{{ t('settings.section.security') || '🔒 ' + (store.lang === 'zh' ? '安全' : 'Security') }}</h3>
+      <div class="auth-row">
+        <span>{{ authEnabled ? (store.lang === 'zh' ? '已启用 API 访问令牌' : 'API access token enabled') : (store.lang === 'zh' ? '未启用访问令牌（所有操作无需认证）' : 'No access token — all operations are unauthenticated') }}</span>
+      </div>
+      <div class="action-row" style="margin-top:8px;">
+        <button class="btn" :class="authEnabled ? 'ghost' : 'primary'" type="button"
+                :disabled="authLoading" @click="onToggleAuth">
+          {{ authLoading ? (store.lang === 'zh' ? '处理中…' : 'Working…') : authEnabled ? (store.lang === 'zh' ? '禁用令牌' : 'Disable token') : (store.lang === 'zh' ? '启用令牌' : 'Enable token') }}
+        </button>
       </div>
     </section>
 

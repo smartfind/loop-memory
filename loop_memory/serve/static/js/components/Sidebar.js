@@ -15,7 +15,7 @@
  *     hollow badge for the "active" session, friendly empty state,
  *     inline clear filter on the active session.
  */
-import { defineComponent, ref, computed, onMounted, onUnmounted, watch } from 'https://unpkg.com/vue@3.4.38/dist/vue.esm-browser.prod.js';
+import { defineComponent, ref, computed, onMounted, onUnmounted, watch } from './lib/vue.esm-browser.prod.js';
 import { store, t, timeAgo, fmtTime } from '../store.js';
 import { api } from '../api.js';
 
