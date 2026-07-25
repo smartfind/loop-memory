@@ -94,8 +94,8 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
     # The browser still avoids re-downloading when the file is
     # unchanged thanks to the ETag / If-Modified-Since 304 path.
     import re as _re
-    _CACHE_LONG  = {'js', 'css', 'svg', 'png', 'jpg', 'jpeg', 'webp', 'ico', 'woff', 'woff2'}
-    _CACHE_SHORT = {'json', 'html'}
+    _CACHE_LONG = {'svg', 'png', 'jpg', 'jpeg', 'webp', 'ico', 'woff', 'woff2'}
+    _CACHE_REVALIDATE = {'json', 'html', 'js', 'css'}
     _EXT_RE = _re.compile(r"\.([a-z0-9]+)(\?|$)", _re.IGNORECASE)
 
     @app.middleware("http")
@@ -179,7 +179,7 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
         if path.startswith("/static/"):
             m = _EXT_RE.search(path)
             ext = m.group(1).lower() if m else ""
-            if ext in _CACHE_SHORT:
+            if ext in _CACHE_REVALIDATE:
                 response.headers["Cache-Control"] = "no-cache, must-revalidate"
             elif ext in _CACHE_LONG:
                 response.headers["Cache-Control"] = "max-age=300, must-revalidate"

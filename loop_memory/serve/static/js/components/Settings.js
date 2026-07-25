@@ -369,6 +369,7 @@ export const Settings = defineComponent({
           }
         },
       });
+    }
 
     async function onReset() {
       try {

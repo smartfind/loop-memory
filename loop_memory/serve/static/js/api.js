@@ -26,8 +26,6 @@ function buildUrl(path, params) {
 let _authToken = localStorage.getItem('loop_auth_token') || null;
 export function setAuthToken(t) { _authToken = t; if (t) localStorage.setItem('loop_auth_token', t); else localStorage.removeItem('loop_auth_token'); }
 export function getAuthToken() { return _authToken; }
-// Re-export for use by store.js / Settings.js
-export { setAuthToken, getAuthToken };
 
 export async function fetchJSON(path, opts = {}) {
   const { method = 'GET', params, body, headers = {}, timeoutMs = 30000, cache } = opts;
