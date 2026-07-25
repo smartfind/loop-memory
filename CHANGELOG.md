@@ -1,5 +1,33 @@
 ## [Unreleased]
 
+### Settings drawer — UX pass
+- **Security section** now ships a clear "Enabled / Disabled" status line plus a
+  one-line hint explaining what a bearer token does on this machine, instead
+  of leaking the raw i18n key when the translation was missing.
+- **Processing toggles** (filter / re-score / distil / dry-run) and the
+  redaction switches (`Enable redaction`, `Process <private>...</private>`)
+  use a unified card style: checkbox + title on the first row, description on
+  the second row, description text aligned with the card's left edge.
+- **Storage & compaction** card pairs the interval input with a compact
+  "Last compressed" status card of matching height so the two read as one
+  row.
+- **Manual actions** section explains the difference between `Run now` (writes)
+  and `Preview` (dry-run) inline.
+- All new strings are localised in `loop_memory/serve/static/i18n/{en,zh}.json`
+  so the English and Chinese drawers stay in lockstep.
+- Docs: new `docs/settings.md` is the canonical reference for every drawer
+  control; `docs/auto-capture.md` now lists the real launchd labels
+  (`com.loopmemory.codex`, `com.loopmemory.claude`, `com.loopmemory.openclaw`)
+  and the `kickstart -k` / log commands for the Claude watcher.
+
+### Visual layout regression fix
+Restored the pre-`security-fix` visual layout of the Dashboard, LLM audit,
+Settings subsections, and the four top-level tabs (timeline / dashboard /
+ wiki / graph). The four `<button role="tab">` controls still keep
+accessibility and keyboard activation, but no longer inherit the browser's
+default button border. The security, CSP, named-export, and async-component
+fixes from the merge are preserved.
+
 ### Universal Agent Memory v7 — graph, cognitive, MEMORY.md, multi-tenant SDK
 Closes the four gaps the article《LangChain、AgentScope、Mem0 深度横评：谁才是 Agent 的真正记忆系统？》called out against Mem0.
 

@@ -19,13 +19,19 @@ loop-memory hook --source hermes --watch ~/.hermes
 
 ## 2. launchd (macOS)
 
-Save the following at `~/Library/LaunchAgents/com.loop-memory.watcher.plist`:
+The shipped launchd labels are `com.loopmemory.codex`, `com.loopmemory.claude`,
+and `com.loopmemory.openclaw`. The legacy `com.loop-memory.*` label still works
+if you've been running the project from an older install. New installs prefer
+`com.loopmemory.<source>` so the same plist can be re-installed without
+collisions.
+
+Save the following at `~/Library/LaunchAgents/com.loopmemory.claude.plist`:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>Label</key><string>com.loop-memory.watcher</string>
+  <key>Label</key><string>com.loopmemory.claude</string>
   <key>ProgramArguments</key><array>
     <string>/Users/YOU/.local/bin/loop-memory</string>
     <string>hook</string>
@@ -43,8 +49,27 @@ Save the following at `~/Library/LaunchAgents/com.loop-memory.watcher.plist`:
 Then:
 
 ```bash
-launchctl load ~/Library/LaunchAgents/com.loop-memory.watcher.plist
+launchctl load ~/Library/LaunchAgents/com.loopmemory.claude.plist
+# or, if it was previously loaded under a different label:
+launchctl bootout gui/$UID/com.loop-memory.watcher 2>/dev/null || true
+launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.loopmemory.claude.plist
 ```
+
+### Operations
+
+```bash
+# status / pid
+launchctl print gui/$UID/com.loopmemory.claude | rg 'state =|pid ='
+# force a restart (picks up the latest code from the .venv)
+launchctl kickstart -k gui/$UID/com.loopmemory.claude
+# tail the loop-memory log
+tail -f /tmp/loop_claude.log
+```
+
+If `state = waiting` and `pid = -`, the previous run exited; inspect
+`/tmp/loop_claude.log` for the traceback. The most common cause after a code
+pull is the launchd job still pointing at the system `python3`; reinstall the
+plist so it uses the project's `.venv/bin/python`.
 
 ## 3. systemd (Linux)
 
