@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import re
+import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -44,6 +47,11 @@ class ServeAppSmokeTests(unittest.TestCase):
         self.assertIn("script-src 'self' 'unsafe-eval'", csp)
         self.assertNotIn("unpkg.com", csp)
         self.assertNotIn("'unsafe-inline'", csp.split("style-src", 1)[0])
+
+    def test_static_javascript_always_revalidates(self) -> None:
+        r = self.client.get("/static/js/api.js")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.headers["cache-control"], "no-cache, must-revalidate")
 
     def test_admin_rescore_returns_updated(self) -> None:
         r = self.client.post("/api/admin/rescore")
@@ -163,6 +171,36 @@ class ServeAppSmokeTests(unittest.TestCase):
 
 
 class IndexRouteTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("node"), "Node.js is required for static module parsing")
+    def test_static_javascript_modules_parse_as_esm(self) -> None:
+        static_js = Path(__file__).parents[1] / "loop_memory" / "serve" / "static" / "js"
+        with tempfile.TemporaryDirectory(prefix="loop-memory-js-") as tmp:
+            for module in static_js.rglob("*.js"):
+                check_file = Path(tmp) / f"{module.stem}-{abs(hash(module))}.mjs"
+                check_file.write_text(module.read_text(encoding="utf-8"), encoding="utf-8")
+                result = subprocess.run(
+                    ["node", "--check", str(check_file)], capture_output=True, text=True
+                )
+                self.assertEqual(result.returncode, 0, f"{module}: {result.stderr}")
+
+    def test_static_modules_do_not_reexport_direct_exports(self) -> None:
+        static_js = Path(__file__).parents[1] / "loop_memory" / "serve" / "static" / "js"
+        direct_pattern = re.compile(
+            r"\bexport\s+(?:async\s+)?(?:function|class|const|let|var)\s+([A-Za-z_$][\w$]*)"
+        )
+        list_pattern = re.compile(r"\bexport\s*\{([^}]*)\}")
+        for module in static_js.rglob("*.js"):
+            source = module.read_text(encoding="utf-8")
+            direct = set(direct_pattern.findall(source))
+            listed: set[str] = set()
+            for group in list_pattern.findall(source):
+                listed.update(
+                    item.strip().split(" as ", 1)[0].strip()
+                    for item in group.split(",")
+                    if item.strip()
+                )
+            self.assertFalse(direct & listed, f"duplicate exports in {module}: {direct & listed}")
+
     def test_root_returns_index_or_404_when_no_static(self) -> None:
         store, tmp = _store()
         try:
