@@ -29,3 +29,4 @@ secrets.json
 .loop_memory/
 credentials.json
 work/
+.worktrees
