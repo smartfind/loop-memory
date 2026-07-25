@@ -23,10 +23,14 @@ import { Dashboard } from './components/Dashboard.js';
 import { Wiki } from './components/Wiki.js';
 import { KnowledgeGraph } from './components/KnowledgeGraph.js';
 // Modals: lazy-loaded — only fetched the first time the user opens them.
-const Settings = defineAsyncComponent(() => import('./components/Settings.js'));
+const Settings = defineAsyncComponent(() =>
+  import('./components/Settings.js').then(module => module.Settings)
+);
 import { RunStrip } from './components/RunStrip.js';
 import { Toast } from './components/Toast.js';
-const Diagnostic = defineAsyncComponent(() => import('./components/Diagnostic.js'));
+const Diagnostic = defineAsyncComponent(() =>
+  import('./components/Diagnostic.js').then(module => module.Diagnostic)
+);
 
 export const App = defineComponent({
   name: 'App',
