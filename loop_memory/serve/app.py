@@ -165,9 +165,8 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
         # CSRF check for state-changing requests
         if request.method in ("POST", "PUT", "DELETE", "PATCH"):
             origin = request.headers.get("Origin", "")
-            referer = request.headers.get("Referer", "")
             host = request.headers.get("Host", "")
-            # Allow if origin matches referer, or if no origin (same-origin form post)
+            # Allow if origin matches host (same-origin), or if no origin header
             if origin and origin != f"http://{host}" and origin != f"https://{host}":
                 from fastapi.responses import JSONResponse as _J
                 return _J({"error": "Cross-origin request not allowed"}, status_code=403)
