@@ -173,6 +173,40 @@ html, body, #app { height: 100%; }
   accent-color: var(--accent);
   flex-shrink: 0;
 }
+.drawer-body .behaviour-switches label.row-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin-bottom: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  cursor: pointer;
+}
+.drawer-body .behaviour-switches label.row-toggle input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  margin: 1px 0 0;
+  padding: 0;
+  accent-color: var(--accent);
+}
+.drawer-body .behaviour-switches label.row-toggle > span {
+  display: block;
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+.drawer-body .behaviour-switches label.row-toggle strong,
+.drawer-body .behaviour-switches label.row-toggle small {
+  display: block;
+}
+.drawer-body .behaviour-switches label.row-toggle small {
+  margin-top: 3px;
+  color: var(--text-faint);
+  line-height: 1.4;
+}
 .drawer-body input, .drawer-body textarea, .drawer-body select {
   width: 100%;
   padding: 6px 8px;
@@ -184,6 +218,17 @@ html, body, #app { height: 100%; }
 .drawer-head { display: flex; align-items: center; justify-content: space-between; padding-bottom: 12px; border-bottom: 1px solid var(--border); margin-bottom: 14px; }
 .drawer-head h2 { margin: 0; font-size: 16px; }
 .drawer-head .x { background: none; border: none; font-size: 22px; cursor: pointer; color: var(--text-mute); }
+.auth-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+.auth-row strong { font-size: 12.5px; color: var(--text); }
+.auth-row small { color: var(--text-faint); line-height: 1.45; }
 
 /* Toast */
 .toast {

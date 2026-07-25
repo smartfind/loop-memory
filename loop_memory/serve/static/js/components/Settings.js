@@ -976,14 +976,15 @@ export const Settings = defineComponent({
 
     <!-- Security: Auth token -->
     <section v-if="mode !== 'llm'">
-      <h3>{{ t('settings.section.security') || '🔒 ' + (store.lang === 'zh' ? '安全' : 'Security') }}</h3>
+      <h3>{{ t('settings.section.security') }}</h3>
       <div class="auth-row">
-        <span>{{ authEnabled ? (store.lang === 'zh' ? '已启用 API 访问令牌' : 'API access token enabled') : (store.lang === 'zh' ? '未启用访问令牌（所有操作无需认证）' : 'No access token — all operations are unauthenticated') }}</span>
+        <strong>{{ authEnabled ? t('settings.auth.enabledStatus') : t('settings.auth.disabledStatus') }}</strong>
+        <small>{{ authEnabled ? t('settings.auth.enabledHint') : t('settings.auth.disabledHint') }}</small>
       </div>
       <div class="action-row" style="margin-top:8px;">
         <button class="btn" :class="authEnabled ? 'ghost' : 'primary'" type="button"
                 :disabled="authLoading" @click="onToggleAuth">
-          {{ authLoading ? (store.lang === 'zh' ? '处理中…' : 'Working…') : authEnabled ? (store.lang === 'zh' ? '禁用令牌' : 'Disable token') : (store.lang === 'zh' ? '启用令牌' : 'Enable token') }}
+          {{ authLoading ? t('settings.auth.working') : authEnabled ? t('settings.auth.disable') : t('settings.auth.enable') }}
         </button>
       </div>
     </section>
