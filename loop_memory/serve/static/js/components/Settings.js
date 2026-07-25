@@ -101,6 +101,10 @@ export const Settings = defineComponent({
     // Auth token management
     const authEnabled = ref(false);
     const authLoading = ref(false);
+    // Confirm dialog state for destructive actions
+    const confirmDialog = ref(null);  // { title, message, onConfirm }
+    function showConfirm(opts) { confirmDialog.value = opts; }
+    function hideConfirm() { confirmDialog.value = null; }
 
     // Recent runs + next-run + preview state (legacy parity)
     const runs = ref([]);
@@ -340,27 +344,31 @@ export const Settings = defineComponent({
     }
 
     async function onClearKey() {
-      if (!confirm(t('settings.apiKey.confirmClear'))) return;
-      try {
-        // ``__clear__`` is the sentinel the PUT endpoint understands:
-        // it deletes the secret from the backend and flips
-        // ``api_key_set`` to false. We must NOT use the
-        // ``/api/admin/llm/schedule`` POST endpoint here — it
-        // would re-introduce the same persistence bug as
-        // ``onSave`` (nested ``schedule`` / ``behaviour``).
-        const payload = {
-          provider: cfg.provider, model: cfg.model, base_url: cfg.base_url,
-          schedule: cfg.schedule, behaviour: cfg.behaviour,
-          api_key: '__clear__',
-        };
-        await api.saveLlm(payload);
-        cfg.api_key_set = false;
-        toast(t('settings.apiKey.cleared'), 2000);
-        await load();
-      } catch (e) {
-        toast(t('toast.fail', { msg: e.message }), 4000);
-      }
-    }
+      showConfirm({
+        title: t('settings.apiKey.confirmClearTitle') || t('settings.apiKey.confirmClear'),
+        message: t('settings.apiKey.confirmClearMsg') || '',
+        onConfirm: async () => {
+          try {
+            // ``__clear__`` is the sentinel the PUT endpoint understands:
+            // it deletes the secret from the backend and flips
+            // ``api_key_set`` to false. We must NOT use the
+            // ``/api/admin/llm/schedule`` POST endpoint here — it
+            // would re-introduce the same persistence bug as
+            // ``onSave`` (nested ``schedule`` / ``behaviour``).
+            const payload = {
+              provider: cfg.provider, model: cfg.model, base_url: cfg.base_url,
+              schedule: cfg.schedule, behaviour: cfg.behaviour,
+              api_key: '__clear__',
+            };
+            await api.saveLlm(payload);
+            cfg.api_key_set = false;
+            toast(t('settings.apiKey.cleared'), 2000);
+            await load();
+          } catch (e) {
+            toast(t('toast.fail', { msg: e.message }), 4000);
+          }
+        },
+      });
 
     async function onReset() {
       try {
@@ -570,7 +578,8 @@ export const Settings = defineComponent({
              runs, runsLoading, refreshRuns, nextRun, nextRunText, scheduleModeHint,
              previewItems, previewLoading, previewOpen,
              statusKey, triggerKey, statLine,
-             WEEKDAYS, store, t, onClose, openClientHooksPanel };
+             WEEKDAYS, store, t, onClose, openClientHooksPanel,
+             confirmDialog, showConfirm, hideConfirm };
   },
   template: /* html */ `
 <aside v-show="open" class="drawer" role="dialog" aria-label="Settings" @click.self="onClose">
@@ -979,6 +988,20 @@ export const Settings = defineComponent({
     <button class="btn primary" type="button" :disabled="saving" @click="onSave">
       {{ saving ? t('common.saving') : t('action.save') }}
     </button>
+  </div>
+
+  <!-- Inline confirm dialog (replaces browser confirm()) -->
+  <div v-if="confirmDialog" class="modal-backdrop" @click.self="hideConfirm">
+    <div class="modal" style="max-width:360px;z-index:200">
+      <header class="modal-head"><h3>{{ confirmDialog.title }}</h3></header>
+      <div class="modal-body">{{ confirmDialog.message }}</div>
+      <footer class="modal-foot">
+        <button class="btn ghost" @click="hideConfirm">{{ t('action.cancel') }}</button>
+        <button class="btn primary" @click="() => { confirmDialog.onConfirm(); hideConfirm(); }">
+          {{ t('action.confirm') }}
+        </button>
+      </footer>
+    </div>
   </div>
 </aside>
   `,
