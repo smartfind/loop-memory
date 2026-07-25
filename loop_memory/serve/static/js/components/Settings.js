@@ -711,40 +711,54 @@ export const Settings = defineComponent({
 
     <!-- Storage budget + compaction cadence. Hidden in 'mode=llm' —
          the LLM Connection drawer should not surface maintenance
-         controls; compaction lives behind the gear icon. -->
+         controls; compaction lives behind the gear icon. The section
+         is split into two sub-groups (budget / cadence) so the
+         related knobs are visually clustered. -->
     <section v-if="mode !== 'llm'" class="sec-storage">
       <h3>{{ t('settings.section.storage') }}</h3>
       <p class="sec-scope">{{ t('settings.storage.scope') }}</p>
-      <div class="row-2">
-        <label>
-          <span>{{ t('settings.storage.maxBytes') }}</span>
-          <input type="number" v-model.number="storageCfg.max_bytes_mb"
-                 :min="0" :max="2048" />
-          <small class="hint">{{ t('settings.storage.maxBytesHint', { def: storageCfg.defaults.max_bytes_mb, current: storageCfg.current_mb }) }}</small>
-        </label>
-        <label>
-          <span>{{ t('settings.storage.maxMemories') }}</span>
-          <input type="number" v-model.number="storageCfg.max_memories"
-                 :min="0" :max="100000" />
-          <small class="hint">{{ t('settings.storage.maxMemoriesHint', { def: storageCfg.defaults.max_memories, current: storageCfg.current_memories }) }}</small>
-        </label>
-      </div>
-      <label class="row-toggle">
-        <input type="checkbox" v-model="storageCfg.auto_compact" />
-        <span>{{ t('settings.storage.autoCompact') }}</span>
-      </label>
-      <div v-if="storageCfg.auto_compact" class="row-2">
-        <label>
-          <span>{{ t('settings.storage.intervalHours') }}</span>
-          <input type="number" v-model.number="storageCfg.compact_interval_hours"
-                 :min="1" :max="720" />
-          <small class="hint">{{ t('settings.storage.intervalHoursHint', { def: storageCfg.defaults.compact_interval_hours }) }}</small>
-        </label>
-        <div class="storage-meter">
-          <span>{{ t('settings.storage.lastCompact') }}</span>
-          <strong>{{ storageCfg.last_compact_text }}</strong>
+
+      <div class="settings-subsection">
+        <div class="settings-subsection-head">{{ t('settings.storage.headBudget') || '容量上限' }}</div>
+        <div class="row-2">
+          <label>
+            <span>{{ t('settings.storage.maxBytes') }}</span>
+            <input type="number" v-model.number="storageCfg.max_bytes_mb"
+                   :min="0" :max="2048" />
+            <small class="hint">{{ t('settings.storage.maxBytesHint', { def: storageCfg.defaults.max_bytes_mb, current: storageCfg.current_mb }) }}</small>
+          </label>
+          <label>
+            <span>{{ t('settings.storage.maxMemories') }}</span>
+            <input type="number" v-model.number="storageCfg.max_memories"
+                   :min="0" :max="100000" />
+            <small class="hint">{{ t('settings.storage.maxMemoriesHint', { def: storageCfg.defaults.max_memories, current: storageCfg.current_memories }) }}</small>
+          </label>
         </div>
       </div>
+
+      <div class="settings-subsection">
+        <div class="settings-subsection-head">{{ t('settings.storage.headCadence') || '压缩触发' }}</div>
+        <label class="row-toggle">
+          <input type="checkbox" v-model="storageCfg.auto_compact" />
+          <span>
+            <strong>{{ t('settings.storage.autoCompact') }}</strong>
+            <small>{{ t('settings.storage.autoCompactHint') }}</small>
+          </span>
+        </label>
+        <div v-if="storageCfg.auto_compact" class="row-2 storage-cadence-grid">
+          <label>
+            <span>{{ t('settings.storage.intervalHours') }}</span>
+            <input type="number" v-model.number="storageCfg.compact_interval_hours"
+                   :min="1" :max="720" />
+            <small class="hint">{{ t('settings.storage.intervalHoursHint', { def: storageCfg.defaults.compact_interval_hours }) }}</small>
+          </label>
+          <div class="storage-meter">
+            <span>{{ t('settings.storage.lastCompact') }}</span>
+            <strong>{{ storageCfg.last_compact_text }}</strong>
+          </div>
+        </div>
+      </div>
+
       <div class="action-row" style="gap:8px;flex-wrap:wrap;margin-top:8px;">
         <button class="btn primary" type="button" :disabled="storageSaving"
                 @click="onSaveStorage">
@@ -762,64 +776,74 @@ export const Settings = defineComponent({
          exported markdown. Hidden in 'mode=llm' (LLM Connection
          doesn't own privacy — redaction is project-wide). The
          preview textarea lets the user paste any text and see
-         exactly what would land in long-term storage. -->
+         exactly what would land in long-term storage. Split into
+         "toggles" and "preview" subsections for visual rhythm. -->
     <section v-if="mode !== 'llm'" class="sec-redact">
       <h3>{{ t('settings.section.redact') }}</h3>
       <p class="sec-scope">{{ t('settings.redact.scope') }}</p>
-      <label class="row-toggle">
-        <input type="checkbox" v-model="redactCfg.enabled" />
-        <span>
-          <strong>{{ t('settings.redact.enabled') }}</strong>
-          <small>{{ t('settings.redact.enabledHint') }}</small>
-        </span>
-      </label>
-      <label class="row-toggle">
-        <input type="checkbox" v-model="redactCfg.private_spans" />
-        <span>
-          <strong>{{ t('settings.redact.privateSpans') }}</strong>
-          <small>{{ t('settings.redact.privateSpansHint') }}</small>
-        </span>
-      </label>
-      <details class="redact-kinds">
-        <summary>{{ t('settings.redact.kindsSummary', { n: redactCfg.kinds.length }) }}</summary>
-        <ul class="kind-list">
-          <li v-for="k in redactCfg.kinds" :key="k">
-            <code>{{ k }}</code>
-          </li>
-        </ul>
-      </details>
-      <div class="redact-preview">
-        <label>
-          <span>{{ t('settings.redact.previewLabel') }}</span>
-          <textarea v-model="redactPreview.input" rows="3"
-                    :placeholder="t('settings.redact.previewPlaceholder')"></textarea>
+
+      <div class="settings-subsection">
+        <div class="settings-subsection-head">{{ t('settings.redact.headToggles') || '规则开关' }}</div>
+        <label class="row-toggle">
+          <input type="checkbox" v-model="redactCfg.enabled" />
+          <span>
+            <strong>{{ t('settings.redact.enabled') }}</strong>
+            <small>{{ t('settings.redact.enabledHint') }}</small>
+          </span>
         </label>
-        <div class="redact-preview-actions">
-          <button class="btn small" type="button" :disabled="redactPreview.busy"
-                  @click="onRunRedactPreview">
-            {{ redactPreview.busy ? t('common.loading') : t('settings.redact.previewRun') }}
-          </button>
-          <button class="btn small ghost" type="button" @click="clearRedactPreview"
-                  :disabled="!redactPreview.input && !redactPreview.output">
-            {{ t('common.clear') }}
-          </button>
-        </div>
-        <div v-if="redactPreview.output" class="redact-output">
-          <div class="redact-output-text">
-            <small class="hint">{{ t('settings.redact.previewResult') }}</small>
-            <pre>{{ redactPreview.output }}</pre>
+        <label class="row-toggle">
+          <input type="checkbox" v-model="redactCfg.private_spans" />
+          <span>
+            <strong>{{ t('settings.redact.privateSpans') }}</strong>
+            <small>{{ t('settings.redact.privateSpansHint') }}</small>
+          </span>
+        </label>
+        <details class="redact-kinds">
+          <summary>{{ t('settings.redact.kindsSummary', { n: redactCfg.kinds.length }) }}</summary>
+          <ul class="kind-list">
+            <li v-for="k in redactCfg.kinds" :key="k">
+              <code>{{ k }}</code>
+            </li>
+          </ul>
+        </details>
+      </div>
+
+      <div class="settings-subsection">
+        <div class="settings-subsection-head">{{ t('settings.redact.headPreview') || '实时预览' }}</div>
+        <div class="redact-preview">
+          <label>
+            <span>{{ t('settings.redact.previewLabel') }}</span>
+            <textarea v-model="redactPreview.input" rows="3"
+                      :placeholder="t('settings.redact.previewPlaceholder')"></textarea>
+          </label>
+          <div class="redact-preview-actions">
+            <button class="btn small" type="button" :disabled="redactPreview.busy"
+                    @click="onRunRedactPreview">
+              {{ redactPreview.busy ? t('common.loading') : t('settings.redact.previewRun') }}
+            </button>
+            <button class="btn small ghost" type="button" @click="clearRedactPreview"
+                    :disabled="!redactPreview.input && !redactPreview.output">
+              {{ t('common.clear') }}
+            </button>
           </div>
-          <div class="redact-output-meta" v-if="redactPreview.total > 0">
-            <span class="redact-pill"
-                  v-for="(n, kind) in redactPreview.counts" :key="kind">
-              {{ kind }} × {{ n }}
-            </span>
-            <small class="hint">
-              {{ t('settings.redact.previewTotal', { n: redactPreview.total, chars: redactPreview.total_chars }) }}
-            </small>
+          <div v-if="redactPreview.output" class="redact-output">
+            <div class="redact-output-text">
+              <small class="hint">{{ t('settings.redact.previewResult') }}</small>
+              <pre>{{ redactPreview.output }}</pre>
+            </div>
+            <div class="redact-output-meta" v-if="redactPreview.total > 0">
+              <span class="redact-pill"
+                    v-for="(n, kind) in redactPreview.counts" :key="kind">
+                {{ kind }} × {{ n }}
+              </span>
+              <small class="hint">
+                {{ t('settings.redact.previewTotal', { n: redactPreview.total, chars: redactPreview.total_chars }) }}
+              </small>
+            </div>
           </div>
         </div>
       </div>
+
       <div class="action-row" style="gap:8px;flex-wrap:wrap;margin-top:8px;">
         <button class="btn primary" type="button" :disabled="redactSaving"
                 @click="onSaveRedact">
@@ -878,47 +902,74 @@ export const Settings = defineComponent({
 
     <!-- Behaviour — consolidation-job-only knobs -->
     <!-- Behaviour — batch size / min importance / filters etc.
-         Hidden in 'mode=llm'. -->
+         Hidden in 'mode=llm'. Switch rows follow the same
+         .row-toggle pattern as storage / redaction so the
+         description (small) sits BELOW the label and the toggle
+         sits on the RIGHT for visual consistency. -->
     <section v-if="mode !== 'llm'" class="sec-behaviour">
       <h3>{{ t('settings.section.behaviour') }}</h3>
       <p class="sec-scope">{{ t('settings.behaviour.scope') }}</p>
-      <div class="row-2">
-        <label>
-          <span>{{ t('settings.batchSize') }}</span>
-          <input type="number" v-model.number="cfg.behaviour.batch_size" min="1" max="500" />
-        </label>
-        <label>
-          <span>{{ t('settings.temperature') }}</span>
-          <input type="number" v-model.number="cfg.behaviour.temperature" step="0.1" min="0" max="2" />
-        </label>
+
+      <div class="settings-subsection">
+        <div class="settings-subsection-head">{{ t('settings.behaviour.headNumbers') || '基本参数' }}</div>
+        <div class="row-2">
+          <label>
+            <span>{{ t('settings.batchSize') }}</span>
+            <input type="number" v-model.number="cfg.behaviour.batch_size" min="1" max="500" />
+            <small class="hint">{{ t('settings.batchSizeHint') }}</small>
+          </label>
+          <label>
+            <span>{{ t('settings.temperature') }}</span>
+            <input type="number" v-model.number="cfg.behaviour.temperature" step="0.1" min="0" max="2" />
+            <small class="hint">{{ t('settings.temperatureHint') }}</small>
+          </label>
+        </div>
+        <div class="row-2">
+          <label>
+            <span>{{ t('settings.maxOutput') }}</span>
+            <input type="number" v-model.number="cfg.behaviour.max_output_tokens" min="64" max="4096" />
+            <small class="hint">{{ t('settings.maxOutputHint') }}</small>
+          </label>
+          <label>
+            <span>{{ t('settings.minImp') }}</span>
+            <input type="number" v-model.number="cfg.behaviour.min_importance" step="0.05" min="0" max="1" />
+            <small class="hint">{{ t('settings.minImpHint') }}</small>
+          </label>
+        </div>
       </div>
-      <div class="row-2">
-        <label>
-          <span>{{ t('settings.maxOutput') }}</span>
-          <input type="number" v-model.number="cfg.behaviour.max_output_tokens" min="64" max="4096" />
-        </label>
-        <label>
-          <span>{{ t('settings.minImp') }}</span>
-          <input type="number" v-model.number="cfg.behaviour.min_importance" step="0.05" min="0" max="1" />
-        </label>
-      </div>
-      <div class="behaviour-switches">
-        <label class="switch">
-          <input type="checkbox" v-model="cfg.behaviour.enable_filter" />
-          <span>{{ t('settings.filter') }}</span>
-        </label>
-        <label class="switch">
-          <input type="checkbox" v-model="cfg.behaviour.enable_score" />
-          <span>{{ t('settings.score') }}</span>
-        </label>
-        <label class="switch">
-          <input type="checkbox" v-model="cfg.behaviour.enable_summarize" />
-          <span>{{ t('settings.summary') }}</span>
-        </label>
-        <label class="switch">
-          <input type="checkbox" v-model="cfg.behaviour.dry_run" />
-          <span>{{ t('settings.dryRun') }}</span>
-        </label>
+
+      <div class="settings-subsection">
+        <div class="settings-subsection-head">{{ t('settings.behaviour.headToggles') || '处理开关' }}</div>
+        <div class="behaviour-switches">
+          <label class="row-toggle">
+            <input type="checkbox" v-model="cfg.behaviour.enable_filter" />
+            <span>
+              <strong>{{ t('settings.filter') }}</strong>
+              <small>{{ t('settings.filterHint') }}</small>
+            </span>
+          </label>
+          <label class="row-toggle">
+            <input type="checkbox" v-model="cfg.behaviour.enable_score" />
+            <span>
+              <strong>{{ t('settings.score') }}</strong>
+              <small>{{ t('settings.scoreHint') }}</small>
+            </span>
+          </label>
+          <label class="row-toggle">
+            <input type="checkbox" v-model="cfg.behaviour.enable_summarize" />
+            <span>
+              <strong>{{ t('settings.summary') }}</strong>
+              <small>{{ t('settings.summaryHint') }}</small>
+            </span>
+          </label>
+          <label class="row-toggle">
+            <input type="checkbox" v-model="cfg.behaviour.dry_run" />
+            <span>
+              <strong>{{ t('settings.dryRun') }}</strong>
+              <small>{{ t('settings.dryRunHint') }}</small>
+            </span>
+          </label>
+        </div>
       </div>
     </section>
 
