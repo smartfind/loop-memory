@@ -9,7 +9,7 @@
  *      full ``loop-memory install-hooks`` pipeline and prints the
  *      resulting actions.
  */
-import { defineComponent, ref, computed } from 'https://unpkg.com/vue@3.4.38/dist/vue.esm-browser.prod.js';
+import { defineComponent, ref, computed } from './lib/vue.esm-browser.prod.js';
 import { t, toast } from '../store.js';
 
 const CLIENT_META = {

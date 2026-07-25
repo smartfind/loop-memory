@@ -7,8 +7,8 @@
  * function that hand-built HTML strings — Vue's template syntax is
  * significantly easier to scan and edit.
  */
-import { defineComponent, ref, computed, onMounted, onUnmounted, watch } from 'https://unpkg.com/vue@3.4.38/dist/vue.esm-browser.prod.js';
-import { store, t, toast, escapeHtml, fmtTime } from '../store.js';
+import { defineComponent, ref, computed, onMounted, onUnmounted, watch } from './lib/vue.esm-browser.prod.js';
+import { store, t, toast, fmtTime } from '../store.js';
 import { api } from '../api.js';
 import { WikiEditor } from './WikiEditor.js';
 

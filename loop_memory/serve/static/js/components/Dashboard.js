@@ -15,8 +15,8 @@
  *   icons inside each node, and a file-anchor strip below.
  * - WriteGuard header shows uptime (time since first audit record).
  */
-import { defineComponent, ref, computed, onMounted, onUnmounted } from 'https://unpkg.com/vue@3.4.38/dist/vue.esm-browser.prod.js';
-import { store, t, timeAgo, toast, escapeHtml, callAction } from '../store.js';
+import { defineComponent, ref, computed, onMounted, onUnmounted } from './lib/vue.esm-browser.prod.js';
+import { store, t, timeAgo, toast, escapeHtml, sanitizeHtml, callAction } from '../store.js';
 import { api } from '../api.js';
 
 const SVGNS = 'http://www.w3.org/2000/svg';
@@ -384,7 +384,8 @@ export const Dashboard = defineComponent({
       if (!weeklyReport.value) return '';
       const think = renderWeeklyThinking(weeklyReport.value.thinking);
       const body = renderWeeklyMarkdown(weeklyReport.value.markdown);
-      return think + body;
+      // Sanitize before v-html to prevent XSS
+      return sanitizeHtml(think + body);
     });
 
     onMounted(() => {

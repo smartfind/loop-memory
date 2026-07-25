@@ -11,7 +11,7 @@
  * Components DO NOT call each other directly — the App listens to user
  * events emitted by TopBar and orchestrates API calls.
  */
-import { defineComponent, ref, computed, onMounted, onUnmounted, watch, nextTick } from 'https://unpkg.com/vue@3.4.38/dist/vue.esm-browser.prod.js';
+import { defineComponent, ref, computed, onMounted, onUnmounted, watch, nextTick } from './lib/vue.esm-browser.prod.js';
 import { store, t, applyTheme, applyLang, loadI18n, toast, registerActions } from './store.js';
 import { api } from './api.js';
 

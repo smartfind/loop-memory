@@ -15,7 +15,7 @@
  * the top makes the active scope obvious. Clearing the filter (banner
  * or sidebar) restores the all-session view.
  */
-import { defineComponent, ref, computed, onMounted, watch } from 'https://unpkg.com/vue@3.4.38/dist/vue.esm-browser.prod.js';
+import { defineComponent, ref, computed, onMounted, watch } from './lib/vue.esm-browser.prod.js';
 import { store, t, escapeHtml, timeAgo, fmtTime, toast } from '../store.js';
 import { api } from '../api.js';
 
