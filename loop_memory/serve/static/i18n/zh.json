@@ -346,6 +346,8 @@
   "settings.apiKey.cleared": "API key 已清除",
   "settings.apiKey.configured": "API key 已配置",
   "settings.apiKey.confirmClear": "确认要删除已保存的 API key？",
+  "settings.apiKey.confirmClearTitle": "删除 API key",
+  "settings.apiKey.confirmClearMsg": "这将删除已保存的 API key。您需要重新粘贴才能使用大模型服务。",
   "settings.apiKey.edit": "更换",
   "settings.apiKey.empty": "请先粘贴 key",
   "settings.apiKey.hint": "仅存储在本机 (文件: ~/.loop_memory/secrets.json, 权限 0600)。除配置的 LLM 服务外，绝不上传任何地方。",

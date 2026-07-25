@@ -346,6 +346,8 @@
   "settings.apiKey.cleared": "API key removed",
   "settings.apiKey.configured": "API key configured",
   "settings.apiKey.confirmClear": "Remove the saved API key?",
+  "settings.apiKey.confirmClearTitle": "Remove API key",
+  "settings.apiKey.confirmClearMsg": "This will remove the saved API key. You will need to paste it again to use the LLM provider.",
   "settings.apiKey.edit": "Replace",
   "settings.apiKey.empty": "Paste a key first",
   "settings.apiKey.hint": "Stored locally on this machine only (file: ~/.loop_memory/secrets.json, mode 0600). Never sent anywhere except to the configured LLM provider.",
