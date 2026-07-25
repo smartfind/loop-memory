@@ -13,7 +13,9 @@ import { store, t, toast, fmtTime } from '../store.js';
 import { api } from '../api.js';
 // WikiEditor is heavy and only used when the user clicks "edit" on a
 // page — lazy-load it so the rest of Wiki stays cheap.
-const WikiEditor = defineAsyncComponent(() => import('./WikiEditor.js'));
+const WikiEditor = defineAsyncComponent(() =>
+  import('./WikiEditor.js').then(module => module.WikiEditor)
+);
 
 export const Wiki = defineComponent({
   name: 'Wiki',

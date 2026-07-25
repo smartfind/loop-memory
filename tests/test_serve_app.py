@@ -201,6 +201,18 @@ class IndexRouteTests(unittest.TestCase):
                 )
             self.assertFalse(direct & listed, f"duplicate exports in {module}: {direct & listed}")
 
+    def test_async_components_resolve_named_exports(self) -> None:
+        static_js = Path(__file__).parents[1] / "loop_memory" / "serve" / "static" / "js"
+        unresolved = re.compile(
+            r"defineAsyncComponent\(\(\)\s*=>\s*import\(['\"][^'\"]+['\"]\)\s*\)"
+        )
+        for module in static_js.rglob("*.js"):
+            source = module.read_text(encoding="utf-8")
+            self.assertIsNone(
+                unresolved.search(source),
+                f"async component in {module} must resolve its named export",
+            )
+
     def test_root_returns_index_or_404_when_no_static(self) -> None:
         store, tmp = _store()
         try:
