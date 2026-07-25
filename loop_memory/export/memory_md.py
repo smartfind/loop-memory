@@ -353,7 +353,7 @@ def import_bundle(
                 continue
             ext = d.get("external_id")
             if not ext:
-                ext = "sha1:" + hashlib.sha1(d.get("text", "").encode("utf-8")).hexdigest()[:16]
+                ext = "sha1:" + hashlib.sha1(d.get("text", "").encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
             store.upsert_memory(
                 id=d.get("id"),
                 kind=d.get("kind") or "fact",
