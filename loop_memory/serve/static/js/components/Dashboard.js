@@ -15,8 +15,8 @@
  *   icons inside each node, and a file-anchor strip below.
  * - WriteGuard header shows uptime (time since first audit record).
  */
-import { defineComponent, ref, computed, onMounted, onUnmounted } from './lib/vue.esm-browser.prod.js';
-import { store, t, timeAgo, toast, escapeHtml, sanitizeHtml, callAction } from '../store.js';
+import { defineComponent, ref, computed, onMounted, onUnmounted } from '../lib/vue.esm-browser.prod.js';
+import { store, t, timeAgo, toast, escapeHtml, sanitizeHtml, callAction, fmtNum, truncate, shortenPath, fmtDuration } from '../store.js';
 import { api } from '../api.js';
 
 const SVGNS = 'http://www.w3.org/2000/svg';
@@ -86,27 +86,9 @@ const ARCH = (() => {
   return { W, H, cx, cy, R, positions, arcs, spokes, anchors };
 })();
 
-function fmtNum(v) { return Number(v || 0).toLocaleString(); }
-function truncate(s, n = 28) {
-  if (!s) return '';
-  return s.length > n ? s.slice(0, n - 1) + '…' : s;
-}
+// fmtNum, truncate, shortenPath, fmtDuration now live in store.js (shared
+// with Timeline). Only safeArr stays local — it's a Dashboard-only guard.
 function safeArr(x) { return Array.isArray(x) ? x : []; }
-function shortenPath(s, max = 22) {
-  if (!s) return '';
-  return s.length > max ? '…' + s.slice(-(max - 1)) : s;
-}
-
-// Format a duration in seconds as "Nd Nh" / "Nh Nm" / "Nm Ns".
-function fmtDuration(sec) {
-  sec = Math.max(0, Math.floor(sec || 0));
-  const d = Math.floor(sec / 86400);
-  const h = Math.floor((sec % 86400) / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  if (d > 0) return `${d}d ${h}h`;
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
-}
 
 export const Dashboard = defineComponent({
   name: 'Dashboard',
@@ -631,6 +613,16 @@ export const Dashboard = defineComponent({
       });
     }
 
+    // Memoized derived views. These were previously plain functions invoked
+    // directly in the template (trendPoints 3x, donutArcPaths 2x with two
+    // different inputs, lifecycleSegments 2x per render). Wrapping them in
+    // computed caches the geometry between the 6s polls so we don't rebuild
+    // SVG paths on every unrelated re-render.
+    const trendPointsData = computed(() => trendPoints(insights.value?.distribution?.trend));
+    const donutArcPathsTypes = computed(() => donutArcPaths(insights.value?.distribution?.types));
+    const donutArcPathsSources = computed(() => donutArcPaths(insights.value?.sources));
+    const lifecycleSegmentsData = computed(() => lifecycleSegments(insights.value?.stages));
+
     // Uptime derived from the oldest LLM audit record (matches the
     // legacy behaviour of "server has been recording for N").
     const guardUptime = computed(() => {
@@ -721,9 +713,10 @@ export const Dashboard = defineComponent({
       KIND_TONE, STATUS_TONE, SOURCE_COLORS, STAGE_DEFS, SVGNS, ARCH,
       fmtNum, truncate, timeAgo, sparkPath, fmtDuration, shortenPath,
       guardUptime, hist, sourceIcon,
-      ring, donutArcPaths, trendPoints, ingestBars, ingestPeakHour, barsFor,
+      ring, ingestBars, ingestPeakHour, barsFor,
       scoreDistributionTotal, peakScoreRange, scoreBars,
-      sourceBars, pipelineBars, lifecycleSegments,
+      sourceBars, pipelineBars,
+      trendPointsData, donutArcPathsTypes, donutArcPathsSources, lifecycleSegmentsData,
       onRefresh: refresh,
       onRunEvolution: () => callAction('llmRun'),
     };
@@ -886,7 +879,7 @@ export const Dashboard = defineComponent({
         <span class="right">{{ t('dash.lc.totalLabel') }} {{ fmtNum(Object.values(insights.stages || {}).reduce((a,b)=>a+(b||0),0)) }}</span>
       </div>
       <div class="ins-lifecycle">
-        <div v-for="(seg, index) in lifecycleSegments(insights.stages)" :key="seg.key"
+        <div v-for="(seg, index) in lifecycleSegmentsData" :key="seg.key"
              class="ins-lc-stage" :class="{ active: seg.count > 0 }" :data-tone="seg.tone">
           <div class="ins-lc-icon" :data-tone="seg.tone">{{ seg.icon }}</div>
           <div class="ins-lc-val">{{ fmtNum(seg.count) }}</div>
@@ -896,7 +889,7 @@ export const Dashboard = defineComponent({
                class="ins-lc-flow"
                :style="{
                  '--from-tone': seg.toneColor,
-                 '--to-tone': lifecycleSegments(insights.stages)[index + 1].toneColor
+                 '--to-tone': lifecycleSegmentsData[index + 1].toneColor
                }"
                aria-hidden="true">
             <span class="ins-lc-ball p1"></span>
@@ -1074,7 +1067,7 @@ export const Dashboard = defineComponent({
           <svg class="ins-donut-svg" viewBox="0 0 130 130">
             <g transform="rotate(-90 65 65)">
               <circle cx="65" cy="65" r="46" fill="none" stroke="var(--surface-2)" stroke-width="14"></circle>
-              <circle v-for="(a, i) in donutArcPaths(insights.distribution.types)" :key="i"
+              <circle v-for="(a, i) in donutArcPathsTypes" :key="i"
                 cx="65" cy="65" r="46" fill="none"
                 :stroke="a.color" stroke-width="14"
                 :stroke-dasharray="a.dasharray" :stroke-dashoffset="a.dashoffset"></circle>
@@ -1116,11 +1109,11 @@ export const Dashboard = defineComponent({
               </linearGradient>
             </defs>
             <line x1="0" y1="132" x2="300" y2="132" class="ins-trend-axis" />
-            <path :d="trendPoints(insights.distribution.trend).area" fill="url(#dist-trend-grad)"></path>
-            <path :d="trendPoints(insights.distribution.trend).line" class="ins-trend-line" fill="none" stroke="var(--accent)" stroke-width="2"></path>
-            <g v-for="(t, i) in trendPoints(insights.distribution.trend).ticks" :key="i">
-              <circle :cx="t.x" :cy="132 - (t.value / Math.max(1, trendPoints(insights.distribution.trend).max)) * 122" r="2.4" fill="var(--accent)"></circle>
-              <text :x="t.x" :y="trendPoints(insights.distribution.trend).labelY" text-anchor="middle" font-size="9" fill="var(--text-faint)">{{ t.label }}</text>
+            <path :d="trendPointsData.area" fill="url(#dist-trend-grad)"></path>
+            <path :d="trendPointsData.line" class="ins-trend-line" fill="none" stroke="var(--accent)" stroke-width="2"></path>
+            <g v-for="(t, i) in trendPointsData.ticks" :key="i">
+              <circle :cx="t.x" :cy="132 - (t.value / Math.max(1, trendPointsData.max)) * 122" r="2.4" fill="var(--accent)"></circle>
+              <text :x="t.x" :y="trendPointsData.labelY" text-anchor="middle" font-size="9" fill="var(--text-faint)">{{ t.label }}</text>
             </g>
           </svg>
         </div>
@@ -1142,7 +1135,7 @@ export const Dashboard = defineComponent({
             <svg class="ins-src-donut" viewBox="0 0 130 130">
               <g transform="rotate(-90 65 65)">
                 <circle cx="65" cy="65" r="46" fill="none" stroke="var(--surface-2)" stroke-width="14"></circle>
-                <circle v-for="(a, i) in donutArcPaths(insights.sources)" :key="i"
+                <circle v-for="(a, i) in donutArcPathsSources" :key="i"
                   cx="65" cy="65" r="46" fill="none"
                   :stroke="a.color" stroke-width="14"
                   :stroke-dasharray="a.dasharray" :stroke-dashoffset="a.dashoffset"></circle>

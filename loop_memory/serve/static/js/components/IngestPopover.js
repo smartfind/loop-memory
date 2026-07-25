@@ -6,7 +6,7 @@
  * pick one or more of the registered loaders (codex / claude / hermes /
  * openclaw) and runs them, surfacing per-source results.
  */
-import { defineComponent, ref, computed, onMounted, onUnmounted, watch } from './lib/vue.esm-browser.prod.js';
+import { defineComponent, ref, computed, onMounted, onUnmounted, watch } from '../lib/vue.esm-browser.prod.js';
 import { store, t, toast } from '../store.js';
 import { api } from '../api.js';
 

@@ -9,7 +9,7 @@
  * component with one event-emitter for the actions (clicking "AI Run"
  * bubbles up to App which knows how to call the API).
  */
-import { defineComponent, computed, ref, onMounted, onUnmounted } from './lib/vue.esm-browser.prod.js';
+import { defineComponent, computed, ref, onMounted, onUnmounted } from '../lib/vue.esm-browser.prod.js';
 import { store, patchPrefs, toast, t, timeAgo, fmtTime } from '../store.js';
 import { IngestPopover } from './IngestPopover.js';
 import { api, ApiError } from '../api.js';

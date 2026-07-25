@@ -260,3 +260,29 @@ export function fmtTime(ts) {
   const d = new Date(Number(ts) * 1000);
   return d.toLocaleString();
 }
+
+// ---- shared numeric / string formatting helpers ----
+// Moved here from Dashboard.js so both Dashboard and Timeline (and any
+// future component) can share one implementation.
+export function fmtNum(v) { return Number(v || 0).toLocaleString(); }
+
+export function truncate(s, n = 28) {
+  if (!s) return '';
+  return s.length > n ? s.slice(0, n - 1) + '…' : s;
+}
+
+export function shortenPath(s, max = 22) {
+  if (!s) return '';
+  return s.length > max ? '…' + s.slice(-(max - 1)) : s;
+}
+
+// Format a duration in seconds as "Nd Nh" / "Nh Nm" / "Nm".
+export function fmtDuration(sec) {
+  sec = Math.max(0, Math.floor(sec || 0));
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor((sec % 86400) / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}

@@ -6,7 +6,7 @@
  * typos and create new pages. Future iterations can grow the editor
  * without rewriting the surrounding list view.
  */
-import { defineComponent, ref, computed, watch } from './lib/vue.esm-browser.prod.js';
+import { defineComponent, ref, computed, watch } from '../lib/vue.esm-browser.prod.js';
 import { store, t } from '../store.js';
 import { api } from '../api.js';
 

@@ -2,7 +2,7 @@
  * RunStrip — the bottom-of-page strip that shows when an AI distill
  * is in progress (current/total progress bar + cancel button).
  */
-import { defineComponent, computed } from './lib/vue.esm-browser.prod.js';
+import { defineComponent, computed } from '../lib/vue.esm-browser.prod.js';
 import { store, t } from '../store.js';
 
 export const RunStrip = defineComponent({

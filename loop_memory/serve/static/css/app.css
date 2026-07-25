@@ -3865,3 +3865,13 @@
     padding: 4px 10px;
     font-size: 11.5px;
   }
+
+/* Respect user's motion reduction preference */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
