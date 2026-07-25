@@ -1346,7 +1346,124 @@
     color: #1f1300;
   }
 
-  /* --- generic buttons used in drawer/forms --- */
+  /* --- Settings-drawer button system ---
+     The drawer has many buttons doing different jobs. We use four
+     visually distinct variants so the eye can rank them at a glance:
+     • .btn.primary   — the only "go" action per section (Save, Enable token,
+                        Run now). Saturated accent, soft shadow, slight lift.
+     • .btn.secondary — actions that go to a different surface or
+                        long-running work (Run compact, Preview, Reset to
+                        defaults). Tinted background, never transparent.
+     • .btn.danger    — destructive / irreversible (Clear API key,
+                        Disable token). Outline red so it stands apart from
+                        the muted neutral buttons.
+     • .btn.tertiary  — small inline helpers (eye toggle, "Clear" next to
+                        a preview). Compact, muted text, subtle border.
+     The .small modifier shaves height/padding for inline rows; :focus-visible
+     and :disabled states are shared. */
+  button { font: inherit; color: inherit; white-space: nowrap; }
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    min-height: 34px;
+    padding: 0 14px;
+    border-radius: 9px;
+    border: 1px solid transparent;
+    background: var(--surface-2);
+    color: var(--text);
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 550;
+    line-height: 1;
+    letter-spacing: .01em;
+    transition: background .15s ease, border-color .15s ease, color .15s ease,
+                box-shadow .15s ease, transform .05s ease;
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+  .btn:hover { background: var(--surface); }
+  .btn:active { transform: translateY(0.5px); }
+  .btn:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 32%, transparent);
+  }
+  .btn:disabled { opacity: .45; cursor: not-allowed; transform: none; }
+  .btn.small {
+    min-height: 28px;
+    padding: 0 10px;
+    font-size: 12px;
+    border-radius: 7px;
+  }
+
+  /* Primary — the one decisive action per section. */
+  .btn.primary {
+    background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 92%, #fff) 0%, var(--accent) 100%);
+    color: #fff;
+    border-color: color-mix(in srgb, var(--accent) 70%, #000);
+    box-shadow: 0 1px 0 rgba(255,255,255,.18) inset, 0 4px 10px -4px color-mix(in srgb, var(--accent) 60%, transparent);
+  }
+  .btn.primary:hover {
+    background: linear-gradient(180deg, var(--accent) 0%, color-mix(in srgb, var(--accent) 85%, #000) 100%);
+    box-shadow: 0 1px 0 rgba(255,255,255,.18) inset, 0 6px 14px -4px color-mix(in srgb, var(--accent) 70%, transparent);
+  }
+  .btn.primary:focus-visible {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 40%, transparent),
+                0 1px 0 rgba(255,255,255,.18) inset, 0 4px 10px -4px color-mix(in srgb, var(--accent) 60%, transparent);
+  }
+
+  /* Secondary — same height as primary so they read as a pair; tinted
+     background keeps the action visible without competing for the
+     "primary" weight. */
+  .btn.secondary {
+    background: var(--accent-soft);
+    color: var(--accent-strong);
+    border-color: color-mix(in srgb, var(--accent) 18%, var(--border));
+  }
+  .btn.secondary:hover {
+    background: color-mix(in srgb, var(--accent) 14%, var(--surface-2));
+    border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  }
+
+  /* Tertiary / ghost — inline helpers, never the section's main action. */
+  .btn.ghost, .btn.tertiary {
+    background: transparent;
+    color: var(--text-mute);
+    border-color: var(--border);
+  }
+  .btn.ghost:hover, .btn.tertiary:hover {
+    background: var(--surface-2);
+    color: var(--text);
+    border-color: color-mix(in srgb, var(--accent) 25%, var(--border));
+  }
+
+  /* Danger — destructive only. Outline style so the red is unambiguous
+     but it does not visually overpower a primary "Save". */
+  .btn.danger {
+    background: var(--surface-2);
+    color: #f43f5e;
+    border-color: color-mix(in srgb, #f43f5e 45%, var(--border));
+  }
+  .btn.danger:hover {
+    background: color-mix(in srgb, #f43f5e 10%, var(--surface-2));
+    color: #be123c;
+    border-color: #f43f5e;
+  }
+
+  /* Subtle — same family as secondary but lower contrast, used inside
+     dense rows (e.g. the Wiki page "save" chip). */
+  .btn.subtle {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-color: transparent;
+  }
+  .btn.subtle:hover { background: color-mix(in srgb, var(--accent-soft) 80%, var(--accent) 20%); }
+
+  /* Settings drawer footer — make the action row feel like a real
+     "confirm bar" by lifting the primary off the surface. */
+  .drawer-foot { gap: 10px; }
+  .drawer-foot .btn.primary { padding: 0 18px; }
+  .action-row { gap: 10px; }
+  .action-row .btn { box-shadow: 0 1px 0 rgba(0,0,0,.04) inset; }
+
   button { font: inherit; color: inherit; white-space: nowrap; }
   .btn {
     display: inline-flex; align-items: center; justify-content: center;

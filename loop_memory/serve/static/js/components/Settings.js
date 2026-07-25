@@ -644,10 +644,10 @@ export const Settings = defineComponent({
           <input :type="keyVisible ? 'text' : 'password'" v-model="cfg.api_key"
                  :placeholder="cfg.api_key_set ? t('settings.apiKey.edit') : t('settings.apiKey.placeholder')"
                  autocomplete="off" />
-          <button class="btn small ghost" @click="keyVisible = !keyVisible" type="button" :title="keyVisible ? t('common.hide') : t('common.show')">
+          <button class="btn small tertiary" @click="keyVisible = !keyVisible" type="button" :title="keyVisible ? t('common.hide') : t('common.show')">
             {{ keyVisible ? '🙈' : '👁' }}
           </button>
-          <button class="btn small ghost" v-if="cfg.api_key_set" @click="onClearKey" type="button">
+          <button class="btn small danger" v-if="cfg.api_key_set" @click="onClearKey" type="button">
             {{ t('settings.apiKey.clear') }}
           </button>
         </div>
@@ -700,7 +700,7 @@ export const Settings = defineComponent({
                 @click="onSaveIngest">
           {{ ingestSaving ? t('common.saving') : t('action.save') }}
         </button>
-        <button class="btn ghost" type="button"
+        <button class="btn secondary" type="button"
                 @click="ingestCfg.idle_seconds = ingestCfg.defaults.idle_seconds;
                         ingestCfg.poll_seconds = ingestCfg.defaults.poll_seconds"
                 :title="t('settings.ingest.resetToDefaults')">
@@ -765,7 +765,7 @@ export const Settings = defineComponent({
                 @click="onSaveStorage">
           {{ storageSaving ? t('common.saving') : t('action.save') }}
         </button>
-        <button class="btn ghost" type="button" :disabled="storageCompacting"
+        <button class="btn secondary" type="button" :disabled="storageCompacting"
                 @click="onRunCompact">
           {{ storageCompacting ? t('settings.storage.compacting') : t('settings.storage.runCompact') }}
         </button>
@@ -818,11 +818,11 @@ export const Settings = defineComponent({
                       :placeholder="t('settings.redact.previewPlaceholder')"></textarea>
           </label>
           <div class="redact-preview-actions">
-            <button class="btn small" type="button" :disabled="redactPreview.busy"
+            <button class="btn small secondary" type="button" :disabled="redactPreview.busy"
                     @click="onRunRedactPreview">
               {{ redactPreview.busy ? t('common.loading') : t('settings.redact.previewRun') }}
             </button>
-            <button class="btn small ghost" type="button" @click="clearRedactPreview"
+            <button class="btn small tertiary" type="button" @click="clearRedactPreview"
                     :disabled="!redactPreview.input && !redactPreview.output">
               {{ t('common.clear') }}
             </button>
@@ -982,7 +982,7 @@ export const Settings = defineComponent({
         <small>{{ authEnabled ? t('settings.auth.enabledHint') : t('settings.auth.disabledHint') }}</small>
       </div>
       <div class="action-row" style="margin-top:8px;">
-        <button class="btn" :class="authEnabled ? 'ghost' : 'primary'" type="button"
+        <button class="btn" :class="authEnabled ? 'danger' : 'primary'" type="button"
                 :disabled="authLoading" @click="onToggleAuth">
           {{ authLoading ? t('settings.auth.working') : authEnabled ? t('settings.auth.disable') : t('settings.auth.enable') }}
         </button>
@@ -995,7 +995,7 @@ export const Settings = defineComponent({
       <p class="sec-scope">{{ t('settings.section.actionsHint') }}</p>
       <div class="action-row" style="gap:8px;flex-wrap:wrap;">
         <button class="btn primary" type="button" @click="onRunNow">{{ t('settings.runNow') }}</button>
-        <button class="btn ghost" type="button" @click="onPreview">{{ t('settings.preview') }}</button>
+        <button class="btn secondary" type="button" @click="onPreview">{{ t('settings.preview') }}</button>
       </div>
       <div v-if="previewOpen" style="margin-top:8px;">
         <div class="preview-list">
@@ -1036,9 +1036,9 @@ export const Settings = defineComponent({
   </div>
 
   <div class="drawer-foot">
-    <button class="btn ghost" type="button" @click="onReset">{{ t('action.reset') }}</button>
+    <button class="btn secondary" type="button" @click="onReset">{{ t('action.reset') }}</button>
     <div style="flex:1"></div>
-    <button class="btn ghost" type="button" @click="onClose">{{ t('action.cancel') }}</button>
+    <button class="btn tertiary" type="button" @click="onClose">{{ t('action.cancel') }}</button>
     <button class="btn primary" type="button" :disabled="saving" @click="onSave">
       {{ saving ? t('common.saving') : t('action.save') }}
     </button>
@@ -1050,7 +1050,7 @@ export const Settings = defineComponent({
       <header class="modal-head"><h3>{{ confirmDialog.title }}</h3></header>
       <div class="modal-body">{{ confirmDialog.message }}</div>
       <footer class="modal-foot">
-        <button class="btn ghost" @click="hideConfirm">{{ t('action.cancel') }}</button>
+        <button class="btn tertiary" @click="hideConfirm">{{ t('action.cancel') }}</button>
         <button class="btn primary" @click="() => { confirmDialog.onConfirm(); hideConfirm(); }">
           {{ t('action.confirm') }}
         </button>
