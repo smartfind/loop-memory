@@ -8,9 +8,12 @@
  * significantly easier to scan and edit.
  */
 import { defineComponent, ref, computed, onMounted, onUnmounted, watch } from './lib/vue.esm-browser.prod.js';
+import { defineAsyncComponent } from '../lib/vue.esm-browser.prod.js';
 import { store, t, toast, fmtTime } from '../store.js';
 import { api } from '../api.js';
-import { WikiEditor } from './WikiEditor.js';
+// WikiEditor is heavy and only used when the user clicks "edit" on a
+// page — lazy-load it so the rest of Wiki stays cheap.
+const WikiEditor = defineAsyncComponent(() => import('./WikiEditor.js'));
 
 export const Wiki = defineComponent({
   name: 'Wiki',

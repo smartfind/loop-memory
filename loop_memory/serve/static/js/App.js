@@ -11,7 +11,7 @@
  * Components DO NOT call each other directly — the App listens to user
  * events emitted by TopBar and orchestrates API calls.
  */
-import { defineComponent, ref, computed, onMounted, onUnmounted, watch, nextTick } from './lib/vue.esm-browser.prod.js';
+import { defineComponent, defineAsyncComponent, ref, computed, onMounted, onUnmounted, watch, nextTick } from './lib/vue.esm-browser.prod.js';
 import { store, t, applyTheme, applyLang, loadI18n, toast, registerActions } from './store.js';
 import { api } from './api.js';
 
@@ -22,10 +22,11 @@ import { Timeline } from './components/Timeline.js';
 import { Dashboard } from './components/Dashboard.js';
 import { Wiki } from './components/Wiki.js';
 import { KnowledgeGraph } from './components/KnowledgeGraph.js';
-import { Settings } from './components/Settings.js';
+// Modals: lazy-loaded — only fetched the first time the user opens them.
+const Settings = defineAsyncComponent(() => import('./components/Settings.js'));
 import { RunStrip } from './components/RunStrip.js';
 import { Toast } from './components/Toast.js';
-import { Diagnostic } from './components/Diagnostic.js';
+const Diagnostic = defineAsyncComponent(() => import('./components/Diagnostic.js'));
 
 export const App = defineComponent({
   name: 'App',
@@ -247,9 +248,9 @@ export const App = defineComponent({
       <Tabs />
       <div class="tab-panes">
         <Timeline v-show="store.activeTab === 'timeline'" />
-        <Dashboard v-show="store.activeTab === 'dashboard'" />
-        <Wiki v-show="store.activeTab === 'wiki'" />
-        <KnowledgeGraph v-show="store.activeTab === 'graph'"
+        <Dashboard v-if="store.activeTab === 'dashboard'" />
+        <Wiki v-if="store.activeTab === 'wiki'" />
+        <KnowledgeGraph v-if="store.activeTab === 'graph'"
                         @open-wiki="onOpenWiki" />
       </div>
     </main>
