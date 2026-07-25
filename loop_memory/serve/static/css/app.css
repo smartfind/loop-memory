@@ -3835,8 +3835,11 @@
     display: flex;
     flex-direction: column;
     align-self: start;
+    margin-top: 22px;
     gap: 2px;
-    padding: 7px 10px;
+    min-height: 30px;
+    padding: 6px 10px;
+    box-sizing: border-box;
     border: 1px solid var(--border);
     border-radius: 8px;
     background: var(--surface-2);
