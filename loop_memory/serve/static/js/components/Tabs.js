@@ -5,7 +5,7 @@
  * to it. URL `?tab=` is read on app boot and written back when the user
  * switches, so a deep-link to a specific view round-trips.
  */
-import { defineComponent, computed, watch } from './lib/vue.esm-browser.prod.js';
+import { defineComponent, computed, watch } from '../lib/vue.esm-browser.prod.js';
 import { store, t } from '../store.js';
 
 export const Tabs = defineComponent({

@@ -15,8 +15,8 @@
  * the top makes the active scope obvious. Clearing the filter (banner
  * or sidebar) restores the all-session view.
  */
-import { defineComponent, ref, computed, onMounted, watch } from './lib/vue.esm-browser.prod.js';
-import { store, t, escapeHtml, timeAgo, fmtTime, toast } from '../store.js';
+import { defineComponent, ref, computed, onMounted, watch } from '../lib/vue.esm-browser.prod.js';
+import { store, t, timeAgo, fmtTime, toast } from '../store.js';
 import { api } from '../api.js';
 
 const KIND_ICON = {
@@ -148,7 +148,6 @@ export const Timeline = defineComponent({
       activeSessionInfo,
       refresh, resetFilters, onClearSession, onSearchSubmit, scoreFmt, kindIcon, isPolished,
       onCopy, onClickMemory, timeAgo, fmtTime, KIND_ICON,
-      escapeHtml,
     };
   },
   template: /* html */ `

@@ -10,7 +10,7 @@
  * - Drawer foot has Reset / Cancel / Save buttons (legacy parity).
  * - Schedule includes weekday selector (visible when mode=weekly).
  */
-import { defineComponent, ref, computed, onMounted, watch, reactive } from './lib/vue.esm-browser.prod.js';
+import { defineComponent, ref, computed, onMounted, watch, reactive } from '../lib/vue.esm-browser.prod.js';
 import { store, t, toast, fmtTime, callAction } from '../store.js';
 import { api, ApiError, setAuthToken } from '../api.js';
 
