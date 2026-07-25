@@ -1584,9 +1584,11 @@
      sections feel consistent. */
   .sec-redact .row-toggle,
   .sec-storage .row-toggle {
-    display: flex;
-    align-items: flex-start;
-    gap: 9px;
+    display: grid;
+    grid-template-columns: 16px minmax(0, 1fr);
+    align-items: start;
+    column-gap: 9px;
+    row-gap: 3px;
     padding: 9px 10px;
     margin: 6px 0;
     border: 1px solid var(--border);
@@ -1607,12 +1609,12 @@
   }
   .sec-redact .row-toggle > span,
   .sec-storage .row-toggle > span {
-    flex: 1;
-    min-width: 0;
-    margin: 0;
+    display: contents;
   }
   .sec-redact .row-toggle strong,
   .sec-storage .row-toggle strong {
+    grid-column: 2;
+    min-width: 0;
     display: block;
     font-size: 12.5px;
     color: var(--text);
@@ -1620,6 +1622,8 @@
   }
   .sec-redact .row-toggle small,
   .sec-storage .row-toggle small {
+    grid-column: 1 / -1;
+    min-width: 0;
     display: block;
     font-size: 11px;
     color: var(--text-faint);
