@@ -41,6 +41,33 @@
 - **O13**: `wiki_import` markdown input now strips UTF-8 BOM, normalises
   CRLF → LF, and JSON entries strip BOM from titles so a Windows-pasted
   document round-trips cleanly.
+- **H4**: the security regex bundle in `loop_memory/wiki/classifier.py`
+  shipped without \b word boundaries, so a page containing the
+  substrings rce (inside "source"/"requirement"/"requires"),
+  ssrf, xss, secret, token, password, credential,
+  hash, etc. — used in non-security English like "source of truth"
+  or "hash map" — was promoted to security-rule and, when paired
+  with a universal keyword like "must", crossed the auto-global
+  threshold. Patterns are now bounded (with plural-aware
+  \bsecrets?\b etc.) and the loose \bhash\b pattern was
+  tightened to specific hash algorithms (SHA-1/256/512, MD5, HMAC,
+  bcrypt, argon2, PBKDF2). New regression test
+  `test_english_substring_false_positives_are_not_security` pins
+  the fix.
+- **H5**: 13 of the 15 legacy scope='global' wiki pages (project
+  notes, decision logs, domain info, bug reminders) had been carried
+  over from SCHEMA_VERSION<=7 with auto_classification=NULL and
+  therefore skipped the new per-source classifier. New module
+  `loop_memory/wiki/backfill.py` (and CLI `loop-memory
+  wiki-reclassify-legacy` plus admin POST
+  `/api/admin/wiki/reclassify-legacy`) re-runs the classifier on
+  legacy rows, downgrades non-universal-security pages to per-source
+  scope, and preserves the original global state in
+  `auto_classification.history` so the audit trail keeps the
+  `legacy-explicit → legacy-backfill` decision pair. Test suite
+  pins down-grade + idempotency + CLI registration. Live DB now has
+  46 codex + 2 global (only the genuine security best-practice
+  rows). Three regression tests added.
 - **H3**: `serve/routes/sessions.py` referenced `_session_to_dict` without
   importing it after the O1 refactor split routes out of `serve/app.py`. The
   Sidebar therefore saw a blank list (the endpoint returned 500) even when

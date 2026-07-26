@@ -946,4 +946,32 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None) 
         return {"ok": True, "schedule": sched, "warnings": warnings}
 
 
+    @app.post("/api/admin/wiki/reclassify-legacy")
+    def wiki_reclassify_legacy_endpoint(body: dict | None = None):
+        """Re-classify legacy wiki pages and downgrade non-universal
+        security rows to per-source scope. Read-only with
+        body.dry_run=true; otherwise persists scope changes
+        in-place. Audit history is preserved on every touched row
+        so the front-end classification history view still works."""
+        body = body or {}
+        dry = bool(body.get("dry_run", False))
+        batch = int(body.get("batch", 500))
+        if dry:
+            pages = store.list_wiki_pages(limit=batch)
+            legacy = [
+                p for p in pages
+                if (p.get("scope") or "global") == "global"
+                and p.get("auto_classification") is None
+            ]
+            return {
+                "dry_run": True,
+                "scanned": len(pages),
+                "legacy_global": len(legacy),
+                "items": [{"slug": p["slug"], "title": p.get("title")}
+                           for p in legacy],
+            }
+        from ...wiki import reclassify_legacy_pages
+        return reclassify_legacy_pages(store, batch=batch)
+
+
     # ---- wiki pages -----------------------------------------------------

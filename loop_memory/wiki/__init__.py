@@ -36,3 +36,6 @@ __all__ = [
     "parse_scope",
     "source_token",
 ]
+
+from .backfill import reclassify_legacy_pages
+__all__.append("reclassify_legacy_pages")

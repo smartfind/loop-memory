@@ -94,6 +94,7 @@ COMMANDS = {
     "graph-edge": cognitive_cmd.run_graph_edge,
     "subgraph": cognitive_cmd.run_subgraph,
     "graph-rebuild": cognitive_cmd.run_graph_rebuild,
+    "wiki-reclassify-legacy": cognitive_cmd.run_wiki_reclassify_legacy,
 }
 
 

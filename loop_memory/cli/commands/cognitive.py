@@ -76,6 +76,15 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("graph-rebuild", help="Rebuild the entity graph")
 
+    rc = sub.add_parser(
+        "wiki-reclassify-legacy",
+        help=("Re-classify legacy wiki pages whose auto_classification is NULL; "
+              "downgrade non-universal-security pages to per-source scope."))
+    rc.add_argument("--batch", type=int, default=500,
+                    help="Maximum rows to scan (default 500)")
+    rc.add_argument("--dry-run", action="store_true",
+                    help="Report what would change without persisting")
+
     return p
 
 
@@ -170,3 +179,27 @@ def run_graph_rebuild(args: list) -> int:
     KnowledgeGraph(s).rebuild(clear=True)
     n = s.rebuild_entity_mentions()
     return _emit({"entity_mentions": n})
+
+
+def run_wiki_reclassify_legacy(args: list) -> int:
+    p = _build_parser()
+    db = os.environ.get("LOOP_MEMORY_DB", DEFAULT_DB)
+    ns = p.parse_args(["--db", db, "wiki-reclassify-legacy", *args])
+    s = MemoryStore(ns.db)
+    from ...wiki import reclassify_legacy_pages
+    if ns.dry_run:
+        pages = s.list_wiki_pages(limit=ns.batch)
+        legacy = [
+            p for p in pages
+            if (p.get("scope") or "global") == "global"
+            and p.get("auto_classification") is None
+        ]
+        return _emit({
+            "dry_run": True,
+            "scanned": len(pages),
+            "legacy_global": len(legacy),
+            "items": [{"slug": p["slug"], "title": p.get("title")}
+                      for p in legacy],
+        })
+    summary = reclassify_legacy_pages(s, batch=ns.batch)
+    return _emit(summary)
