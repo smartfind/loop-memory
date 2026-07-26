@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 
 from ...storage.sqlite_store import MemoryStore
-from ._shared import _memory_to_dict, _export_safe_segment
+from ._shared import _memory_to_dict, _session_to_dict, _export_safe_segment
 
 
 def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None) -> None:

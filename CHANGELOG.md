@@ -41,6 +41,15 @@
 - **O13**: `wiki_import` markdown input now strips UTF-8 BOM, normalises
   CRLF → LF, and JSON entries strip BOM from titles so a Windows-pasted
   document round-trips cleanly.
+- **H3**: `serve/routes/sessions.py` referenced `_session_to_dict` without
+  importing it after the O1 refactor split routes out of `serve/app.py`. The
+  Sidebar therefore saw a blank list (the endpoint returned 500) even when
+  the store had dozens of records. The helper now re-exports through
+  `routes/_shared.py` alongside `_memory_to_dict` / `_split_think`, and a
+  new regression test pins the contract. `serve/routes/system.py` had the
+  same class of bug for `DEFAULT_DB`; both files now import what they use.
+  Net: 12 public read endpoints exercised against an in-memory store now
+  return 200 instead of 5xx.
 - **H2**: `_is_public_path` in the auth middleware folded `/static/` and
   `/api/memories/{id}` into a single branch returning False, so a token
   configured after first boot immediately returned 401 on every JS / CSS

@@ -18,6 +18,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from ...serve.handlers import pipeline_stage_items
 from ...serve.handlers import pipeline_dashboard
+from ...cli._common import DEFAULT_DB
 
 from ...storage.sqlite_store import MemoryStore
 from ._shared import _memory_to_dict, _export_safe_segment

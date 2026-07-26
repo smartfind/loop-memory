@@ -321,6 +321,36 @@ class SecurityHeadersTests(ServeAppSmokeTests):
         r_prot = client.post("/api/admin/consolidate")
         self.assertEqual(r_prot.status_code, 401)
 
+    def test_sessions_routes_import_session_to_dict(self) -> None:
+        """Audit H3: /api/sessions once returned 500 because
+        serve/routes/sessions.py referenced _session_to_dict
+        without importing it after the O1 refactor split the routes
+        out of serve/app.py. The Sidebar therefore appeared empty
+        even when the store had dozens of records. This test seeds a
+        session, hits the route, and asserts 200 + non-empty list —
+        catching the regression even if a future move of the helper
+        forgets to update the re-export."""
+        from loop_memory.storage.sqlite_store import MemoryStore
+        store = MemoryStore(str(self.tmp / "db.sqlite"))
+        store.upsert_session(
+            source="codex", external_id="audit-h3",
+            title="audit h3 fixture", started_at=1.0,
+            ended_at=2.0, message_count=3,
+        )
+        from fastapi.testclient import TestClient
+        from loop_memory.serve.app import create_app
+        client = TestClient(create_app(store))
+        r = client.get("/api/sessions?limit=10")
+        self.assertEqual(r.status_code, 200)
+        data = r.json()
+        self.assertIsInstance(data, list)
+        self.assertGreaterEqual(len(data), 1)
+        # Per-source counts come from a sibling closure; make sure it
+        # stays reachable so the sidebar pills keep lighting up.
+        r2 = client.get("/api/sessions/counts")
+        self.assertEqual(r2.status_code, 200)
+        self.assertGreaterEqual(r2.json()["all"]["sessions"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -12,9 +12,12 @@ from __future__ import annotations
 import re
 from typing import Any, Optional
 
-from ..handlers import memory_to_dict as _memory_to_dict  # noqa: F401
+from ..handlers import (
+    memory_to_dict as _memory_to_dict,  # noqa: F401
+    session_to_dict as _session_to_dict,  # noqa: F401
+)
 
-__all__ = ["_memory_to_dict", "_export_safe_segment"]
+__all__ = ["_memory_to_dict", "_session_to_dict", "_export_safe_segment"]
 
 
 _THINK_RE = re.compile(r"<(think|reasoning)>(.*?)</\1>", re.DOTALL)
