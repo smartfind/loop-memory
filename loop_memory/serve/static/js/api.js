@@ -112,6 +112,8 @@ export const api = {
   resolveWikiContradiction: (pageId) => fetchJSON(`/api/wiki/${pageId}/resolve`, { method: 'POST' }),
   createWiki:     (payload) => fetchJSON('/api/wiki', { method: 'POST', body: payload }),
   updateWiki:     (id, payload) => fetchJSON(`/api/wiki/${id}`, { method: 'PUT', body: payload }),
+  classifyWiki:   (payload) => fetchJSON('/api/wiki/classify', { method: 'POST', body: payload }),
+  wikiClassificationHistory: (id) => fetchJSON(`/api/wiki/${id}/classification-history`),
   deleteWiki:     (id) => fetchJSON(`/api/wiki/${id}`, { method: 'DELETE' }),
   // Bulk-set ``scope`` on one or many wiki pages in a single
   // round-trip. ``payload.page_ids`` is optional — omitting it

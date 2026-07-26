@@ -220,30 +220,9 @@ export function escapeHtml(s) {
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
-// ---- HTML sanitizer for v-html (XSS protection) ----
-// Minimal allowlist sanitizer — only permits safe Markdown-rendered tags.
-// Strips all event handlers, javascript: URLs, and dangerous attributes.
-const _SANITIZE_RE = /<(\/?)(script|style|iframe|object|embed|form|input|button|select|textarea|a\s+[^>]*href\s*=\s*["']?javascript:[^>]*|svg\s+[^>]*>|math\s+[^>]*>)|(\s+on\w+\s*=|javascript:)|(<\/?[a-z][^>]*\s+[^>]*>)/gi;
-
-export function sanitizeHtml(dirty) {
-  if (dirty == null) return '';
-  let s = String(dirty);
-  // Step 1: Remove script, style, iframe, object, embed, form tags entirely
-  s = s.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
-  s = s.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
-  s = s.replace(/<iframe[^>]*>[\s\S]*?<\/iframe>/gi, '');
-  s = s.replace(/<object[^>]*>[\s\S]*?<\/object>/gi, '');
-  s = s.replace(/<embed[^>]*>/gi, '');
-  s = s.replace(/<form[^>]*>[\s\S]*?<\/form>/gi, '');
-  // Step 2: Remove on* event handlers and javascript: URLs from tags
-  s = s.replace(/\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*)/gi, '');
-  s = s.replace(/href\s*=\s*["']?\s*javascript:[^"'\s>]+/gi, 'href="#"');
-  // Step 3: Remove svg/math elements with event handlers (common XSS vector)
-  s = s.replace(/<(svg|math)[^>]*>[\s\S]*?<\/\1>/gi, '');
-  // Step 4: Remove data: URLs except for safe image types
-  s = s.replace(/src\s*=\s*["']?\s*data:(?!image\/(png|jpeg|jpg|gif|webp)):[^"'\s>]+/gi, 'src="#"');
-  return s;
-}
+// Sanitizer lives in its own module so tests can drive it
+// without pulling in the Vue runtime. See lib/sanitize.js.
+export { sanitizeHtml } from './lib/sanitize.js';
 
 export function timeAgo(ts) {
   if (!ts) return '—';

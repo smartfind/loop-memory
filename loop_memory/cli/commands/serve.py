@@ -18,6 +18,30 @@ def run_serve(args) -> int:
     if "--host" in args:
         i = args.index("--host")
         host = args[i + 1]
+    # Audit O9: warn loudly when binding outside loopback. By default
+    # the server only listens on 127.0.0.1; non-loopback binds expose
+    # the auth-protected but still-trusting endpoints (ingest, secrets,
+    # wiki import, etc.) to anyone on the network. The user must opt
+    # in by typing --host explicitly AND acknowledge the warning.
+    import sys
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        print(
+            "\n!! WARNING: loop-memory is binding to %r, which is\n"
+            "   reachable from other hosts on your network.\n"
+            "   Anyone who can reach this port can:\n"
+            "     * read every memory stored in this DB,\n"
+            "     * write / delete memories,\n"
+            "     * trigger ingest and consolidation,\n"
+            "     * read / write wiki pages,\n"
+            "     * configure LLM provider + API keys via /api/admin/*,\n"
+            "   unless you also created an auth token (POST\n"
+            "   /api/admin/auth/token). A token *only* protects the\n"
+            "   browser; non-browser clients (curl, MCP) can still\n"
+            "   mutate state unless they too send a Bearer header.\n"
+            "   Press Ctrl-C now unless you know what you are doing.\n"
+            % host,
+            file=sys.stderr,
+        )
     from ...serve.app import serve as _serve
     print(f"[loop-memory] serving UI on http://{host}:{port}")
     print(f"[loop-memory] db = {DEFAULT_DB}")

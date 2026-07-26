@@ -1,5 +1,58 @@
 ## [Unreleased]
 
+### Security & hardening (audit 2026-07-25)
+- **Wiki scope auto-classification**: new and newly-distilled pages now run a
+  local explainable security classifier. Universal security best practices
+  can be promoted to `global`; personal, project-specific, and other pages
+  default to their evidence client. Explicit scopes and existing pages remain
+  authoritative. Decisions are persisted in `auto_classification`, with
+  `POST /api/wiki/classify`, `GET /api/wiki/{id}/classification-history`, and
+  `GET/PUT /api/admin/wiki/scope` for preview, audit, and configuration.
+- **H1**: `POST /api/admin/ingest` was shadowed by an orphan decorator
+  pinned to `ingest_config_get`, so the manual ingest button in the
+  UI silently returned the watcher-cadence JSON. Fixed and pinned by
+  `tests/test_admin_ingest_route.py`.
+- **M1**: replaced the regex-based `sanitizeHtml` in the SPA with a
+  DOMParser + tag/attribute allowlist + URL-scheme scrubber
+  (`serve/static/js/lib/sanitize.js`). Defeats `javascript:` variants
+  with HTML-entity encoding, mixed case, embedded tabs / newlines, and
+  vbscript:/file: schemes. Bypass suite in `tests-js/test_sanitize.test.mjs`
+  covers 15 negative cases + 8 positive.
+- **M2**: `wiki_export` and `wiki_page_export` now run titles / summaries
+  through `_export_safe_segment` so a malicious `Title\n## Pwned` cannot
+  inject a second heading into the exported markdown (which would corrupt
+  imports and feed future wiki-preview XSS sinks).
+- **M3**: the API key fingerprint (last-4 + 6-char sha1) is no longer
+  persisted to the `settings` table; it's a response-only field. The
+  persistent 36-bit brute-force target is gone.
+- **M4**: `DELETE /api/admin/auth/token` now *rotates* to a fresh token
+  instead of removing it, so the server can never silently return to
+  the "no auth required" state once a token has been issued.
+- **Latent bug fix**: `auth_middleware` had `from … import _J` (JSONResponse)
+  inside a conditional branch, hitting `UnboundLocalError` on the second
+  return path. Hoisted to the function top.
+- **O7**: `wiki_import` now caps body size at 5 MB (markdown) and 5000 pages
+  per request (json). Both return 413.
+- **O9**: `loop-memory serve --host` non-loopback binds now print a
+  multi-line security warning listing the things that become network-reachable.
+- **O11**: new `GET /api/memories/page?before_id=&after_id=&limit=` route
+  with stable cursor pagination, so the UI can load 100k-row memory
+  stores without fetching 100k rows in one request. Unknown cursor → 404.
+- **O13**: `wiki_import` markdown input now strips UTF-8 BOM, normalises
+  CRLF → LF, and JSON entries strip BOM from titles so a Windows-pasted
+  document round-trips cleanly.
+- **H2**: `_is_public_path` in the auth middleware folded `/static/` and
+  `/api/memories/{id}` into a single branch returning False, so a token
+  configured after first boot immediately returned 401 on every JS / CSS
+  asset and the entire UI rendered as a blank page. Static assets are now
+  always public; the comment in the original code ("GET
+  /api/memories/{id} is not public") only ever applied to memories. New
+  test `SecurityHeadersTests.test_static_paths_remain_public_when_auth_enabled`
+  pins the contract.
+- **M4 test** exposed the latent UnboundLocalError: `from … import …` inside
+  a branch binds the name as implicit-local for the whole function, so
+  any second reference fails before the branch ever runs.
+
 ### Settings drawer — UX pass
 - **Security section** now ships a clear "Enabled / Disabled" status line plus a
   one-line hint explaining what a bearer token does on this machine, instead
@@ -166,7 +219,9 @@ Closes the four gaps the article《LangChain、AgentScope、Mem0 深度横评：
   payload drop at L0 vs L2.
 
 ### Per-client wiki scope
-- New `wiki_pages.scope` column (default `'global'`). `'codex'`,
+- New `wiki_pages.scope` column. Legacy rows retain their existing
+  `'global'` value; auto-routed new pages use their evidence client unless
+  the security classifier promotes them. `'codex'`,
   `'claude'`, `'hermes'`, `'openclaw'`, or any comma-combination
   like `'codex,claude'`. Pages outside the caller's scope are
   filtered during recall but pages with scope `'global'` are visible

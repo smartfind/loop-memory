@@ -125,10 +125,11 @@ CREATE TABLE IF NOT EXISTS entity_mentions (
 CREATE INDEX IF NOT EXISTS idx_em_entity  ON entity_mentions(entity_id);
 CREATE INDEX IF NOT EXISTS idx_em_memory  ON entity_mentions(memory_id);
 
--- Scope column on wiki_pages: 'global' (default, current behavior) or
--- a comma-separated list of source names like 'codex,claude' meaning
--- only those sources should see this page during recall. We default
--- existing rows to 'global' on migration. SQLite has no
+-- Scope column on wiki_pages: 'global' or a comma-separated list of
+-- source names like 'codex,claude' meaning only those sources should
+-- see this page during recall. Existing rows are kept global on
+-- migration; write paths may apply the local auto-scope evaluator.
+-- SQLite has no
 -- 'ADD COLUMN IF NOT EXISTS', so the migration is wrapped in a
 -- guard in `_init_schema` that checks pragma_table_info first.
 -- (The CREATE INDEX below IS idempotent.)
@@ -214,9 +215,10 @@ CREATE TABLE IF NOT EXISTS wiki_pages (
     created_at      REAL NOT NULL,
     updated_at      REAL NOT NULL,
     key_facts       TEXT,           -- JSON array of single-sentence facts
-    contradicting_ids TEXT          -- JSON array of wiki page ids this page
-                                     -- contradicts; populated by the
-                                     -- contradiction detector on write.
+    contradicting_ids TEXT,         -- JSON array of wiki page ids this page
+                                    -- contradicts; populated by the
+                                    -- contradiction detector on write.
+    auto_classification TEXT        -- JSON audit of automatic scope routing
 );
 CREATE INDEX IF NOT EXISTS idx_wiki_updated  ON wiki_pages(updated_at);
 CREATE INDEX IF NOT EXISTS idx_wiki_import   ON wiki_pages(importance);
@@ -442,7 +444,7 @@ class MemoryStore:
     The zero-dep claim holds — Python ships with sqlite3 and struct.
     """
 
-    SCHEMA_VERSION = "7"
+    SCHEMA_VERSION = "8"
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path).expanduser()
@@ -485,6 +487,9 @@ class MemoryStore:
                 c.execute("ALTER TABLE wiki_pages ADD COLUMN key_facts TEXT")
             if "contradicting_ids" not in cols:
                 c.execute("ALTER TABLE wiki_pages ADD COLUMN contradicting_ids TEXT")
+            if "auto_classification" not in cols:
+                c.execute("ALTER TABLE wiki_pages ADD COLUMN auto_classification TEXT")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_wiki_scope ON wiki_pages(scope)")
 
             # Universal Agent Memory migration: add per-agent identity
             # columns to memories. Bumping SCHEMA_VERSION from "5" → "6"
@@ -1037,6 +1042,75 @@ class MemoryStore:
             ).fetchall()
             return [self._row_to_memory(r) for r in rows]
 
+    def list_memories_cursor(
+        self,
+        limit: int = 100,
+        before_id: str | None = None,
+        after_id: str | None = None,
+        session_id: str | None = None,
+        source: str | None = None,
+        kind: str | None = None,
+        min_score: float | None = None,
+    ) -> tuple[list, str | None, str | None]:
+        """Cursor-paginated memory list (audit O11).
+
+        Returns ``(rows, next_before_id, next_after_id)`` so the UI
+        can request additional pages with a stable, opaque cursor
+        (the memory id of the boundary row) instead of an offset
+        that breaks when new rows are inserted.
+
+        ``before_id`` returns rows strictly older than that id;
+        ``after_id`` returns rows strictly newer than that id. Both
+        default to ``None`` (start from the most-recent / oldest row
+        respectively).
+        """
+        with self._conn() as c:
+            cursor_ts = None
+            if before_id:
+                row = c.execute(
+                    "SELECT created_at FROM memories WHERE id = ?",
+                    (before_id,),
+                ).fetchone()
+                if row is None:
+                    raise ValueError(f"before_id not found: {before_id}")
+                cursor_ts = row["created_at"]
+            elif after_id:
+                row = c.execute(
+                    "SELECT created_at FROM memories WHERE id = ?",
+                    (after_id,),
+                ).fetchone()
+                if row is None:
+                    raise ValueError(f"after_id not found: {after_id}")
+                cursor_ts = row["created_at"]
+            clauses: list[str] = []
+            params: list = []
+            if session_id:
+                clauses.append("session_id = ?"); params.append(session_id)
+            if source:
+                clauses.append("source = ?"); params.append(source)
+            if kind:
+                clauses.append("kind = ?"); params.append(kind)
+            if min_score is not None:
+                clauses.append("score >= ?"); params.append(min_score)
+            if before_id and cursor_ts is not None:
+                clauses.append("created_at < ?"); params.append(cursor_ts)
+            if after_id and cursor_ts is not None:
+                clauses.append("created_at > ?"); params.append(cursor_ts)
+            where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+            order = "ASC" if after_id else "DESC"
+            rows = c.execute(
+                f"SELECT * FROM memories {where} ORDER BY created_at {order} LIMIT ?",
+                (*params, limit),
+            ).fetchall()
+            mems = [self._row_to_memory(r) for r in rows]
+            if after_id:
+                next_before_id = None
+                next_after_id = mems[-1].id if mems else None
+            else:
+                next_before_id = mems[-1].id if mems else None
+                next_after_id = None
+            return mems, next_before_id, next_after_id
+
     def find_memory_by_external_id(
         self,
         agent_id: str,
@@ -1139,7 +1213,8 @@ class MemoryStore:
 
     def recall(self, query: str, limit: int = 12,
                include: tuple[str, ...] = ("memories", "wiki", "entities"),
-               bump_signals: bool = True) -> dict[str, list[dict]]:
+               bump_signals: bool = True,
+               source: str | None = None) -> dict[str, list[dict]]:
         """Unified recall — returns a dict with three ranked lists.
 
         Each result is tagged with its ``kind`` ("memory" | "wiki" |
@@ -1205,16 +1280,25 @@ class MemoryStore:
                 body_clause, body_params = self._like_clause("body", tokens)
                 sum_clause, sum_params = self._like_clause("summary", tokens)
                 tag_clause, tag_params = self._like_clause("tags", tokens)
+                scope_sql = ""
+                scope_params: list[str] = []
+                if source:
+                    scope_token = self._source_token(source)
+                    if scope_token:
+                        scope_sql = " AND (scope IN ('global', 'all') OR instr(','||scope||',', ?) > 0)"
+                        scope_params.append("," + scope_token + ",")
                 sql = (
                     "SELECT id, slug, title, body, summary, importance, tags, "
                     "updated_at, version "
                     "FROM wiki_pages "
-                    f"WHERE {clause} OR {body_clause} OR {sum_clause} OR {tag_clause} "
+                    f"WHERE ({clause} OR {body_clause} OR {sum_clause} OR {tag_clause})"
+                    f"{scope_sql} "
                     "ORDER BY importance DESC, updated_at DESC "
                     "LIMIT ?"
                 )
                 rows = c.execute(
-                    sql, (*params, *body_params, *sum_params, *tag_params, limit * 3)
+                    sql,
+                    (*params, *body_params, *sum_params, *tag_params, *scope_params, limit * 3),
                 ).fetchall()
                 for r in rows:
                     tags = []
@@ -1560,7 +1644,7 @@ class MemoryStore:
                 rows = c.execute(
                     "SELECT id, title, body, summary, importance, updated_at, scope "
                     "FROM wiki_pages "
-                    "WHERE scope='global' OR instr(','||scope||',', ?) > 0 "
+                    "WHERE scope IN ('global', 'all') OR instr(','||scope||',', ?) > 0 "
                     "ORDER BY (COALESCE(importance,0)*0.6 + 0.4) DESC, updated_at DESC LIMIT ?",
                     ("," + tok + ",", top_k),
                 ).fetchall()
@@ -2028,9 +2112,11 @@ class MemoryStore:
         importance: float = 0.5,
         evidence_ids: list[str] | None = None,
         run_id: str | None = None,
-        scope: str = "global",
+        scope: str | None = None,
         key_facts: list[str] | None = None,
         contradicting_ids: list[str] | None = None,
+        auto_classification: dict | str | None = None,
+        source_hint: str | None = None,
     ) -> Dict[str, Any]:
         """Create-or-update a wiki page by slug.
 
@@ -2039,7 +2125,10 @@ class MemoryStore:
 
         ``key_facts`` and ``contradicting_ids`` are optional JSON-array
         columns (see ``_init_schema``). Older callers pass neither
-        and the columns stay NULL.
+        and the columns stay NULL. When a new row omits ``scope``, the
+        local wiki classifier chooses ``global`` only for universal
+        security guidance; otherwise it derives a client scope from the
+        evidence or falls back to ``codex``. Existing rows preserve scope.
         """
         import json as _json
         import uuid as _uuid
@@ -2048,21 +2137,100 @@ class MemoryStore:
         evid_json = _json.dumps(evidence_ids or [], ensure_ascii=False)
         kf_json = _json.dumps(key_facts or [], ensure_ascii=False) if key_facts is not None else None
         ci_json = _json.dumps(contradicting_ids or [], ensure_ascii=False) if contradicting_ids is not None else None
+        if isinstance(scope, str) and not scope.strip():
+            scope = None
+        if isinstance(scope, str) and scope.strip().lower() == "auto":
+            scope = None
+        if isinstance(auto_classification, dict) and scope is None:
+            applied_scope = auto_classification.get("scope_applied")
+            if applied_scope:
+                scope = str(applied_scope).strip().lower() or None
         with self._conn() as c:
             existing = c.execute(
-                "SELECT id, version FROM wiki_pages WHERE slug=?", (slug,)
+                "SELECT id, version, scope, auto_classification FROM wiki_pages WHERE slug=?", (slug,)
             ).fetchone()
+            ac_json = None
+            if isinstance(auto_classification, str):
+                ac_json = auto_classification
+            elif auto_classification is not None:
+                ac_json = _json.dumps(auto_classification, ensure_ascii=False)
+            if ac_json is None:
+                from ..wiki.classifier import classify_page
+                from ..wiki.scope import (
+                    auto_scope_config,
+                    build_scope_audit,
+                    derive_scope_from_sources,
+                )
+
+                scope_cfg = auto_scope_config(self)
+                evidence_sources: list[str] = []
+                evidence_values = [str(value) for value in (evidence_ids or []) if str(value).strip()]
+                if evidence_values:
+                    placeholders = ",".join("?" for _ in evidence_values)
+                    source_rows = c.execute(
+                        f"SELECT source FROM memories WHERE id IN ({placeholders})",
+                        evidence_values,
+                    ).fetchall()
+                    evidence_sources = [
+                        str(row["source"] or "").strip()
+                        for row in source_rows
+                        if row["source"]
+                    ]
+                classification = classify_page(
+                    title=title,
+                    body=body,
+                    summary=summary or "",
+                    tags=tags or [],
+                    evidence_sources=evidence_sources,
+                    mode=scope_cfg["mode"] if scope_cfg["enabled"] else "off",
+                )
+                if existing is None:
+                    if scope is not None:
+                        effective_scope = scope
+                        decision = "explicit"
+                    elif scope_cfg["enabled"] and classification.auto_global:
+                        effective_scope = "global"
+                        decision = "auto-global"
+                    else:
+                        effective_scope = derive_scope_from_sources(
+                            source_hint=source_hint,
+                            evidence_sources=evidence_sources,
+                        )
+                        decision = "default-source"
+                    if scope is None:
+                        scope = effective_scope
+                else:
+                    effective_scope = scope if scope is not None else (existing["scope"] or "global")
+                    decision = "explicit" if scope is not None else "preserved-existing"
+                existing_audit = None
+                if existing is not None and existing["auto_classification"]:
+                    try:
+                        parsed_audit = _json.loads(existing["auto_classification"])
+                        if isinstance(parsed_audit, dict):
+                            existing_audit = parsed_audit
+                    except (ValueError, TypeError):
+                        existing_audit = None
+                audit = build_scope_audit(
+                    classification,
+                    scope=effective_scope,
+                    decision=decision,
+                    source_hint=source_hint,
+                    enabled=bool(scope_cfg["enabled"]),
+                    mode=str(scope_cfg["mode"]),
+                    existing={"auto_classification": existing_audit} if existing_audit else None,
+                )
+                ac_json = _json.dumps(audit, ensure_ascii=False)
             if existing is None:
                 pid = _uuid.uuid4().hex
                 version = 1
                 c.execute(
                     "INSERT INTO wiki_pages(id, slug, title, body, summary, tags, "
                     "importance, evidence_ids, run_id, version, created_at, updated_at, scope, "
-                    "key_facts, contradicting_ids) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "key_facts, contradicting_ids, auto_classification) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (pid, slug, title, body, summary or "", tags_json,
                      float(importance), evid_json, run_id, version, now, now,
-                     scope or "global", kf_json, ci_json),
+                     scope or "global", kf_json, ci_json, ac_json),
                 )
             else:
                 pid = existing["id"]
@@ -2078,11 +2246,14 @@ class MemoryStore:
                               (ci_json, pid))
                 c.execute(
                     "UPDATE wiki_pages SET title=?, body=?, summary=?, tags=?, "
-                    "importance=?, evidence_ids=?, run_id=?, version=?, updated_at=?, scope=? "
+                    "importance=?, evidence_ids=?, run_id=?, version=?, updated_at=?, scope=?, "
+                    "auto_classification=? "
                     "WHERE id=?",
                     (title, body, summary or "", tags_json,
                      float(importance), evid_json, run_id, version, now,
-                     scope or "global", pid),
+                     scope if scope is not None else (existing["scope"] or "global"),
+                     ac_json if ac_json is not None else existing["auto_classification"],
+                     pid),
                 )
             row = c.execute(
                 "SELECT * FROM wiki_pages WHERE id=?", (pid,)
@@ -2301,6 +2472,15 @@ class MemoryStore:
             except (ValueError, TypeError):
                 logger.warning("corrupt contradicting_ids for wiki page %s; resetting", row["id"])
                 contradicting_ids = []
+        auto_classification = None
+        if "auto_classification" in row.keys() and row["auto_classification"]:
+            try:
+                parsed = json.loads(row["auto_classification"])
+                if isinstance(parsed, dict):
+                    auto_classification = parsed
+            except (ValueError, TypeError):
+                logger.warning("corrupt auto_classification for wiki page %s; resetting", row["id"])
+                auto_classification = None
         return {
             "id": row["id"],
             "slug": row["slug"],
@@ -2316,6 +2496,7 @@ class MemoryStore:
             "updated_at": float(row["updated_at"] or 0.0),
             "key_facts": key_facts,
             "contradicting_ids": contradicting_ids,
+            "auto_classification": auto_classification,
             "scope": row["scope"] or "global",
         }
 

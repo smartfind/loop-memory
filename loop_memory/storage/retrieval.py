@@ -200,7 +200,7 @@ def _filter_wiki_scope(rows: Iterable, source: str | None) -> list:
     out = []
     for r in rows:
         scope = (r["scope"] if "scope" in r.keys() else "global") or "global"
-        if scope == "global":
+        if scope in {"global", "all"}:
             out.append(r)
         else:
             # scope is "global" or a comma-list like "codex,claude"
@@ -363,4 +363,3 @@ def temporal_score(
     # Blend toward 1.0 by (1 - confidence) so we don't blow up a
     # borderline match into a hard rule.
     return 1.0 + (base - 1.0) * confidence
-

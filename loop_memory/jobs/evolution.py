@@ -555,6 +555,63 @@ class EvolutionConsolidator:
     def set_run_id(self, run_id: str | None) -> None:
         self._run_id = run_id
 
+    def _classify_wiki_scope(
+        self,
+        *,
+        title: str,
+        body: str,
+        summary: str,
+        tags: list[str],
+        evidence_ids: list[str],
+        existing: dict | None,
+    ) -> tuple[str, dict]:
+        """Route evolution-generated pages without widening old scopes."""
+        from ..wiki.classifier import classify_page
+        from ..wiki.scope import (
+            auto_scope_config,
+            build_scope_audit,
+            derive_default_scope,
+        )
+        scope_cfg = auto_scope_config(self.store)
+        enabled = bool(scope_cfg["enabled"])
+        mode = str(scope_cfg["mode"])
+        try:
+            memories = self.store.list_memories(
+                ids=list(evidence_ids), limit=max(1, len(evidence_ids))
+            )
+        except Exception:
+            memories = []
+        evidence_sources = [
+            str(getattr(memory, "source", "") or "").strip()
+            for memory in memories
+            if getattr(memory, "source", None)
+        ]
+        classification = classify_page(
+            title=title,
+            body=body,
+            summary=summary,
+            tags=tags,
+            evidence_sources=evidence_sources,
+            mode=mode if enabled else "off",
+        )
+        if existing and existing.get("scope"):
+            scope = str(existing["scope"]).strip().lower()
+            decision = "preserved-existing"
+        elif enabled and classification.auto_global:
+            scope = "global"
+            decision = "auto-global"
+        else:
+            scope = derive_default_scope(evidence_ids=evidence_ids, store=self.store)
+            decision = "default-source"
+        return scope, build_scope_audit(
+            classification,
+            scope=scope,
+            decision=decision,
+            enabled=enabled,
+            mode=mode,
+            existing=existing,
+        )
+
     def run(
         self,
         memories: list[StoredMemory] | None = None,
@@ -1160,6 +1217,14 @@ class EvolutionConsolidator:
                 new_title = _title_from(top, fallback_kind="", max_len=58)
                 new_summary = top[:200].rstrip(" .,;:")
                 try:
+                    scope, auto_classification = self._classify_wiki_scope(
+                        title=new_title,
+                        body=new_body,
+                        summary=new_summary,
+                        tags=p2.get("tags", []),
+                        evidence_ids=evidence,
+                        existing=p2,
+                    )
                     self.store.upsert_wiki_page(
                         slug=slug,
                         title=new_title,
@@ -1169,6 +1234,8 @@ class EvolutionConsolidator:
                         importance=p2.get("importance", 0.5),
                         evidence_ids=evidence,
                         run_id=self._run_id,
+                        scope=scope,
+                        auto_classification=auto_classification,
                     )
                     stats.notes.append(f"wiki re-cleaned: {slug} ({len(bullet_lines)}→{len(surviving)} bullets)")
                 except Exception:
@@ -1202,6 +1269,14 @@ class EvolutionConsolidator:
                 else:
                     continue
                 try:
+                    scope, auto_classification = self._classify_wiki_scope(
+                        title=p2.get("title", ""),
+                        body=new_body,
+                        summary=p2.get("summary", ""),
+                        tags=p2.get("tags", []),
+                        evidence_ids=p2.get("evidence_ids", []),
+                        existing=p2,
+                    )
                     self.store.upsert_wiki_page(
                         slug=slug,
                         title=p2.get("title", ""),
@@ -1211,6 +1286,8 @@ class EvolutionConsolidator:
                         importance=p2.get("importance", 0.5),
                         evidence_ids=p2.get("evidence_ids", []),
                         run_id=self._run_id,
+                        scope=scope,
+                        auto_classification=auto_classification,
                     )
                     stats.notes.append(f"wiki re-synthesized: {slug}")
                 except Exception:
@@ -1302,11 +1379,21 @@ class EvolutionConsolidator:
             summary = (p.get("summary") or "").strip()[:400]
             existing_p = self.store.get_wiki_page_by_slug(slug)
             try:
+                scope, auto_classification = self._classify_wiki_scope(
+                    title=title,
+                    body=body,
+                    summary=summary,
+                    tags=tags,
+                    evidence_ids=evidence,
+                    existing=existing_p,
+                )
                 upserted = self.store.upsert_wiki_page(
                     slug=slug, title=title, body=body, summary=summary,
                     tags=tags, importance=importance, evidence_ids=evidence,
                     key_facts=p.get("key_facts") or [],
                     run_id=self._run_id,
+                    scope=scope,
+                    auto_classification=auto_classification,
                 )
             except Exception as e:
                 stats.notes.append(f"wiki upsert err: {e}")
@@ -1450,10 +1537,20 @@ class EvolutionConsolidator:
             importance = round(min(1.0, importance), 2)
             existing_p = self.store.get_wiki_page_by_slug(slug)
             try:
+                scope, auto_classification = self._classify_wiki_scope(
+                    title=title,
+                    body=body,
+                    summary=summary,
+                    tags=tags[:6],
+                    evidence_ids=evidence_ids,
+                    existing=existing_p,
+                )
                 self.store.upsert_wiki_page(
                     slug=slug, title=title, body=body, summary=summary,
                     tags=tags[:6], importance=importance,
                     evidence_ids=evidence_ids, run_id=self._run_id,
+                    scope=scope,
+                    auto_classification=auto_classification,
                 )
             except Exception:
                 continue

@@ -294,6 +294,33 @@ class SecurityHeadersTests(ServeAppSmokeTests):
         self.assertNotEqual(r.status_code, 401,
                             "auth middleware should be a no-op when no token is set")
 
+    def test_static_paths_remain_public_when_auth_enabled(self) -> None:
+        """Audit H2: when an auth token is configured, /static/*
+        must still be reachable so the SPA shell can boot before the
+        user pastes the bearer token. Without this, the entire UI
+        renders as a blank page once auth is on."""
+        from loop_memory.storage.sqlite_store import MemoryStore
+        store = MemoryStore(str(self.tmp / "db.sqlite"))
+        store.set_setting("loop_memory_auth_token", "TEST_TOKEN_XYZ")
+        # Re-build the client so it picks up the new setting via
+        # create_app's middleware. Pass the bundled static dir so
+        # /static/* is actually served.
+        from fastapi.testclient import TestClient
+        from loop_memory.serve.app import create_app
+        from pathlib import Path as _P
+        import loop_memory
+        static_dir = _P(loop_memory.__file__).parent / "serve" / "static"
+        client = TestClient(create_app(store, static_dir=static_dir))
+        r = client.get("/")
+        self.assertEqual(r.status_code, 200)
+        # Static assets should be served without a Bearer header.
+        r_js = client.get("/static/js/api.js")
+        self.assertEqual(r_js.status_code, 200,
+                         f"/static/* must remain public when auth is on; got {r_js.status_code}")
+        # But a protected endpoint still requires the token.
+        r_prot = client.post("/api/admin/consolidate")
+        self.assertEqual(r_prot.status_code, 401)
+
 
 if __name__ == "__main__":
     unittest.main()

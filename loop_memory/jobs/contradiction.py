@@ -138,7 +138,7 @@ def detect_for_page(
             continue
         other_tags = set(other.get("tags") or [])
         shared = sorted(target_tags & other_tags)
-        if not shared and target_scope != "global":
+        if not shared and target_scope not in {"global", "all"}:
             # Different topic — skip unless we're in global scope
             continue
         score = _jaccard(target_facts, other_facts)

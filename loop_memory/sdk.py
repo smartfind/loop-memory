@@ -362,7 +362,12 @@ class _InProcessClient(MemoryClient):
                 bump_signals=True, source=source, level=1,
             )
         else:
-            r = self._store.recall(query, limit=limit, include=wanted)
+            r = self._store.recall(
+                query,
+                limit=limit,
+                include=wanted,
+                source=source,
+            )
         # Optional post-filter: even if the store returned hits, the
         # caller may want only their agent's namespace.
         def _own(h: dict[str, Any]) -> bool:

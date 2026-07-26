@@ -212,7 +212,8 @@ class ExportImportForkTests(unittest.TestCase):
 
     def test_export_writes_bundle(self) -> None:
         self.store.upsert_wiki_page(slug="p", title="P", body="b",
-                                     summary="s", tags=["t"], importance=0.7)
+                                     summary="s", tags=["t"], importance=0.7,
+                                     scope="global")
         self.store.upsert_memory(kind="fact", text="x", importance=0.5,
                                   agent_id="bot", user_id="u1",
                                   external_id="x-1")
@@ -230,7 +231,7 @@ class ExportImportForkTests(unittest.TestCase):
     def test_export_import_round_trip_is_idempotent(self) -> None:
         self.store.upsert_wiki_page(slug="p", title="P", body="b",
                                      summary="s", tags=["t"], importance=0.7,
-                                     key_facts=["p1"])
+                                     scope="global", key_facts=["p1"])
         self.store.upsert_memory(kind="fact", text="x", importance=0.5,
                                   agent_id="bot", user_id="u1",
                                   external_id="x-1")

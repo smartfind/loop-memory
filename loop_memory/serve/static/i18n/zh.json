@@ -647,7 +647,7 @@
   "wiki.scope.claude": "Claude",
   "wiki.scope.hermes": "Hermes",
   "wiki.scope.openclaw": "OpenClaw",
-  "wiki.scope.hint": "选择可看到此知识的客户端。默认「所有客户端」（全局）。",
+  "wiki.scope.hint": "自动将适合跨客户端的安全最佳实践设为全局，其余知识默认仅当前客户端可见。",
   "wiki.scope.globalShort": "全局",
   "wiki.scope.filter.all": "全部作用域",
   "wiki.scope.filter.global": "仅全局",
@@ -725,5 +725,6 @@
   "wiki.contradict.rescan": "重新扫描",
   "wiki.contradict.vs": "与",
   "wiki.contradict.mergeInto": "保留「{title}」，合并其他",
-  "wiki.contradict.notConflict": "不算矛盾"
+  "wiki.contradict.notConflict": "不算矛盾",
+  "wiki.scope.auto": "自动判定（推荐）"
 }

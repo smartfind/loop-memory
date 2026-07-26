@@ -647,7 +647,7 @@
   "wiki.scope.claude": "Claude",
   "wiki.scope.hermes": "Hermes",
   "wiki.scope.openclaw": "OpenClaw",
-  "wiki.scope.hint": "Pick the clients that should see this knowledge. 'All clients' (global) is the default and means everyone.",
+  "wiki.scope.hint": "Auto promotes universal security best practices to all clients; other knowledge stays client-scoped.",
   "wiki.scope.globalShort": "Global",
   "wiki.scope.filter.all": "All scopes",
   "wiki.scope.filter.global": "Global only",
@@ -725,5 +725,6 @@
   "wiki.contradict.rescan": "Rescan",
   "wiki.contradict.vs": "vs.",
   "wiki.contradict.mergeInto": "Keep “{title}”, dissolve other",
-  "wiki.contradict.notConflict": "Not a conflict"
+  "wiki.contradict.notConflict": "Not a conflict",
+  "wiki.scope.auto": "Auto (recommended)"
 }

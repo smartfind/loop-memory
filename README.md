@@ -432,10 +432,92 @@ loop_memory/
 
 ---
 
+## Security & auth token
+
+Loop Memory ships with a CSP deny-all + Origin-bound CSRF policy on every
+state-changing request, parameterised SQL throughout, and a Keychain-backed
+secret store (`~/.loop_memory/secrets.json` mode 0600 on Linux). The web UI
+also auto-sanitises any markdown it renders (DOMParser + tag allowlist + URL
+scheme scrubber — see `loop_memory/serve/static/js/lib/sanitize.js`).
+
+**Auth token (recommended on first run):**
+
+```bash
+# Generates a 256-bit URL-safe token, stored hashed in the settings table.
+# The server stays authenticated forever — there is no "disable" path.
+curl -X POST http://127.0.0.1:7767/api/admin/auth/token | tee token.txt
+
+# Rotate later (use this when you suspect the token has leaked):
+curl -X DELETE http://127.0.0.1:7767/api/admin/auth/token \
+     -H "Authorization: Bearer $(cat token.txt)" | tee token.txt
+```
+
+Pass the token as `Authorization: Bearer …` header on every admin call.
+The web UI stores it in `localStorage` under `loop_auth_token` and attaches
+it automatically; non-browser clients (curl, MCP, SDK) must opt in by
+passing it explicitly.
+
+**When to set a token:**
+
+- ✅ Always, even on loopback. The default of "no token" exists only as a
+  TOFU bootstrap path; an unconfigured server trusts *any* browser on
+  localhost to mutate state (CSRF still rejects cross-origin POSTs from
+  a remote page, but a malicious local app can still call the API).
+- ✅ Especially if you ever bind to anything other than `127.0.0.1`
+  (`loop-memory serve --host 0.0.0.0` now prints a security warning).
+- ❌ Never `DELETE /api/admin/auth/token` to "disable" auth — it rotates
+  to a fresh token instead (the audit found that fully disabling auth
+  was the easiest way back to the no-token state).
+
+**Threat model notes:**
+
+- `install-hooks` runs Python that touches `~/.*` — it's gated by the
+  bearer token like every other `POST /api/admin/*` route.
+- The `<private>...</private>` span stripping in the privacy layer keeps
+  user-marked secrets out of long-term storage; the regex redaction layer
+  then catches API keys / tokens / private keys / JWTs / generic
+  high-entropy blobs before they reach SQLite.
+- The bundled weekly-report Markdown is rendered through the
+  `sanitizeHtml` sanitizer (see `tests-js/test_sanitize.test.mjs` for
+  the bypass coverage).
+
+---
+
+## Wiki scope auto-classification
+
+New wiki pages use a local, deterministic scope evaluator by default:
+
+- Universal security guidance (for example, rotating API keys, never pasting
+  secrets, or using parameterised SQL) is automatically promoted to
+  `scope="global"` when the classifier has enough security and cross-client
+  signals.
+- Preferences, personal facts, project incidents, and other knowledge default
+  to the client that supplied the evidence (`codex`, `claude`, `hermes`, or
+  `openclaw`). Pages with no source metadata use the privacy-preserving
+  `codex` fallback rather than being shared with every client.
+- An explicit `scope` always wins. Use `scope="auto"` (or omit it) to ask the
+  evaluator for a recommendation. Existing pages are not migrated, and an
+  update that omits `scope` preserves its current manual scope.
+- Every decision is stored in the page's `auto_classification` audit object;
+  inspect it with `GET /api/wiki/{page_id}/classification-history` or preview
+  a decision with `POST /api/wiki/classify`.
+
+The behavior is controlled by `GET/PUT /api/admin/wiki/scope`:
+`{"enabled": true, "mode": "pattern"}` is the default. `mode="off"`
+keeps new pages client-scoped without automatic global promotion. The
+classifier is local and makes no model or network request on a wiki write.
+
+---
+
 ## Run the tests
 
 ```bash
+# Python suite (memory + SDK + serve + CLI)
 python -m pytest -q
+python -m unittest discover -s tests -v
+
+# Frontend sanitizer bypass suite (jsdom)
+npm test
 ```
 
 

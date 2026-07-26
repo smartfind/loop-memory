@@ -25,8 +25,8 @@ export const WikiEditor = defineComponent({
     const importance = ref(0.5);
     // Scope — which clients should see this wiki page on recall.
     // 'global' is exclusive (mutually exclusive with per-client chips).
-    const SCOPE_TOKENS = ['global', 'codex', 'claude', 'hermes', 'openclaw'];
-    const scope = ref(['global']);
+    const SCOPE_TOKENS = ['auto', 'global', 'codex', 'claude', 'hermes', 'openclaw'];
+    const scope = ref(['auto']);
     // Auto-save draft to localStorage so edits survive refresh
     const DRAFT_KEY = 'loop_wiki_draft_v1';
     let saveTimer = null;
@@ -53,7 +53,7 @@ export const WikiEditor = defineComponent({
           body.value = d.body || '';
           tags.value = d.tags || '';
           importance.value = d.importance ?? 0.5;
-          scope.value = d.scope || ['global'];
+          scope.value = Array.isArray(d.scope) ? d.scope : (d.scope ? [d.scope] : ['auto']);
         }
       } catch (_) {}
     }
@@ -83,9 +83,9 @@ export const WikiEditor = defineComponent({
         body.value = p.body || '';
         tags.value = (p.tags || []).join(', ');
         importance.value = p.importance || 0.5;
-        const rawScope = (p.scope || 'global').toString().toLowerCase();
+        const rawScope = (p.scope || 'auto').toString().toLowerCase();
         const tokens = rawScope.split(',').map(s => s.trim()).filter(Boolean);
-        scope.value = tokens.length ? tokens : ['global'];
+        scope.value = tokens.length ? tokens : ['auto'];
       } catch (e) {
         // ignore
       } finally {
@@ -97,15 +97,20 @@ export const WikiEditor = defineComponent({
 
     function toggleScope(token) {
       const cur = new Set(scope.value);
+      if (token === 'auto') {
+        scope.value = ['auto'];
+        return;
+      }
       if (token === 'global') {
         // global is exclusive: clicking it clears the per-client list
         scope.value = ['global'];
         return;
       }
+      cur.delete('auto');
       cur.delete('global');  // any per-client click leaves global
       if (cur.has(token)) cur.delete(token); else cur.add(token);
-      // Fallback: if user clears everything, fall back to global.
-      scope.value = cur.size ? Array.from(cur) : ['global'];
+      // Fallback: if user clears everything, let the classifier decide.
+      scope.value = cur.size ? Array.from(cur) : ['auto'];
     }
 
     function onSave() {
@@ -115,7 +120,7 @@ export const WikiEditor = defineComponent({
         body: body.value,
         tags: tags.value.split(',').map(s => s.trim()).filter(Boolean),
         importance: Number(importance.value) || 0.5,
-        scope: scope.value.join(','),
+        scope: scope.value.includes('auto') ? 'auto' : scope.value.join(','),
       };
       emit('save', payload);
     }

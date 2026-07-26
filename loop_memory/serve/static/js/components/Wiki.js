@@ -106,7 +106,7 @@ export const Wiki = defineComponent({
         const tok = scopeFilter.value;
         rows = rows.filter(p => {
           const s = (p.scope || 'global').toString().toLowerCase();
-          if (s === 'global') return true;  // global visible to all
+          if (s === 'global' || s === 'all') return true;  // global visible to all
           const tokens = s.split(',').map(x => x.trim()).filter(Boolean);
           return tokens.includes(tok);
         });
@@ -322,7 +322,7 @@ export const Wiki = defineComponent({
       const s = (p && p.scope || '').toString().toLowerCase();
       if (!s) return true;  // schema default = global
       // "global" alone, or starting with "global," => global.
-      return s === 'global' || s.split(',').map(x => x.trim()).includes('global');
+      return s === 'global' || s === 'all' || s.split(',').map(x => x.trim()).includes('global');
     }
 
     /**

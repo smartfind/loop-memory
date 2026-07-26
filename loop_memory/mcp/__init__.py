@@ -77,7 +77,8 @@ def tool_recall(arguments: dict[str, Any]) -> list[dict[str, Any]]:
     if not query:
         return [_err("missing 'query' argument")]
     store = _store()
-    r = store.recall(query, limit=limit)
+    source = arguments.get("source") or _agent_context()[0]
+    r = store.recall(query, limit=limit, source=source)
     n_mem = len(r["memories"])
     n_wiki = len(r["wiki"])
     n_ent = len(r["entities"])

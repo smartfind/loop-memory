@@ -25,6 +25,7 @@ class CliExportCompatibilityTests(unittest.TestCase):
             summary="Export compatibility",
             tags=["cli"],
             importance=0.8,
+            scope="global",
         )
 
     def tearDown(self) -> None:
