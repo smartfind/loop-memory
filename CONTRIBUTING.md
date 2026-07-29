@@ -163,3 +163,29 @@ store.
 ## Reporting a vulnerability
 
 Please do **not** open a public issue. Follow `SECURITY.md`.
+
+## Commit authorship convention
+
+Only the maintainer (`smartfind`) and the GitHub dependency bots
+(`dependabot[bot]`) appear on the contributors graph. AI coding
+assistants (Codex, Claude, Copilot, …) must NOT author their own
+commits, even when they are the only contributor to the change.
+
+How this is enforced:
+
+* `git config user.name "smartfind"` and
+  `git config user.email "44515814+smartfind@users.noreply.github.com"`
+  are the canonical identity — set them globally so every session
+  inherits them.
+* `.git/hooks/pre-commit` rewrites any non-whitelisted author /
+  committer identity to `smartfind` at commit time and refuses
+  `Co-authored-by:` trailers that name an AI assistant.
+* The remote `main` was rewritten with `git filter-branch
+  --env-filter` once to consolidate legacy AI-attributed commits
+  under the maintainer; see CHANGELOG H6 for the data-migration
+  details and the `backup/pre-author-rewrite` branch for the
+  pre-rewrite history.
+
+If you add a future integration that genuinely needs its own bot
+identity (e.g. a new release helper), extend the `KEEP_NAMES_RE`
+regex inside the pre-commit hook.
