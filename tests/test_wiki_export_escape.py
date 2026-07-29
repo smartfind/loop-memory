@@ -71,7 +71,7 @@ class WikiExportEscapeTests(unittest.TestCase):
         self._seed("d", "Title\n## Pwned", "body")
         page = self.store.get_wiki_page_by_slug("d")
         md = self.client.get(f"/api/wiki/{page['id']}/export").json()["markdown"]
-        h1_lines = [l for l in md.splitlines() if l.startswith("# ")]
+        h1_lines = [line for line in md.splitlines() if line.startswith("# ")]
         self.assertEqual(len(h1_lines), 1, f"got {h1_lines}")
 
     def test_round_trip_count_matches(self) -> None:

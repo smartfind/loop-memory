@@ -37,7 +37,7 @@ class WikiClassifierUnitTests(unittest.TestCase):
             "My wife's birthday 1990-01-01",
             "Codex desktop bug #1234",
             "My API key is only for this project",
-            "Never paste secrets: api_key=sk-12345678901234567890",
+            "Never paste secrets: api_key=sk-test-12345678901234567890",
         )
         for text in examples:
             with self.subTest(text=text):

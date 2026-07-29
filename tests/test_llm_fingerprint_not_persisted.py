@@ -70,14 +70,10 @@ class LlmFingerprintNotPersistedTests(unittest.TestCase):
                 json={"provider": "openai", "model": "gpt-x", "api_key": fake_key},
             )
             self.assertEqual(r.status_code, 200, r.text)
-            # The *response* may include fingerprint (still useful for UI).
-            # What we forbid is the DB storing it.
-            body = r.json()
-            # Fingerprint may or may not be present in response;
-            # but the saved config snapshot passed back must not have
-            # the *persisted* form (frontend reads API again to fetch).
-            # The thing we want is that `get_setting("llm_consolidator")`
-            # does NOT carry api_key_fingerprint / api_key_saved_at.
+            # The *response* may include fingerprint (still useful for UI);
+            # what we forbid is the DB storing it. We don't actually need
+            # the body here — the assertions below read get_setting
+            # directly so any fingerprint leak would show up there.
             saved = self._raw_db_settings()
             self.assertNotIn("api_key_fingerprint", saved,
                 "fingerprint must not be persisted; got db row: " + json.dumps(saved))

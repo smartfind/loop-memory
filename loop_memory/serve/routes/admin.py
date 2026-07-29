@@ -769,19 +769,11 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None) 
             _saved_at = _path.stat().st_mtime if _path else time.time()
         except Exception:
             _saved_at = time.time()
-        try:
-            account_fp = cfg.get("api_key_account") or account_for(provider)
-            raw = ""
-            # Only compute a fingerprint if we just wrote a fresh key
-            # (the prior branch set body["api_key_fingerprint"]); never
-            # read the secret back to display — that would force a key
-            # unlock prompt on every PUT for OS keychain users.
-            if body.get("api_key_fingerprint"):
-                fingerprint = body["api_key_fingerprint"]
-            else:
-                fingerprint = ""
-        except Exception:
-            fingerprint = ""
+        # Only compute a fingerprint if we just wrote a fresh key
+        # (the prior branch set body["api_key_fingerprint"]); never
+        # read the secret back to display — that would force a key
+        # unlock prompt on every PUT for OS keychain users.
+        fingerprint = body.get("api_key_fingerprint", "")
         # Strip response-only fields before persisting.
         cfg.pop("api_key_fingerprint", None)
         cfg.pop("api_key_saved_at", None)
