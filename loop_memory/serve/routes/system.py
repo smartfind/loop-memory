@@ -67,12 +67,19 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None,
         try:
             en_json = (static_dir / "i18n" / "en.json").read_text(encoding="utf-8")
             zh_json = (static_dir / "i18n" / "zh.json").read_text(encoding="utf-8")
-            # HTML-encode the JSON to prevent XSS when injected into <script> tags.
-            # Escape &, <, >, and " (all HTML special chars). Also handle </script>
-            # with a standard reverse-solidus escape so it can't close the tag.
-            import html as _html
-            en_safe = _html.escape(en_json, quote=True).replace("</script>", "<\\/script>")
-            zh_safe = _html.escape(zh_json, quote=True).replace("</script>", "<\\/script>")
+            # Inject the JSON verbatim into <script type="application/json">.
+            # The browser treats that script type as raw CDATA — every
+            # byte inside (including `"`, `<`, `>`, `&`) passes through
+            # to ``JSON.parse`` unchanged. HTML-escaping the JSON
+            # instead would turn `"` into ``&quot;`` and silently break
+            # ``JSON.parse`` (which the user notices as "all types"
+            # first rendering English then snapping to Chinese on hard
+            # refresh). The only real risk is the closing </script>
+            # sequence appearing inside a JSON string, which we
+            # neutralise with a reverse-solidus escape — a comment-out
+            # JSON-safe way of breaking up the tag.
+            en_safe = en_json.replace("</script>", "<\\/script>")
+            zh_safe = zh_json.replace("</script>", "<\\/script>")
             # Inject the two payloads right before main.js so they
             # exist when store.js evaluates.
             inject = (

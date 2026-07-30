@@ -225,6 +225,101 @@ class IndexRouteTests(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class IndexInlineI18nTests(ServeAppSmokeTests):
+    """Pin the inline-i18n fix that prevents the
+    "页面先变英文再变中文" flicker on hard refresh.
+
+    Pre-fix behaviour: the index route escaped the JSON dictionaries
+    with ``html.escape()``, so the inline ``<script type="application/json">``
+    payloads contained ``&quot;`` for every JSON quote. The browser
+    passes that text through to ``JSON.parse`` verbatim — HTML
+    entities are NOT decoded inside <script> tags — and ``JSON.parse``
+    fails with a syntax error. ``store.js``'s inline read therefore
+    silently populated *no* dictionary, so the first Vue render fell
+    back to the English ``_i18n.en[key]`` and only snapped to
+    ``_i18n.zh`` after the network fetch completed inside
+    ``onMounted``.
+
+    Post-fix behaviour: the index route injects the JSON strings
+    verbatim, only neutralising the literal ``</script>`` sequence
+    that could otherwise close the script tag. ``JSON.parse`` then
+    succeeds on the inline payload and the first paint is already in
+    the user's locale.
+    """
+
+    def _inline_json(self, lang: str) -> dict:
+        r = self.client.get("/")
+        self.assertEqual(r.status_code, 200)
+        body = r.text
+        # The script tag is closed with a reverse-solidus escape so a
+        # literal </script> inside the JSON can't break the page —
+        # match either form.
+        m = re.search(
+            r'<script type="application/json" id="loop-i18n-' + lang + r'">(.+?)</script>',
+            body,
+            re.S,
+        )
+        self.assertIsNotNone(m, f"inline script loop-i18n-{lang} missing")
+        import json as _json
+        return _json.loads(m.group(1))
+
+    def test_inline_i18n_en_parses_and_has_chinese_keys(self) -> None:
+        d = self._inline_json("en")
+        self.assertGreater(len(d), 100)
+        self.assertEqual(d["timeline.allKinds"], "All kinds")
+
+    def test_inline_i18n_zh_parses_and_has_chinese_values(self) -> None:
+        d = self._inline_json("zh")
+        self.assertEqual(d["timeline.allKinds"], "全部类型")
+        self.assertEqual(d["graph.allKinds"], "全部类型")
+        self.assertEqual(d["filter.allKinds"], "全部类型")
+
+    def test_inline_i18n_is_not_html_escaped(self) -> None:
+        # Pre-fix regression: the inline payload contained ``&quot;``
+        # because the index route used ``html.escape``. Browser-passed-
+        # through JSON would fail to parse and ``store.js`` would fall
+        # back to the English dictionary on the first paint.
+        r = self.client.get("/")
+        self.assertEqual(r.status_code, 200)
+        # An entity-encoded payload always contains "&#" sequences
+        # outside of script blocks. Count occurrences INSIDE the
+        # inline <script type="application/json"> blocks specifically.
+        body = r.text
+        for lang in ("en", "zh"):
+            m = re.search(
+                r'<script type="application/json" id="loop-i18n-' + lang + r'">(.+?)</script>',
+                body,
+                re.S,
+            )
+            self.assertIsNotNone(m)
+            payload = m.group(1)
+            # Real JSON uses bare " quotes; HTML-escaped JSON does not.
+            self.assertNotIn("&quot;", payload,
+                             f"payload for {lang} is HTML-escaped; "
+                             "JSON.parse will fail and the i18n flicker "
+                             "regresses (all kinds -> 全部类型 on hard "
+                             "refresh).")
+            # Sanity: payload does contain the kind-filter keys.
+            self.assertIn("timeline.allKinds", payload)
+            self.assertIn("graph.allKinds", payload)
+
+    def test_inline_i18n_payloads_match_disk_files(self) -> None:
+        # Catch any future drift between the disk JSON and what the
+        # server serves — if the line endings or key ordering ever
+        # matter to a downstream consumer, this test surfaces it.
+        import json as _json
+        d_zh = self._inline_json("zh")
+        d_en = self._inline_json("en")
+        disk_zh = _json.loads(
+            Path("loop_memory/serve/static/i18n/zh.json").read_text(encoding="utf-8")
+        )
+        disk_en = _json.loads(
+            Path("loop_memory/serve/static/i18n/en.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(set(d_zh) - set(disk_zh), set())
+        self.assertEqual(set(d_en) - set(disk_en), set())
+
+
 class SecurityHeadersTests(ServeAppSmokeTests):
     """Covers the security headers and CSRF guard in
     ``loop_memory/serve/app.py``. The CSP and Bearer-token tests live

@@ -59,10 +59,67 @@ from typing import Any
 
 from ..llm.base import ChatHistory, LLMClient, Message
 from ..storage.sqlite_store import MemoryStore, StoredMemory
+from ..wiki.prompts import (
+    MAX_WIKI_PROMPTS_PER_PAGE,
+    MIN_BODY_CHARS,
+    MIN_BULLETS_PER_PAGE,
+    count_bullets,
+    expansion_prompt,
+    meets_body_floor,
+    normalise_lang,
+    wiki_system_prompt,
+)
 
 # ----------------------------------------------------------------------------
 # Constants
 # ----------------------------------------------------------------------------
+
+# Bullet-line splitter used by ``_expand_under_floor_pages`` to merge the
+# "old" body with the "expansion" body returned by the LLM. We keep the
+# order stable: all existing bullets first, then any new bullet whose
+# first 60 chars aren't already present.
+_BULLET_LINE_RE = re.compile(r"^[\s]*[-\*][\s]+\S", re.MULTILINE)
+
+
+def _split_bullets(body: str) -> list[str]:
+    """Return a list of bullet lines (without trailing blank lines)."""
+    if not body:
+        return []
+    lines = []
+    buf: list[str] = []
+    for line in body.splitlines():
+        if _BULLET_LINE_RE.match(line):
+            if buf:
+                lines.append("\n".join(buf).rstrip())
+                buf = []
+            buf.append(line)
+        else:
+            if buf:
+                buf.append(line)
+    if buf:
+        lines.append("\n".join(buf).rstrip())
+    return [ln for ln in lines if ln.strip()]
+
+
+def _merge_bullet_lists(old: str, new: str) -> str:
+    """Append-only bullet merge. Existing bullets keep their order; new
+    bullets whose first 60 chars are not already present get appended.
+    Blank lines and prose paragraphs in ``new`` are also appended at the
+    end so the LLM can keep its "_Source:" footer or similar."""
+    old_lines = _split_bullets(old or "")
+    new_lines = _split_bullets(new or "")
+    seen = {ln.strip()[:60].lower() for ln in old_lines}
+    appended: list[str] = []
+    for nl in new_lines:
+        key = nl.strip()[:60].lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        appended.append(nl)
+    if not appended:
+        return old
+    return (old.rstrip() + "\n" + "\n".join(appended)).rstrip()
+
 
 CLUSTER_MAX = 15              # max memories per cluster (Stage 3 prompt size)
 WIKI_INPUT_CLUSTERS = 8       # how many cluster summaries feed Stage 4
@@ -544,7 +601,13 @@ class EvolutionConsolidator:
     ) -> None:
         self.store = store
         self.provider = provider
-        self.config = dict(config or {})
+        cfg = dict(config or {})
+        self.config = cfg
+        # Output locale for wiki synthesis (default ``zh`` — the same
+        # default the front-end uses when ``store.lang`` is unset).
+        # Honoured by ``wiki_system_prompt(self._lang)`` in Stage 4 and
+        # by the expansion retry inside ``_stage4_wiki_synthesis``.
+        self._lang: str = normalise_lang(cfg.get("lang"))
         self._cache: dict[str, str] = {}
         self._cache_ttl = 300.0
         self._cache_ts: dict[str, float] = {}
@@ -1339,7 +1402,8 @@ class EvolutionConsolidator:
             (user_prompt + "||" + (getattr(self.provider, "model", "?") or "?")
              + "||wiki-evo||" + str(float(cfg.get("temperature") or 0.3))).encode()
         , usedforsecurity=False).hexdigest()
-        reply = self._cached_call(cache_key, _WIKI_SYSTEM, user_prompt, cfg, stats, kind="wiki")
+        wiki_system = wiki_system_prompt(self._lang)
+        reply = self._cached_call(cache_key, wiki_system, user_prompt, cfg, stats, kind="wiki")
 
         parsed = _extract_json(reply or "")
         if not isinstance(parsed, dict):
@@ -1354,8 +1418,23 @@ class EvolutionConsolidator:
             stats.notes.append("wiki LLM returned 0 pages — falling back to rule-based synthesis")
             return self._stage4_rules(clusters, stats)
 
+        # -----------------------------------------------------------------
+        # Length-floor recovery (v3). The wiki prompts promise at least
+        # ``MIN_BULLETS_PER_PAGE`` bullets per page and at least
+        # ``MIN_BODY_CHARS`` characters of body. If the LLM shipped a
+        # thinner page anyway (some open-source models follow lengths
+        # inconsistently), we send a locale-aware expansion request and
+        # patch the returned page's body in place. We retry at most
+        # ``MAX_WIKI_PROMPTS_PER_PAGE - 1`` extra times so the LLM
+        # budget for this Stage-4 call stays bounded.
+        # -----------------------------------------------------------------
+        pages = self._expand_under_floor_pages(
+            pages, clusters, user_prompt, wiki_system, cfg, stats
+        )
+
         created = 0
         updated = 0
+        under_floor_slugs: list[str] = []
         for p in pages:
             if not isinstance(p, dict):
                 continue
@@ -1364,6 +1443,8 @@ class EvolutionConsolidator:
             body = (p.get("body") or "").strip()
             if not slug or not title or not body:
                 continue
+            if not meets_body_floor(body):
+                under_floor_slugs.append(slug)
             tags = p.get("tags") or []
             if not isinstance(tags, list):
                 tags = []
@@ -1415,8 +1496,115 @@ class EvolutionConsolidator:
                 created += 1
             else:
                 updated += 1
+        if under_floor_slugs:
+            stats.notes.append(
+                "wiki under floor (" + str(len(under_floor_slugs)) + "): "
+                + ", ".join(under_floor_slugs[:5])
+                + (" ..." if len(under_floor_slugs) > 5 else "")
+            )
         return {"created": created, "updated": updated, "calls": 1}
 
+    # -----------------------------------------------------------------
+    # Length-floor recovery
+    # -----------------------------------------------------------------
+    def _expand_under_floor_pages(
+        self,
+        pages: list[dict[str, Any]],
+        clusters: list[dict[str, Any]],
+        user_prompt: str,
+        wiki_system: str,
+        cfg: dict[str, Any],
+        stats: EvolutionStats,
+    ) -> list[dict[str, Any]]:
+        """Re-prompt the LLM for any page that came back under the body
+        floor. Mutates-and-returns ``pages``.
+
+        The first LLM call is the regular Stage-4 prompt. When this
+        helper sees a page whose body clears neither the bullet count
+        nor the character count, it sends a short locale-aware
+        "please append more bullets, do not rewrite" follow-up and
+        tries to merge the answer into the same page dict. The merge
+        is bullet-only and idempotent: we keep the original bullets
+        in order, then append only NEW bullets whose leading 60 chars
+        are not already present.
+
+        We retry at most ``MAX_WIKI_PROMPTS_PER_PAGE - 1`` extra
+        times so a chatty Stage-4 can't blow the LLM budget for the
+        whole run.
+        """
+        if not pages:
+            return pages
+        try:
+            from ._extract_json import _extract_json as _ej  # type: ignore
+        except Exception:
+            _ej = None
+        for attempt in range(MAX_WIKI_PROMPTS_PER_PAGE - 1):
+            weak = []
+            for p in pages:
+                if not isinstance(p, dict):
+                    continue
+                body = (p.get("body") or "").strip()
+                if not meets_body_floor(body):
+                    weak.append(p)
+            if not weak:
+                return pages
+            try:
+                follow_up = expansion_prompt(self._lang)
+                history_payload = (
+                    user_prompt
+                    + "\n\n# Pages already returned:\n"
+                    + json.dumps(weak, ensure_ascii=False)
+                    + "\n\n# Instruction:\n"
+                    + follow_up
+                )
+                cache_blob = (
+                    history_payload
+                    + "||"
+                    + (getattr(self.provider, "model", "?") or "?")
+                    + "||wiki-evo-expand||"
+                    + str(float(cfg.get("temperature") or 0.3))
+                    + "||" + self._lang
+                )
+                cache_key = hashlib.sha1(
+                    cache_blob.encode(), usedforsecurity=False
+                ).hexdigest()
+                reply = self._cached_call(
+                    cache_key, wiki_system, history_payload,
+                    cfg, stats, kind="wiki",
+                )
+            except Exception as e:
+                stats.notes.append(f"wiki expansion call error: {e}")
+                return pages
+            extract = _ej or _extract_json
+            parsed = extract(reply or "")
+            if not isinstance(parsed, dict):
+                return pages
+            new_pages = parsed.get("pages") or []
+            if not isinstance(new_pages, list) or not new_pages:
+                return pages
+            by_slug = {str(p.get("slug") or "").strip().lower(): p for p in pages if isinstance(p, dict)}
+            for np in new_pages:
+                if not isinstance(np, dict):
+                    continue
+                slug = str(np.get("slug") or "").strip().lower()
+                target = by_slug.get(slug)
+                if target is None:
+                    continue
+                target_body = (target.get("body") or "").strip()
+                np_body = (np.get("body") or "").strip()
+                if not np_body:
+                    continue
+                merged = _merge_bullet_lists(target_body, np_body)
+                target["body"] = merged
+                # Refresh fields the LLM may have re-written
+                for fld in ("title", "summary", "tags", "key_facts", "importance", "evidence_ids"):
+                    v = np.get(fld)
+                    if v:
+                        target[fld] = v
+            stats.notes.append(
+                f"wiki expansion pass {attempt + 1}/{MAX_WIKI_PROMPTS_PER_PAGE - 1}"
+            )
+        return pages
 
     def _echo_provider(self) -> bool:
         return type(self.provider).__name__ == "RuleBasedProvider"

@@ -1,5 +1,35 @@
 ## [Unreleased]
 
+### Distillation & i18n (2026-07-30)
+- **Wiki prompt localisation**: a new `loop_memory/wiki/prompts.py`
+  module replaces the legacy English-only `_WIKI_SYSTEM` /
+  `WIKI_SYSTEM_PROMPT` constants with locale-aware variants. Stage-4
+  synthesis now reads ``config["lang"]`` (default ``zh``) and ships a
+  Chinese prompt that explicitly demands `简体中文` output, an English
+  prompt with an `OUTPUT LANGUAGE: ENGLISH` directive, and a Japanese
+  fallback. ``EvolutionConsolidator._stage4_wiki_synthesis`` and the
+  legacy ``LLMConsolidator._synth_wiki_pages`` both honour the
+  locale. Pinned by ``tests/test_wiki_prompts.py``.
+- **Length-floor enforcement**: the wiki-synthesis prompts now
+  contract at least ``MIN_BULLETS_PER_PAGE = 6`` bullets and
+  ``MIN_BODY_CHARS = 600`` characters of body. When the LLM ships a
+  thinner page anyway, Stage 4 sends a locale-aware expansion
+  retry (``expansion_prompt(lang)``) and merges the returned bullets
+  into the existing page so knowledge stays cumulative. Worst-case
+  LLM budget per page is capped at
+  ``MAX_WIKI_PROMPTS_PER_PAGE = 2`` calls.
+- **i18n hydration flicker fix**: the index route used to HTML-escape
+  the inline ``<script type="application/json">`` payloads (turning
+  `"` into ``&quot;``). The browser passes those bytes through
+  verbatim — HTML entities are NOT decoded inside `<script>` blocks
+  — and ``JSON.parse`` fails silently, so ``store.js`` rendered the
+  English fallback string on the first paint and only flipped to
+  Chinese once the network fetch in ``onMounted`` completed. The
+  route now injects the JSON strings verbatim, only neutralising
+  the literal ``</script>`` byte sequence. Pinned by
+  ``tests/test_serve_app.py::IndexInlineI18nTests`` (Python side)
+  and ``tests-js/test_i18n_inline.test.mjs`` (Node side).
+
 ### Security & hardening (audit 2026-07-25)
 - **Wiki scope auto-classification**: new and newly-distilled pages now run a
   local explainable security classifier. Universal security best practices

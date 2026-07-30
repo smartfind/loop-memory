@@ -136,6 +136,13 @@ No prose, no markdown outside the JSON, no trailing commentary.
 # Wiki synthesis prompt
 # ---------------------------------------------------------------------------
 
+# Note: the canonical wiki-synthesis prompt lives in
+# ``loop_memory/wiki/prompts.py``. The locale-aware helper
+# ``_wiki_prompt()`` here picks the right variant (zh / en / ja);
+# ``WIKI_SYSTEM_PROMPT`` is kept only as a back-compat alias for any
+# external caller.
+from ..wiki.prompts import wiki_system_prompt as _wiki_prompt  # noqa: E402
+
 WIKI_SYSTEM_PROMPT = """You are a knowledge curator. You will be given a
 batch of memory records (already filtered for noise and rewritten for
 clarity) from a developer\'s AI-coding sessions. Your job is to write
@@ -320,7 +327,11 @@ class LLMConsolidator:
     ) -> None:
         self.store = store
         self.provider = provider
-        self.config = dict(config or {})
+        cfg = dict(config or {})
+        self.config = cfg
+        # Output locale for wiki synthesis (zh default matches UI lang).
+        from ..wiki.prompts import normalise_lang  # late import to keep top-level import order stable
+        self._lang: str = normalise_lang(cfg.get("lang"))
         self._cache: dict[str, str] = {}  # batch hash -> LLM reply
         self._cache_ttl = 300.0
         self._cache_ts: dict[str, float] = {}
@@ -598,7 +609,7 @@ class LLMConsolidator:
             reply = cached
         else:
             history = ChatHistory(
-                system=WIKI_SYSTEM_PROMPT,
+                system=_wiki_prompt(self._lang),
                 messages=[Message(role="user", content=user_prompt)],
             )
             try:

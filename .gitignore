@@ -30,3 +30,4 @@ secrets.json
 credentials.json
 work/
 .worktrees
+node_modules/
