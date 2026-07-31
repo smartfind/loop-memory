@@ -126,9 +126,22 @@ const setupReturn = wikiSrc.match(
 ok(setupReturn && /\bvisible\b/.test(setupReturn[1]),
    'M) setup exposes visible to the template');
 
+// 11. The modal frame must clip overflow and let the body shrink as
+//     a flex child; otherwise long pages extend below the footer and
+//     the lower tags/evidence cannot be reached.
+const modalClipsRule = /\.wiki-preview-modal\s*\{[^}]*overflow:\s*hidden/m
+  .test(cssSrc);
+ok(modalClipsRule, 'N) preview modal clips child overflow');
+const bodyScrollRule = /\.wiki-preview-body\s*\{[^}]*min-height:\s*0[^}]*overflow-y:\s*auto/m
+  .test(cssSrc);
+ok(bodyScrollRule, 'O) preview body is an independently scrollable flex child');
+const bodyChildrenRule = /\.wiki-preview-body\s*>\s*\*\s*\{[^}]*flex:\s*0\s+0\s+auto/m
+  .test(cssSrc);
+ok(bodyChildrenRule, 'P) preview body sections cannot shrink away overflow');
+
 if (failures === 0) {
-  console.log('OK wiki preview render: 13 checks passed');
+  console.log('OK wiki preview render: 16 checks passed');
   process.exit(0);
 }
-console.error(`FAIL wiki preview render: ${failures} of 13 checks failed`);
+console.error(`FAIL wiki preview render: ${failures} of 16 checks failed`);
 process.exit(1);

@@ -16,6 +16,10 @@
   restores its missing `Path` import, eliminating the four sidebar
   500 responses seen during startup. Pinned by the preview-render and
   admin-ingest route regression suites.
+- **Long preview scrolling**: the preview frame now clips overflow
+  while its body uses `min-height: 0` and an independent vertical
+  scroll area. Header, scope chips, and footer remain visible, so
+  long bodies can always reach their lower tags, evidence, and meta.
 
 ### Distillation & i18n (2026-07-30)
 - **Wiki prompt localisation**: a new `loop_memory/wiki/prompts.py`
