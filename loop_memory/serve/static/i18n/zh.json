@@ -726,5 +726,15 @@
   "wiki.contradict.vs": "与",
   "wiki.contradict.mergeInto": "保留「{title}」，合并其他",
   "wiki.contradict.notConflict": "不算矛盾",
-  "wiki.scope.auto": "自动判定（推荐）"
+  "wiki.scope.auto": "自动判定（推荐）",
+  "wiki.preview.title": "预览",
+  "wiki.preview.body": "正文",
+  "wiki.preview.bodyEmpty": "（无正文）",
+  "wiki.preview.copyBody": "复制正文",
+  "wiki.preview.copyBodyTip": "把正文复制成可粘贴到其他大模型客户端的上下文 (Markdown)",
+  "wiki.preview.created": "创建于",
+  "wiki.preview.updated": "更新于",
+  "wiki.preview.evidence": "源记忆 ({n} 条)",
+  "wiki.preview.evidenceMore": "还有 {n} 条",
+  "wiki.preview.openMemory": "查看源记忆"
 }

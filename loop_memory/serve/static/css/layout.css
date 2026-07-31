@@ -666,8 +666,8 @@ html, body, #app { height: 100%; }
 .tl-head { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-mute); margin-bottom: 6px; }
 .tl-head .score { font-weight: 600; }
 .tl-body { font-size: 13px; line-height: 1.55; color: var(--text); }
-.tl-tags, .wc-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
-.tl-tags .tag, .wc-tags .tag {
+.tl-tags, .wc-tags, .wpm-tags { display: flex; gap: 4px; flex-wrap: wrap; }
+.tl-tags .tag, .wc-tags .tag, .wpm-tags .tag {
   font-size: 11px; color: var(--text-faint);
   background: var(--surface-2);
   padding: 1px 6px; border-radius: 4px;

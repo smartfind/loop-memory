@@ -726,5 +726,15 @@
   "wiki.contradict.vs": "vs.",
   "wiki.contradict.mergeInto": "Keep “{title}”, dissolve other",
   "wiki.contradict.notConflict": "Not a conflict",
-  "wiki.scope.auto": "Auto (recommended)"
+  "wiki.scope.auto": "Auto (recommended)",
+  "wiki.preview.title": "Preview",
+  "wiki.preview.body": "Body",
+  "wiki.preview.bodyEmpty": "(no body)",
+  "wiki.preview.copyBody": "Copy body",
+  "wiki.preview.copyBodyTip": "Copy body as Markdown context for other LLM clients",
+  "wiki.preview.created": "Created",
+  "wiki.preview.updated": "Updated",
+  "wiki.preview.evidence": "Source memories ({n})",
+  "wiki.preview.evidenceMore": "+{n} more",
+  "wiki.preview.openMemory": "Open source memory"
 }

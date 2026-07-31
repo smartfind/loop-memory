@@ -26,7 +26,7 @@ export const Wiki = defineComponent({
     const sort = ref('updated_desc');
     const scopeFilter = ref('all');  // 'all'|'global'|'codex'|...
     const loading = ref(false);
-    const expanded = ref(null);
+    const previewing = ref(null);
     const editing = ref(null);
     const contradictions = ref([]);
     const contrLoading = ref(false);
@@ -142,7 +142,112 @@ export const Wiki = defineComponent({
       return ('wiki.scope.chip.' + tok);
     }
 
-    function expand(id) { expanded.value = expanded.value === id ? null : id; }
+    /**
+     * Preview modal — read-only overlay that lets the user inspect
+     * a single distilled page in detail without leaving the wiki
+     * tab. Supersedes the legacy inline `<pre class="wc-body">`
+     * expansion: click the card title or the "预览 / preview"
+     * button to open; press Esc, click the ×, or click the
+     * backdrop to close. Footer offers Edit / Copy-body / Delete /
+     * Close so the user never has to leave the modal just to make
+     * one tweak. Body renders as a bullet list (same shape as the
+     * card face) rather than a `<pre>` so the markdown fact list
+     * stays scannable.
+     */
+    async function preview(p) {
+      // Shallow copy so mutations from the edit/delete footer
+      // buttons don't bleed into the card grid via the `pages`
+      // ref until we explicitly refresh.
+      previewing.value = p ? { ...p } : null;
+      if (!p) return;
+      // Body / summary / evidence live on the list endpoint today,
+      // but future-proof: if the row came back without a body,
+      // fetch the full page so the modal has something to show.
+      if (!p.body && p.id) {
+        try {
+          const full = await api.getWiki(p.id);
+          if (full && previewing.value && previewing.value.id === p.id) {
+            previewing.value = { ...previewing.value, ...full };
+          }
+        } catch (e) { /* keep the stub; UI just shows empty body */ }
+      }
+    }
+    function closePreview() { previewing.value = null; }
+    function onPreviewKeydown(e) {
+      if (e && e.key === 'Escape' && previewing.value) {
+        e.preventDefault();
+        closePreview();
+      }
+    }
+    function editFromPreview() {
+      if (!previewing.value) return;
+      // Cache the id before we null-out the modal so the editor
+      // opens with the right page.
+      const id = previewing.value.id;
+      previewing.value = null;
+      edit(id);
+    }
+    function removeFromPreview() {
+      if (!previewing.value) return;
+      const p = previewing.value;
+      previewing.value = null;
+      removePage(p);
+    }
+    async function copyPreviewBody() {
+      if (!previewing.value) return;
+      const p = previewing.value;
+      // Compose a context block that pastes cleanly into another
+      // LLM client: title, slug, scope, importance, tags, summary,
+      // body. Empty fields are skipped so we don't ship "Summary:"
+      // with a blank.
+      const lines = [];
+      const tags = (p.tags || []).map(x => '#' + x).join(' ');
+      lines.push('# ' + (p.title || p.slug || ''));
+      const meta = [];
+      meta.push('slug: ' + (p.slug || ''));
+      meta.push('importance: ' + Math.round((p.importance || 0) * 100) + '%');
+      meta.push('scope: ' + ((p.scope || 'global')));
+      if (tags) meta.push('tags: ' + tags);
+      lines.push(meta.join(' · '));
+      if (p.summary) lines.push('', '> ' + String(p.summary).replace(/\n/g, '\n> '));
+      if (p.body) lines.push('', String(p.body).trim());
+      const md = lines.join('\n');
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(md);
+          toast(t('wiki.copied'), 1800);
+        } else {
+          throw new Error('no clipboard');
+        }
+      } catch (e) {
+        // Fallback for non-secure contexts / older browsers. Drop
+        // a hidden textarea, select it, exec copy. The toast still
+        // confirms success; failure path falls through to the
+        // copyFailed key.
+        try {
+          const ta = document.createElement('textarea');
+          ta.value = md;
+          ta.setAttribute('readonly', '');
+          ta.style.position = 'absolute';
+          ta.style.left = '-9999px';
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+          toast(t('wiki.copied'), 1800);
+        } catch (e2) {
+          toast(t('wiki.copyFailed'), 1800);
+        }
+      }
+    }
+    function openMemory(mid) {
+      // Surface the underlying source memory by switching tabs to
+      // dashboard. The timeline honours store.activeSession and the
+      // user can drill in from there.
+      if (!mid) return;
+      store.activeTab = 'dashboard';
+      toast(mid.slice(0, 8), 1200);
+    }
     function edit(id) { editing.value = id; }
 
     function onNew() { editing.value = 'new'; }
@@ -275,9 +380,14 @@ export const Wiki = defineComponent({
     onMounted(() => {
       refresh();
       window.addEventListener('loop-memory:open-wiki', onOpenWiki);
+      // Esc closes the preview modal — bound at window level because
+      // the modal sits inside the wiki pane and we don't want focus
+      // to require a specific element to fire the shortcut.
+      window.addEventListener('keydown', onPreviewKeydown);
     });
     onUnmounted(() => {
       window.removeEventListener('loop-memory:open-wiki', onOpenWiki);
+      window.removeEventListener('keydown', onPreviewKeydown);
     });
     watch(() => store.stats.wiki_pages, refresh);
     // When the user navigates back to the wiki tab, refresh in case the
@@ -436,9 +546,11 @@ export const Wiki = defineComponent({
 
     return {
       store, t, pages, q, sort, scopeFilter, SCOPE_TOKENS,
-      loading, visible, expanded, editing, bulletsOf,
+      loading, previewing, editing, bulletsOf,
       scopeTokensOf, scopeChipLabel,
-      refresh, expand, edit, onNew, onExport, onImportClick, importing, exporting, saveEdit, removePage, fmtTime,
+      refresh, preview, closePreview, onPreviewKeydown,
+      editFromPreview, removeFromPreview, copyPreviewBody, openMemory,
+      edit, onNew, onExport, onImportClick, importing, exporting, saveEdit, removePage, fmtTime,
       contradictions, contrLoading, showContradictions, refreshContradictions, scanContradictions, resolveContradiction, quickMerge,
       isGlobal, toggleCardGlobal, toggleMasterGlobal, masterGlobal, bulkBusy,
       confirmDialog, showConfirm, hideConfirm,
@@ -532,7 +644,13 @@ export const Wiki = defineComponent({
     <div v-if="visible.length" class="wiki-grid">
       <article v-for="p in visible" :key="p.id" class="wiki-card">
         <div class="wc-head">
-          <h3 class="wc-title">{{ p.title || p.slug }}</h3>
+          <h3 class="wc-title wc-title-clickable"
+              tabindex="0"
+              role="button"
+              :aria-label="t('wiki.preview')"
+              @click="preview(p)"
+              @keydown.enter.prevent="preview(p)"
+              @keydown.space.prevent="preview(p)">{{ p.title || p.slug }}</h3>
           <span class="wc-imp" :title="t('wiki.importance')">
             {{ Math.round((p.importance || 0) * 100) }}%
           </span>
@@ -567,14 +685,16 @@ export const Wiki = defineComponent({
             </span>
           </span>
           <div class="wc-actions">
-            <button class="wc-btn" @click="expand(p.id)">
-              {{ expanded === p.id ? t('action.close') : t('wiki.preview') }}
-            </button>
+            <button class="wc-btn"
+                    :title="t('wiki.preview')"
+                    :aria-label="t('wiki.preview')"
+                    @click="preview(p)">{{ t('wiki.preview') }}</button>
             <button class="wc-btn" @click="edit(p.id)">{{ t('action.edit') }}</button>
             <button class="wc-btn danger" @click="removePage(p)">{{ t('action.delete') }}</button>
           </div>
         </div>
-        <pre class="wc-body" v-if="expanded === p.id">{{ p.body }}</pre>
+        <!-- inline body removed; the preview modal supersedes the
+             legacy expand-inline `<pre>` snippet. -->
       </article>
     </div>
     <div class="empty" v-else-if="!loading">{{ t('wiki.empty') }}</div>
@@ -584,6 +704,98 @@ export const Wiki = defineComponent({
                 :page-id="editing"
                 @save="saveEdit"
                 @cancel="editing = null" />
+
+    <!-- Preview modal — read-only overlay for a distilled page.
+         Supersedes the legacy inline body expansion. Click the card
+         title or "预览" button to open. Footer offers Copy body
+         (markdown), Edit, Delete, Close. Esc / × / backdrop close. -->
+    <div v-if="previewing"
+         class="modal-backdrop wiki-preview-backdrop"
+         @click.self="closePreview">
+      <div class="modal wiki-preview-modal"
+           role="dialog"
+           aria-modal="true"
+           :aria-label="previewing.title || previewing.slug">
+        <header class="modal-head wiki-preview-head">
+          <div class="wpm-head-titles">
+            <h3 class="wpm-title">{{ previewing.title || previewing.slug || '' }}</h3>
+            <div class="wpm-head-meta">
+              <span class="wpm-slug" v-if="previewing.slug"
+                    :title="previewing.slug">{{ previewing.slug }}</span>
+              <span class="wpm-imp"
+                    :title="t('wiki.importance')">{{ Math.round((previewing.importance || 0) * 100) }}%</span>
+            </div>
+          </div>
+          <button class="x" type="button"
+                  :aria-label="t('action.close')"
+                  @click="closePreview">×</button>
+        </header>
+        <div class="wpm-scopes" v-if="scopeTokensOf(previewing).length">
+          <span class="scope-pill" v-for="tok in scopeTokensOf(previewing)" :key="tok"
+                :class="'scope-pill-' + tok">{{ t(scopeChipLabel(tok)) }}</span>
+        </div>
+        <div class="modal-body wiki-preview-body">
+          <p class="wpm-summary" v-if="previewing.summary">{{ previewing.summary }}</p>
+
+          <section class="wpm-section" v-if="previewing.tags && previewing.tags.length">
+            <div class="wpm-section-title">{{ t('wiki.field.tags') }}</div>
+            <div class="wpm-tags">
+              <span v-for="tag in previewing.tags" :key="tag" class="tag">#{{ tag }}</span>
+            </div>
+          </section>
+
+          <section class="wpm-section">
+            <div class="wpm-section-title">{{ t('wiki.preview.body') }}</div>
+            <ul class="wpm-bullets" v-if="bulletsOf(previewing).length">
+              <li v-for="(b, i) in bulletsOf(previewing)" :key="i">{{ b.replace(/^-\s*/, '') }}</li>
+            </ul>
+            <pre class="wpm-body-raw" v-else-if="previewing.body">{{ previewing.body }}</pre>
+            <p class="wpm-empty" v-else>{{ t('wiki.preview.bodyEmpty') }}</p>
+          </section>
+
+          <section class="wpm-section"
+                   v-if="previewing.evidence_ids && previewing.evidence_ids.length">
+            <div class="wpm-section-title">
+              {{ t('wiki.preview.evidence', { n: previewing.evidence_ids.length }) }}
+            </div>
+            <div class="wpm-evidence">
+              <code v-for="eid in previewing.evidence_ids.slice(0, 12)"
+                    :key="eid"
+                    class="wpm-evidence-id"
+                    tabindex="0"
+                    role="button"
+                    :title="t('wiki.preview.openMemory')"
+                    @click="openMemory(eid)"
+                    @keydown.enter.prevent="openMemory(eid)">{{ eid.slice(0, 8) }}</code>
+              <span class="wpm-evidence-more"
+                    v-if="previewing.evidence_ids.length > 12">
+                +{{ previewing.evidence_ids.length - 12 }}
+              </span>
+            </div>
+          </section>
+
+          <div class="wpm-meta">
+            <span>{{ t('wiki.preview.updated') }} {{ fmtTime(previewing.updated_at) }}</span>
+            <span v-if="previewing.created_at && previewing.created_at !== previewing.updated_at">
+              · {{ t('wiki.preview.created') }} {{ fmtTime(previewing.created_at) }}
+            </span>
+          </div>
+        </div>
+        <footer class="modal-foot wiki-preview-foot">
+          <button class="btn ghost"
+                  type="button"
+                  :title="t('wiki.preview.copyBodyTip')"
+                  @click="copyPreviewBody">{{ t('wiki.preview.copyBody') }}</button>
+          <span class="spacer"></span>
+          <button class="btn ghost"
+                  type="button"
+                  :title="t('wiki.confirmDeleteTitle')"
+                  @click="removeFromPreview">{{ t('action.delete') }}</button>
+          <button class="btn ghost" type="button" @click="editFromPreview">{{ t('action.edit') }}</button>
+          <button class="btn primary" type="button" @click="closePreview">{{ t('action.close') }}</button>
+        </footer>
+      </div>
+    </div>
 
     <!-- Inline confirmation modal — replaces the legacy browser confirm() so
          destructive actions stay inside the app shell. -->

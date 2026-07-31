@@ -3919,7 +3919,8 @@
 .wiki-card .wc-scopes {
   display: flex; flex-wrap: wrap; gap: 5px;
 }
-.wiki-card .scope-pill {
+.wiki-card .scope-pill,
+.wiki-preview-modal .scope-pill {
   font-size: 10.5px;
   font-weight: 550;
   padding: 2px 8px;
@@ -3929,22 +3930,32 @@
   color: var(--text-muted);
   letter-spacing: .01em;
 }
-.wiki-card .scope-pill-global {
+.wiki-card .scope-pill-global,
+.wiki-preview-modal .scope-pill-global {
   /* neutral — visible to everyone */
   background: color-mix(in srgb, var(--text) 8%, var(--surface));
   border-color: color-mix(in srgb, var(--text) 30%, var(--border));
   color: var(--text);
 }
-.wiki-card .scope-pill-codex    { background: rgba( 99, 102, 241, .16); border-color: rgba( 99, 102, 241, .35); color: rgb(67, 56, 202); }
-.wiki-card .scope-pill-claude   { background: rgba(236,  72, 153, .16); border-color: rgba(236,  72, 153, .35); color: rgb(157,  23,  77); }
-.wiki-card .scope-pill-hermes   { background: rgba( 245, 158,  11, .18); border-color: rgba( 245, 158,  11, .40); color: rgb(146,  64,  14); }
-.wiki-card .scope-pill-openclaw { background: rgba(  34, 197,  94, .16); border-color: rgba(  34, 197,  94, .40); color: rgb( 22, 101,  52); }
+.wiki-card .scope-pill-codex,
+.wiki-preview-modal .scope-pill-codex { background: rgba( 99, 102, 241, .16); border-color: rgba( 99, 102, 241, .35); color: rgb(67, 56, 202); }
+.wiki-card .scope-pill-claude,
+.wiki-preview-modal .scope-pill-claude { background: rgba(236,  72, 153, .16); border-color: rgba(236,  72, 153, .35); color: rgb(157,  23,  77); }
+.wiki-card .scope-pill-hermes,
+.wiki-preview-modal .scope-pill-hermes { background: rgba( 245, 158,  11, .18); border-color: rgba( 245, 158,  11, .40); color: rgb(146,  64,  14); }
+.wiki-card .scope-pill-openclaw,
+.wiki-preview-modal .scope-pill-openclaw { background: rgba(  34, 197,  94, .16); border-color: rgba(  34, 197,  94, .40); color: rgb( 22, 101,  52); }
 
-[data-theme="dark"] .wiki-card .scope-pill-global { background: color-mix(in srgb, var(--text) 14%, var(--surface)); }
-[data-theme="dark"] .wiki-card .scope-pill-codex    { background: rgba( 99, 102, 241, .25); border-color: rgba( 99, 102, 241, .45); color: rgb(165, 160, 255); }
-[data-theme="dark"] .wiki-card .scope-pill-claude   { background: rgba(236,  72, 153, .25); border-color: rgba(236,  72, 153, .45); color: rgb(244, 114, 182); }
-[data-theme="dark"] .wiki-card .scope-pill-hermes   { background: rgba( 245, 158,  11, .25); border-color: rgba( 245, 158,  11, .45); color: rgb(251, 191,  36); }
-[data-theme="dark"] .wiki-card .scope-pill-openclaw { background: rgba(  34, 197,  94, .25); border-color: rgba(  34, 197,  94, .45); color: rgb( 74, 222, 128); }
+[data-theme="dark"] .wiki-card .scope-pill-global,
+.wiki-preview-modal .scope-pill-global { background: color-mix(in srgb, var(--text) 14%, var(--surface)); }
+[data-theme="dark"] .wiki-card .scope-pill-codex,
+.wiki-preview-modal .scope-pill-codex { background: rgba( 99, 102, 241, .25); border-color: rgba( 99, 102, 241, .45); color: rgb(165, 160, 255); }
+[data-theme="dark"] .wiki-card .scope-pill-claude,
+.wiki-preview-modal .scope-pill-claude { background: rgba(236,  72, 153, .25); border-color: rgba(236,  72, 153, .45); color: rgb(244, 114, 182); }
+[data-theme="dark"] .wiki-card .scope-pill-hermes,
+.wiki-preview-modal .scope-pill-hermes { background: rgba( 245, 158,  11, .25); border-color: rgba( 245, 158,  11, .45); color: rgb(251, 191,  36); }
+[data-theme="dark"] .wiki-card .scope-pill-openclaw,
+.wiki-preview-modal .scope-pill-openclaw { background: rgba(  34, 197,  94, .25); border-color: rgba(  34, 197,  94, .45); color: rgb( 74, 222, 128); }
 
 .wiki-toolbar select[title] { min-width: 110px; }
 
@@ -4039,3 +4050,186 @@
     padding: 4px 10px;
     font-size: 11.5px;
   }
+
+/* --- Wiki preview modal --- */
+.wiki-preview-backdrop {
+  /* heavier blur to set the modal apart from the wiki grid below */
+  background: rgba(15,23,42,.55);
+  backdrop-filter: blur(6px);
+  z-index: 90;
+}
+.wiki-preview-modal {
+  width: min(760px, 100%);
+  max-height: 88vh;
+}
+.wiki-preview-head {
+  align-items: flex-start;
+  gap: 12px;
+}
+.wiki-preview-head .wpm-head-titles {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+.wpm-title {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0;
+  word-break: break-word;
+  line-height: 1.3;
+}
+.wpm-head-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+.wpm-slug {
+  font-family: var(--mono, ui-monospace, "SF Mono", "JetBrains Mono", monospace);
+  background: var(--surface-2);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  color: var(--text-mute);
+}
+.wpm-imp {
+  font-weight: 600;
+  color: var(--accent);
+}
+.wiki-preview-modal .wpm-scopes {
+  padding: 0 18px 4px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.wiki-preview-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-top: 14px;
+}
+.wpm-summary {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.55;
+  background: var(--surface-2);
+  border-left: 3px solid var(--accent);
+  padding: 8px 10px;
+  border-radius: 4px;
+}
+.wpm-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.wpm-section-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+  font-weight: 600;
+}
+.wpm-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.wpm-bullets {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.wpm-bullets li {
+  word-break: break-word;
+}
+.wpm-body-raw {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin: 0;
+  font-family: var(--mono, ui-monospace, "SF Mono", "JetBrains Mono", monospace);
+  font-size: 12.5px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+  max-height: 320px;
+  overflow: auto;
+}
+.wpm-empty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-faint);
+  font-style: italic;
+}
+.wpm-evidence {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+.wpm-evidence-id {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 10.5px;
+  color: var(--text-mute);
+  font-family: var(--mono, ui-monospace, "SF Mono", "JetBrains Mono", monospace);
+  cursor: pointer;
+  transition: color .12s ease, border-color .12s ease;
+}
+.wpm-evidence-id:hover,
+.wpm-evidence-id:focus {
+  color: var(--accent);
+  border-color: var(--accent);
+  outline: none;
+}
+.wpm-evidence-more {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.wpm-meta {
+  font-size: 11.5px;
+  color: var(--text-faint);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+.wiki-preview-foot {
+  flex-wrap: wrap;
+}
+.wiki-preview-foot .spacer {
+  flex: 1;
+}
+
+/* Clickable card title — shows a subtle affordance on hover/focus
+   so the user knows clicking opens the preview modal. */
+.wc-title-clickable {
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 1px 4px;
+  margin: -1px -4px;
+  transition: background-color .12s ease;
+}
+.wc-title-clickable:hover {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.wc-title-clickable:focus {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  outline: none;
+}

@@ -1,5 +1,15 @@
 ## [Unreleased]
 
+### Wiki preview modal (2026-07-31)
+- **Knowledge preview popup**: clicking the card title (or the new
+  preview button) opens a read-only modal overlay with the page's
+  full title, slug, importance, scope chips, summary, tag list,
+  body bullets, source-memory chips, and "Updated / Created" meta.
+  Footer offers Copy-body (Markdown context), Edit, Delete, Close;
+  Esc / × / backdrop click all close the modal cleanly. Supersedes
+  the legacy inline `<pre class="wc-body">` expansion. Pinned by
+  ``tests-js/test_wiki_preview.test.mjs``.
+
 ### Distillation & i18n (2026-07-30)
 - **Wiki prompt localisation**: a new `loop_memory/wiki/prompts.py`
   module replaces the legacy English-only `_WIKI_SYSTEM` /
