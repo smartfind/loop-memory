@@ -20,6 +20,10 @@
   while its body uses `min-height: 0` and an independent vertical
   scroll area. Header, scope chips, and footer remain visible, so
   long bodies can always reach their lower tags, evidence, and meta.
+- **Import popover alignment**: source rows now stretch to the same
+  width and use stable checkbox, icon, name, path, and status columns.
+  Active-session cards also share one left edge and width instead of
+  shifting horizontally with each source label.
 
 ### Distillation & i18n (2026-07-30)
 - **Wiki prompt localisation**: a new `loop_memory/wiki/prompts.py`

@@ -490,6 +490,7 @@ html, body, #app { height: 100%; }
    actually detected for that source. */
 .topbar .tb-ingest-menu .ingest-row {
   display: flex; flex-direction: column; gap: 0;
+  align-items: stretch;
   padding: 6px 4px 4px;
   border-radius: 8px;
   border: 1px solid transparent;
@@ -509,8 +510,10 @@ html, body, #app { height: 100%; }
 }
 .topbar .tb-ingest-menu .ingest-row-main {
   display: grid;
-  grid-template-columns: 18px 20px 1fr auto auto;
+  grid-template-columns: 18px 20px 76px minmax(0, 1fr) auto;
   gap: 8px; align-items: center;
+  width: 100%;
+  min-width: 0;
   cursor: pointer;
   font-size: 12.5px;
   margin: 0;
@@ -531,6 +534,8 @@ html, body, #app { height: 100%; }
   font-size: 10.5px;
   color: var(--text-soft);
   min-width: 0;
+  width: auto;
+  box-sizing: border-box;
   flex-wrap: wrap;
 }
 .topbar .tb-ingest-menu .ingest-active-name {
