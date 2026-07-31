@@ -4053,15 +4053,41 @@
 
 /* --- Wiki preview modal --- */
 .wiki-preview-backdrop {
-  /* heavier blur to set the modal apart from the wiki grid below */
+  /* Self-contained so the modal centres regardless of whether the
+     base `.modal-backdrop` is also applied. position:fixed anchors
+     to the viewport; display:flex + place-items:center centres the
+     inner .modal even when the surrounding grid/stack would
+     otherwise reset `inset`. */
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
   background: rgba(15,23,42,.55);
   backdrop-filter: blur(6px);
   z-index: 90;
+  overflow: auto;
 }
 .wiki-preview-modal {
+  /* Don't depend on the base `.modal` for sizing: explicitly set
+     size here so the modal can't accidentally inherit the wiki-card
+     grid or default to block-level flow inside an inline card. */
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 30px 80px -20px rgba(0,0,0,.35);
   width: min(760px, 100%);
   max-height: 88vh;
+  margin: auto;
 }
+/* .wiki-preview-modal layout: see the consolidated ruleset
+   earlier in this block to keep stacking / sizing / position in one
+   place. */
+.wiki-preview-modal { /* intentionally bare — see .wiki-preview-backdrop above */ }
 .wiki-preview-head {
   align-items: flex-start;
   gap: 12px;
