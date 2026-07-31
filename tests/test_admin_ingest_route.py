@@ -77,6 +77,26 @@ class AdminIngestRouteTests(unittest.TestCase):
         self.assertEqual(len(get_cfg_handlers), 1)
         self.assertIsNot(post_handlers[0], get_cfg_handlers[0])
 
+    def test_active_session_accepts_path_defaults(self) -> None:
+        transcript = self.tmp / "session.jsonl"
+        transcript.write_text('{"type":"message"}\n', encoding="utf-8")
+        fake_loader = mock.MagicMock()
+        fake_loader.discover.return_value = [transcript]
+
+        with mock.patch(
+            "loop_memory.ingest.loader.default_paths",
+            return_value={"codex": self.tmp},
+        ), mock.patch(
+            "loop_memory.ingest.loader.get_loader",
+            return_value=fake_loader,
+        ):
+            response = self.client.get(
+                "/api/admin/watcher/active-session?source=codex"
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["active"]["path"], str(transcript))
+
 
 if __name__ == "__main__":
     unittest.main()

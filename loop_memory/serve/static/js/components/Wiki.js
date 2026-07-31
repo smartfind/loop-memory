@@ -145,13 +145,13 @@ export const Wiki = defineComponent({
     /**
      * Preview modal — read-only overlay that lets the user inspect
      * a single distilled page in detail without leaving the wiki
-     * tab. Supersedes the legacy inline `<pre class="wc-body">`
+     * tab. Supersedes the legacy inline `&lt;pre class="wc-body"&gt;`
      * expansion: click the card title or the "预览 / preview"
      * button to open; press Esc, click the ×, or click the
      * backdrop to close. Footer offers Edit / Copy-body / Delete /
      * Close so the user never has to leave the modal just to make
      * one tweak. Body renders as a bullet list (same shape as the
-     * card face) rather than a `<pre>` so the markdown fact list
+     * card face) rather than a &lt;pre&gt; so the markdown fact list
      * stays scannable.
      */
     async function preview(p) {
@@ -545,7 +545,7 @@ export const Wiki = defineComponent({
     }, { deep: true });
 
     return {
-      store, t, pages, q, sort, scopeFilter, SCOPE_TOKENS,
+      store, t, pages, visible, q, sort, scopeFilter, SCOPE_TOKENS,
       loading, previewing, editing, bulletsOf,
       scopeTokensOf, scopeChipLabel,
       refresh, preview, closePreview, onPreviewKeydown,
@@ -694,7 +694,7 @@ export const Wiki = defineComponent({
           </div>
         </div>
         <!-- inline body removed; the preview modal supersedes the
-             legacy expand-inline `<pre>` snippet. -->
+             legacy expand-inline &lt;pre&gt; snippet. -->
       </article>
     </div>
     <div class="empty" v-else-if="!loading">{{ t('wiki.empty') }}</div>

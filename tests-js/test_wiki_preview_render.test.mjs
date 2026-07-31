@@ -117,9 +117,18 @@ ok(footLabels.some((t) => /关闭/.test(t)),
 const title = doc.querySelector('.wc-title-clickable');
 ok(title !== null, 'L) card title carries .wc-title-clickable');
 
+// 10. Every template binding must be exposed by setup(). Missing
+//     `visible` previously made the entire Wiki pane fail at
+//     `visible.length` during its first render.
+const setupReturn = wikiSrc.match(
+  /return\s*\{([\s\S]*?)\};\s*\n\s*\},\s*\n\s*template:/,
+);
+ok(setupReturn && /\bvisible\b/.test(setupReturn[1]),
+   'M) setup exposes visible to the template');
+
 if (failures === 0) {
-  console.log('OK wiki preview render: 12 checks passed');
+  console.log('OK wiki preview render: 13 checks passed');
   process.exit(0);
 }
-console.error(`FAIL wiki preview render: ${failures} of 12 checks failed`);
+console.error(`FAIL wiki preview render: ${failures} of 13 checks failed`);
 process.exit(1);

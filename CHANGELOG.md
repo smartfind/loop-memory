@@ -9,6 +9,13 @@
   Esc / × / backdrop click all close the modal cleanly. Supersedes
   the legacy inline `<pre class="wc-body">` expansion. Pinned by
   ``tests-js/test_wiki_preview.test.mjs``.
+- **Wiki white-screen regression**: exposed the `visible` computed
+  value from `setup()` so the template can safely evaluate
+  `visible.length`, and removed raw template-literal backticks from
+  the embedded HTML comment. The watcher active-session endpoint also
+  restores its missing `Path` import, eliminating the four sidebar
+  500 responses seen during startup. Pinned by the preview-render and
+  admin-ingest route regression suites.
 
 ### Distillation & i18n (2026-07-30)
 - **Wiki prompt localisation**: a new `loop_memory/wiki/prompts.py`
