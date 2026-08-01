@@ -181,7 +181,16 @@ class OpenAICompatProvider(LLMClient):
     ) -> None:
         self.model = model
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY") or os.environ.get("LOOP_MEMORY_API_KEY")
-        self.base_url = (base_url or "https://api.openai.com/v1").rstrip("/")
+        # OPENAI_BASE_URL lets users point the OpenAI-compatible client at
+        # a self-hosted proxy (vLLM, LM Studio, llama.cpp server,
+        # OpenRouter) without passing --base-url. Mirrors the official
+        # OpenAI SDK env-var convention and matches the other
+        # OpenAI-compatible providers that already read this variable
+        # (see mem0ai/mem0#6322). Explicit constructor argument still
+        # wins, so every existing call site is unchanged.
+        env_base_url = os.environ.get("OPENAI_BASE_URL") or os.environ.get("OPENAI_API_BASE")
+        effective_base_url = base_url or env_base_url or "https://api.openai.com/v1"
+        self.base_url = effective_base_url.rstrip("/")
         self.timeout = timeout
 
     def complete(self, history: ChatHistory, **kwargs) -> str:
