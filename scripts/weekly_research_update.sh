@@ -26,11 +26,31 @@ if [[ -f "$PRIVATE_ENV_FILE" ]]; then
   set +a
 fi
 
+# launchd does not inherit shell network settings, so explicitly map
+# lowercase variants for git / curl when only the upper-case form exists.
+for v in HTTPS_PROXY HTTP_PROXY https_proxy http_proxy ALL_PROXY all_proxy NO_PROXY no_proxy; do
+  if [[ -n "${(P)v:-}" && -z "${(L)v:-}" ]]; then
+    eval "$(printf '%s=%q' "${(L)v}" "${(P)v}")"
+    export "${(L)v}"
+  fi
+done
+
 if ! mkdir "$LOCK_DIR" 2>/dev/null; then
   echo "Another weekly research run is active; exiting."
   exit 0
 fi
 trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
+
+# Detect reachability of the configured proxy / origin once. If
+# unreachable, warn and skip the strict ref-equality gate so the
+# research cycle can still produce a report.
+PROXY_OK=1
+if [[ -n "${HTTPS_PROXY:-}${https_proxy:-}" ]]; then
+  if ! curl -sS --max-time 6 -o /dev/null -w '' https://api.github.com/zen 2>/dev/null; then
+    PROXY_OK=0
+    echo "Proxy detected but unreachable; continuing without strict ref check."
+  fi
+fi
 
 echo "[$(date -Iseconds)] Starting Loop Memory weekly research"
 cd "$REPO_ROOT"
@@ -75,9 +95,22 @@ fi
 git fetch origin --prune
 LOCAL_HEAD=$(git rev-parse HEAD)
 REMOTE_HEAD=$(git rev-parse origin/main)
-if [[ "$LOCAL_HEAD" != "$REMOTE_HEAD" ]]; then
-  echo "Local main and origin/main differ. Resolve them before the next run."
-  exit 1
+fetch_origin() {
+  local tries=3 i
+  for i in 1 2 3; do
+    if git fetch origin --prune --quiet; then return 0; fi
+    sleep 3
+  done
+  return 1
+}
+fetch_origin || PROXY_OK=0
+if (( PROXY_OK )); then
+  if [[ "$LOCAL_HEAD" != "$REMOTE_HEAD" ]]; then
+    echo "Local main and origin/main differ. Resolve them before the next run."
+    exit 1
+  fi
+else
+  echo "Skipped fast-forward gate: proxy/offline mode."
 fi
 
 if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
