@@ -690,18 +690,23 @@ export const Dashboard = defineComponent({
     // reactive aliases for i18n
     void computed(() => store.lang);
 
-    // Friendly last-refresh label, e.g. "12:34:56"
-    const lastRefreshLabel = computed(() => {
-      if (!lastRefresh.value) return '';
+    // Stable local date + time, e.g. "2026-08-01 · 12:34:56".
+    // Keeping the parts separate lets CSS de-emphasise the date while
+    // preserving the clock as the primary scan target.
+    const lastRefreshParts = computed(() => {
+      if (!lastRefresh.value) return { date: '', time: '' };
       const d = new Date(lastRefresh.value);
+      const yyyy = String(d.getFullYear());
+      const mon = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
       const hh = String(d.getHours()).padStart(2, '0');
       const mm = String(d.getMinutes()).padStart(2, '0');
       const ss = String(d.getSeconds()).padStart(2, '0');
-      return `${hh}:${mm}:${ss}`;
+      return { date: `${yyyy}-${mon}-${day}`, time: `${hh}:${mm}:${ss}` };
     });
 
     return {
-      store, t, insights, loading, live, lastRefresh, lastRefreshLabel,
+      store, t, insights, loading, live, lastRefresh, lastRefreshParts,
       weeklyReport, weeklyLoading, weeklyError, weeklyDays, loadWeekly, copyWeekly,
       weeklyMarkdownHtml,
       llmAudit, writeGuard, sourceHealth, sourceHealthStats, parsedHooks,
@@ -734,8 +739,11 @@ export const Dashboard = defineComponent({
           <span class="live-dot" v-if="live"></span>
           {{ live ? t('dash.ins.live') : t('dash.ins.offline') }}
         </span>
-        <span class="ins-meta" v-if="lastRefreshLabel" :title="t('dash.ins.refresh')">
-          <span class="ins-meta-ico">⟳</span> {{ lastRefreshLabel }}
+        <span class="ins-meta ins-meta-datetime" v-if="lastRefreshParts.time" :title="t('dash.ins.refresh')">
+          <span class="ins-meta-ico">⟳</span>
+          <span class="ins-meta-date">{{ lastRefreshParts.date }}</span>
+          <span class="ins-meta-sep" aria-hidden="true">·</span>
+          <span class="ins-meta-time">{{ lastRefreshParts.time }}</span>
         </span>
       </div>
       <div class="ins-actions">

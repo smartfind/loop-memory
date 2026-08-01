@@ -32,6 +32,9 @@
   omits them, topic matching recovers the source evidence before scope
   classification, preventing Claude knowledge from silently falling
   back to the Codex scope.
+- **Dashboard refresh timestamp**: the live Insights header now shows
+  the complete local refresh date and time as
+  `YYYY-MM-DD · HH:mm:ss`, with tabular digits to prevent layout shift.
 
 ### Distillation & i18n (2026-07-30)
 - **Wiki prompt localisation**: a new `loop_memory/wiki/prompts.py`
