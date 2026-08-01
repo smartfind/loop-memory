@@ -6,8 +6,11 @@ future regression in either place is caught.
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 from pathlib import Path
+
+import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "weekly_research_update.sh"
@@ -33,10 +36,15 @@ def test_merge_and_rebase_safely_skip() -> None:
     assert HAS_REBASE_GUARD, "weekly_research_update.sh must skip mid-rebase trees"
 
 def test_shell_syntax() -> None:
-    proc = subprocess.run(
-        ["zsh", "-n", str(SCRIPT)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    assert proc.returncode == 0
+    for shell in ("zsh", "bash"):
+        if shutil.which(shell) is None:
+            continue
+        proc = subprocess.run(
+            [shell, "-n", str(SCRIPT)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode == 0, f"{shell} -n reported syntax errors"
+        return
+    pytest.skip("neither zsh nor bash is available on this runner")
