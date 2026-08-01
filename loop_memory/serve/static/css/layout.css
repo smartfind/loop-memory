@@ -285,6 +285,8 @@ html, body, #app { height: 100%; }
 }
 .tl-q { flex: 1; min-width: 220px; }
 .tl-btn, .tb-action { padding: 5px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2); cursor: pointer; color: var(--text); }
+.tl-btn.primary { background: var(--accent); color: white; border-color: var(--accent); font-weight: 600; }
+.tl-btn:disabled { cursor: wait; opacity: .65; }
 .tl-btn.ghost, .tb-action.ghost { background: transparent; border-color: transparent; }
 .tl-btn:hover, .tb-action:hover { background: var(--surface); }
 .tb-action.primary { background: var(--accent); color: white; border-color: var(--accent); }

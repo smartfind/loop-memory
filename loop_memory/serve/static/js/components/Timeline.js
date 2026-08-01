@@ -110,9 +110,8 @@ export const Timeline = defineComponent({
       refresh();
     }
 
-    function onSearchSubmit(e) {
-      e.preventDefault();
-      refresh();
+    function onSearchSubmit() {
+      if (!loading.value) refresh();
     }
 
     function scoreFmt(s) {
@@ -153,8 +152,11 @@ export const Timeline = defineComponent({
   template: /* html */ `
 <div class="tab-pane" id="pane-timeline">
   <div class="tl-wrap">
-    <form class="tl-toolbar" @submit="onSearchSubmit">
-      <input class="tl-q" type="text" v-model="q" :placeholder="t('timeline.searchPlaceholder')" />
+    <form class="tl-toolbar" role="search" @submit.prevent="onSearchSubmit">
+      <input class="tl-q" type="search" v-model="q" :placeholder="t('timeline.searchPlaceholder')" :aria-label="t('timeline.search')" />
+      <button type="submit" class="tl-btn primary" :disabled="loading">
+        {{ loading ? t('common.loading') : t('timeline.search') }}
+      </button>
       <select v-model="kind" @change="refresh">
         <option value="">{{ t('timeline.allKinds') }}</option>
         <option value="episode">{{ t('kind.episode') }}</option>
