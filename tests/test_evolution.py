@@ -1,12 +1,25 @@
 """Smoke tests for the 5-stage Evolution Consolidator + the new APIs."""
+import json
 import os
 import shutil
 import tempfile
 import unittest
 
-from loop_memory.jobs.evolution import EvolutionConsolidator
+from loop_memory.jobs.evolution import EvolutionConsolidator, EvolutionStats
 from loop_memory.llm.providers import RuleBasedProvider
 from loop_memory.storage.sqlite_store import MemoryStore
+
+
+class _WikiWithoutEvidenceProvider:
+    model = "test-wiki"
+
+    def __init__(self, page):
+        self.page = page
+        self.user_prompts = []
+
+    def complete(self, history, **_kwargs):
+        self.user_prompts.append(history.messages[-1].content)
+        return json.dumps({"pages": [self.page]}, ensure_ascii=False)
 
 
 def _seed_store(path):
@@ -102,6 +115,69 @@ class EvolutionTests(unittest.TestCase):
         self.assertGreaterEqual(len(top), 1)
         ours = next(r for r in top if r["id"] == clean)
         self.assertGreaterEqual(ours["recall_count"], 3)
+
+    def test_wiki_recovers_missing_evidence_and_repairs_scope(self):
+        session = self.store.upsert_session(
+            source="claude", external_id="claude-late", title="ChatBI",
+            started_at=1700010000.0, ended_at=1700010100.0,
+            message_count=3,
+        )
+        memory = self.store.upsert_memory(
+            kind="fact",
+            text="ChatBI uses AgentScope to orchestrate metadata governance tools",
+            importance=0.8,
+            source="claude",
+            session_id=session.id,
+            tags=["chatbi", "agentscope"],
+        )
+        body = "\n".join(
+            f"- ChatBI AgentScope metadata governance fact {index}: "
+            + "actionable implementation detail " * 4
+            for index in range(1, 8)
+        )
+        page = {
+            "slug": "project-chatbi-agentscope",
+            "title": "ChatBI AgentScope 元数据治理",
+            "summary": "ChatBI 使用 AgentScope 编排元数据治理工具。",
+            "body": body,
+            "tags": ["chatbi", "agentscope", "metadata"],
+            "importance": 0.8,
+            "evidence_ids": [],
+        }
+        self.store.upsert_wiki_page(
+            **page,
+            scope="codex",
+            auto_classification={
+                "scope_decision": "default-source",
+                "scope_applied": "codex",
+                "source_hint": None,
+            },
+        )
+        provider = _WikiWithoutEvidenceProvider(page)
+        consolidator = EvolutionConsolidator(self.store, provider, {"lang": "zh"})
+        stats = consolidator._stage4_wiki_synthesis(
+            [{
+                "text": "ChatBI AgentScope metadata governance implementation",
+                "size": 1,
+                "evidence_ids": [memory.id],
+            }],
+            {"temperature": 0.2, "max_output_tokens": 4096},
+            EvolutionStats(),
+        )
+
+        self.assertEqual(stats["updated"], 1)
+        prompt = json.loads(provider.user_prompts[0])
+        self.assertEqual(
+            prompt["cluster_summaries"][0]["evidence_ids"],
+            [memory.id],
+        )
+        stored = self.store.get_wiki_page_by_slug("project-chatbi-agentscope")
+        self.assertEqual(stored["evidence_ids"], [memory.id])
+        self.assertEqual(stored["scope"], "claude")
+        self.assertEqual(
+            stored["auto_classification"]["scope_decision"],
+            "repaired-evidence-source",
+        )
 
 
 if __name__ == "__main__":

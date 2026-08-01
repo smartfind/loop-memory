@@ -24,6 +24,14 @@
   width and use stable checkbox, icon, name, path, and status columns.
   Active-session cards also share one left edge and width instead of
   shifting horizontally with each source label.
+- **Stats database display**: the top-bar statistics popover now shows
+  the database filename and a compact home-relative directory on two
+  aligned lines instead of wrapping a truncated absolute path.
+- **Evolution evidence recovery**: Stage 4 now sends real memory IDs
+  with every cluster summary and validates model citations. If a model
+  omits them, topic matching recovers the source evidence before scope
+  classification, preventing Claude knowledge from silently falling
+  back to the Codex scope.
 
 ### Distillation & i18n (2026-07-30)
 - **Wiki prompt localisation**: a new `loop_memory/wiki/prompts.py`

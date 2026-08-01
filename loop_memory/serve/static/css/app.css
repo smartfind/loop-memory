@@ -173,6 +173,37 @@
   .stats-pop .row .label { color: var(--text-mute); }
   .stats-pop .row .val { color: var(--text); font-weight: 600; }
   .stats-pop hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
+  .stats-pop .stats-db {
+    display: grid;
+    grid-template-columns: 64px minmax(0, 1fr);
+    align-items: start;
+    gap: 10px;
+    padding: 5px 0 2px;
+    font-size: 12px;
+  }
+  .stats-pop .stats-db > .label {
+    color: var(--text-mute);
+    white-space: nowrap;
+  }
+  .stats-pop .stats-db-value {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+    font-family: var(--mono);
+    text-align: right;
+  }
+  .stats-pop .stats-db-value strong,
+  .stats-pop .stats-db-value small {
+    display: block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .stats-pop .stats-db-value strong { color: var(--text); font-size: 11.5px; }
+  .stats-pop .stats-db-value small { color: var(--text-faint); font-size: 10px; font-weight: 500; }
 
   /* Model chip (LLM provider state) */
   /* Model entry — visible button with provider + status.

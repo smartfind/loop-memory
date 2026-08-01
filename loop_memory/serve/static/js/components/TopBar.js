@@ -45,6 +45,15 @@ export const TopBar = defineComponent({
     });
 
     const runState = computed(() => store.runStatus && store.runStatus.is_running ? 'running' : 'idle');
+    const dbInfo = computed(() => {
+      const full = String(store.stats.dbPath || '');
+      if (!full) return { full: '', name: '…', dir: '' };
+      const parts = full.split('/').filter(Boolean);
+      const name = parts.pop() || full;
+      const rawDir = '/' + parts.join('/');
+      const dir = rawDir.replace(/^\/Users\/[^/]+/, '~') || '/';
+      return { full, name, dir };
+    });
 
     function toggleStats() { statsOpen.value = !statsOpen.value; toolsOpen.value = false; ingestOpen.value = false; }
     function toggleTools() { toolsOpen.value = !toolsOpen.value; statsOpen.value = false; ingestOpen.value = false; }
@@ -63,7 +72,7 @@ export const TopBar = defineComponent({
     onUnmounted(() => document.removeEventListener('click', onDocClick));
 
     return {
-      store, t, runLabel, runState, modelChipTip,
+      store, t, runLabel, runState, modelChipTip, dbInfo,
       statsOpen, toolsOpen, ingestOpen,
       toggleStats, toggleTools, toggleIngest, closeAll,
       setLang, setTheme,
@@ -116,7 +125,13 @@ export const TopBar = defineComponent({
       <div class="row"><span class="label">{{ t('stat.graph') }}</span><span class="val">{{ store.stats.graph || '0/0' }}</span></div>
       <div class="row"><span class="label">{{ t('stat.scoreLabel') }}</span><span class="val">{{ store.stats.avg_score ? (store.stats.avg_score * 100).toFixed(1) + '%' : '…' }}</span></div>
       <hr/>
-      <div class="row"><span class="label">{{ t('stat.dbPath') }}</span><span class="val" style="font-family:var(--mono); font-size:11px; cursor:pointer;" :title="store.stats.dbPath">{{ store.stats.dbPath ? (store.stats.dbPath.length > 36 ? '…' + store.stats.dbPath.slice(-34) : store.stats.dbPath) : '…' }}</span></div>
+      <div class="stats-db" :title="dbInfo.full">
+        <span class="label">{{ t('stat.dbPath') }}</span>
+        <span class="stats-db-value">
+          <strong>{{ dbInfo.name }}</strong>
+          <small v-if="dbInfo.dir">{{ dbInfo.dir }}</small>
+        </span>
+      </div>
     </div>
   </div>
 

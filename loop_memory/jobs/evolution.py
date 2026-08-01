@@ -121,6 +121,79 @@ def _merge_bullet_lists(old: str, new: str) -> str:
     return (old.rstrip() + "\n" + "\n".join(appended)).rstrip()
 
 
+_TOPIC_WORD_RE = re.compile(r"[a-z0-9][a-z0-9_.+-]{2,}", re.IGNORECASE)
+_TOPIC_CJK_RE = re.compile(r"[\u4e00-\u9fff]{2,}")
+_TOPIC_STOP_WORDS = {
+    "project", "domain", "decision", "feedback", "preferences",
+    "the", "and", "for", "with", "from", "this", "that",
+}
+
+
+def _topic_tokens(value: Any) -> set[str]:
+    """Return lightweight bilingual tokens for evidence recovery."""
+    text = str(value or "").lower()
+    tokens = {
+        token for token in _TOPIC_WORD_RE.findall(text)
+        if token not in _TOPIC_STOP_WORDS
+    }
+    for span in _TOPIC_CJK_RE.findall(text):
+        if len(span) <= 8:
+            tokens.add(span)
+        tokens.update(span[index:index + 2] for index in range(len(span) - 1))
+    return tokens
+
+
+def _recover_page_evidence(
+    page: dict[str, Any],
+    clusters: list[dict[str, Any]],
+) -> list[str]:
+    """Validate LLM citations and recover omitted IDs from matching clusters."""
+    cluster_ids = {
+        str(memory_id)
+        for cluster in clusters
+        for memory_id in (cluster.get("evidence_ids") or [])
+        if memory_id
+    }
+    supplied = page.get("evidence_ids") or []
+    if isinstance(supplied, list):
+        valid = [str(memory_id) for memory_id in supplied if str(memory_id) in cluster_ids]
+        if valid:
+            return list(dict.fromkeys(valid))[:50]
+
+    page_text = " ".join([
+        str(page.get("slug") or ""),
+        str(page.get("title") or ""),
+        str(page.get("summary") or ""),
+        str(page.get("body") or ""),
+        " ".join(str(tag) for tag in (page.get("tags") or [])),
+    ])
+    page_tokens = _topic_tokens(page_text)
+    ranked: list[tuple[int, int, dict[str, Any]]] = []
+    for index, cluster in enumerate(clusters):
+        evidence_ids = cluster.get("evidence_ids") or []
+        if not evidence_ids:
+            continue
+        score = len(page_tokens & _topic_tokens(cluster.get("text") or ""))
+        ranked.append((score, -index, cluster))
+    ranked.sort(reverse=True, key=lambda item: (item[0], item[1]))
+    if not ranked:
+        return []
+    best_score = ranked[0][0]
+    if best_score <= 0 and len(ranked) != 1:
+        return []
+    selected = [ranked[0][2]]
+    if best_score > 0:
+        threshold = max(1, math.ceil(best_score * 0.6))
+        selected = [cluster for score, _index, cluster in ranked if score >= threshold]
+    recovered = [
+        str(memory_id)
+        for cluster in selected
+        for memory_id in (cluster.get("evidence_ids") or [])
+        if memory_id
+    ]
+    return list(dict.fromkeys(recovered))[:50]
+
+
 CLUSTER_MAX = 15              # max memories per cluster (Stage 3 prompt size)
 WIKI_INPUT_CLUSTERS = 8       # how many cluster summaries feed Stage 4
 PROFILE_DIMS = ("preferences", "decisions", "projects", "domain", "feedback")
@@ -657,7 +730,20 @@ class EvolutionConsolidator:
             evidence_sources=evidence_sources,
             mode=mode if enabled else "off",
         )
-        if existing and existing.get("scope"):
+        stale_default_scope = False
+        if existing and existing.get("scope") and not (existing.get("evidence_ids") or []):
+            audit = existing.get("auto_classification") or {}
+            if isinstance(audit, str):
+                try:
+                    audit = json.loads(audit)
+                except (TypeError, ValueError):
+                    audit = {}
+            stale_default_scope = bool(
+                isinstance(audit, dict)
+                and audit.get("scope_decision") == "default-source"
+                and not audit.get("source_hint")
+            )
+        if existing and existing.get("scope") and not stale_default_scope:
             scope = str(existing["scope"]).strip().lower()
             decision = "preserved-existing"
         elif enabled and classification.auto_global:
@@ -665,7 +751,7 @@ class EvolutionConsolidator:
             decision = "auto-global"
         else:
             scope = derive_default_scope(evidence_ids=evidence_ids, store=self.store)
-            decision = "default-source"
+            decision = "repaired-evidence-source" if stale_default_scope else "default-source"
         return scope, build_scope_audit(
             classification,
             scope=scope,
@@ -1393,7 +1479,11 @@ class EvolutionConsolidator:
             "evolution_memo": memo[:1500] if isinstance(memo, str) else "",
             "existing_wiki": existing_payload,
             "cluster_summaries": [
-                {"text": cs["text"], "size": cs["size"]}
+                {
+                    "text": cs["text"],
+                    "size": cs["size"],
+                    "evidence_ids": list(cs.get("evidence_ids") or [])[:50],
+                }
                 for cs in clusters
             ],
         }
@@ -1434,6 +1524,7 @@ class EvolutionConsolidator:
 
         created = 0
         updated = 0
+        recovered_evidence_pages = 0
         under_floor_slugs: list[str] = []
         for p in pages:
             if not isinstance(p, dict):
@@ -1453,10 +1544,10 @@ class EvolutionConsolidator:
                 importance = max(0.0, min(1.0, float(p.get("importance") or 0.5)))
             except Exception:
                 importance = 0.5
-            evidence = p.get("evidence_ids") or []
-            if not isinstance(evidence, list):
-                evidence = []
-            evidence = [str(x) for x in evidence if x][:50]
+            supplied_evidence = p.get("evidence_ids") or []
+            evidence = _recover_page_evidence(p, clusters)
+            if evidence and not supplied_evidence:
+                recovered_evidence_pages += 1
             summary = (p.get("summary") or "").strip()[:400]
             existing_p = self.store.get_wiki_page_by_slug(slug)
             try:
@@ -1501,6 +1592,10 @@ class EvolutionConsolidator:
                 "wiki under floor (" + str(len(under_floor_slugs)) + "): "
                 + ", ".join(under_floor_slugs[:5])
                 + (" ..." if len(under_floor_slugs) > 5 else "")
+            )
+        if recovered_evidence_pages:
+            stats.notes.append(
+                f"wiki evidence recovered for {recovered_evidence_pages} page(s)"
             )
         return {"created": created, "updated": updated, "calls": 1}
 
