@@ -989,7 +989,7 @@
   .sidebar-head {
     padding: 12px 12px 10px;
     display: flex; gap: 8px; align-items: center;
-    position: sticky; top: 0; z-index: 1;
+    flex-shrink: 0;
     background: var(--surface);
     border-bottom: 1px solid var(--border);
   }
@@ -1013,7 +1013,7 @@
     padding: 8px 12px 6px;
     border-bottom: 1px solid var(--border);
     background: var(--surface);
-    position: sticky; top: 39px; z-index: 1;
+    flex-shrink: 0;
   }
   .src-pill {
     --tone: #475569;
@@ -1063,6 +1063,15 @@
     border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
     border-radius: 10px;
     font-size: 11.5px;
+    flex-shrink: 0;
+  }
+  .sessions {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
   }
   .active-banner .dot {
     width: 7px; height: 7px;

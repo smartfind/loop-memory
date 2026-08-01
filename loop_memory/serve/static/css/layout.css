@@ -25,7 +25,10 @@ html, body, #app { height: 100%; }
   flex-shrink: 0;
   border-right: 1px solid var(--border);
   background: var(--surface);
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .app-body > .content {
