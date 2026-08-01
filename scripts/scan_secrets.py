@@ -11,6 +11,9 @@ from pathlib import Path
 
 
 MAX_FILE_BYTES = 2 * 1024 * 1024
+# Pattern catalogue. Mirrors loop_memory/privacy/redact.py so the
+# pre-push gate can never be silently less strict than the runtime
+# redactor. Keep these in lock-step when adding a new kind.
 PATTERNS = {
     "private key": re.compile(r"-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----"),
     "OpenAI-style API key": re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
@@ -19,6 +22,19 @@ PATTERNS = {
     "Google API key": re.compile(r"\bAIza[0-9A-Za-z_-]{30,}\b"),
     "AWS access key": re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b"),
     "Slack token": re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{20,}\b"),
+    # JSON Web Tokens: three base64url segments separated by dots, the
+    # first always eyJ... (base64 for {"). Very common in
+    # mock API fixtures — the placeholder check below filters the
+    # obvious test cases.
+    "JWT": re.compile(
+        r"\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b"
+    ),
+    # Authorization: Bearer <opaque> headers / tool outputs. Matches
+    # the redaction layer so a stray token in a transcript cannot slip
+    # past the local gate.
+    "Bearer token": re.compile(
+        r"(?i)\bBearer\s+[A-Za-z0-9_\-.,~+/]{20,}=*"
+    ),
 }
 ASSIGNMENT_PATTERN = re.compile(
     r"(?i)\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|password)\b"

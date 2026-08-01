@@ -1,5 +1,34 @@
 ## [Unreleased]
 
+### Weekly research update (2026-08-01)
+- **OpenAI base URL env-var fallback**: ``OpenAICompatProvider`` now
+  reads ``OPENAI_BASE_URL`` (and the legacy ``OPENAI_API_BASE``) when
+  the constructor argument is empty, so a self-hosted OpenAI-
+  compatible proxy (vLLM, LM Studio, llama.cpp server, OpenRouter)
+  works without ``--base-url`` on the CLI. Mirrors the official
+  OpenAI SDK env-var name and the convention every other
+  OpenAI-compatible provider in the Mem0 / LiteLLM ecosystem now
+  uses (see `mem0ai/mem0#6322`). Explicit constructor argument
+  still wins, so every existing call site and test is unchanged.
+  Pinned by four new cases in
+  ``tests/test_llm_providers.py::OpenAICompatTests``.
+- **Pre-push secret scanner drift fix**: ``scripts/scan_secrets.py``
+  was missing two patterns the in-process redaction layer
+  (``loop_memory/privacy/redact.py``) has shipped for a while — JWT
+  (``eyJ…eyJ…{sig}``) and ``Authorization: Bearer …``. The local
+  pre-push gate can now be silently no less strict than the runtime
+  redactor. Pinned by
+  ``tests/scripts/test_scan_secrets.py`` (pattern catalogue,
+  placeholder filter, end-to-end scan).
+- **Ecosystem research report**: ``docs/research/2026-08-01.md``
+  documents the adopt / defer / reject decisions from the
+  2026-07-25 → 2026-08-01 agent-memory survey. Mem0 PRs #6322,
+  #6700, #6701, #6703, #6704, #6705, #5980-#5988, #4878 reviewed.
+  OpenMemory PRs #191, #194 reviewed. Graphiti v0.29.3 reviewed.
+  Cognee v1.4.0 / v1.4.1 reviewed. Letta and langchain-ai/langmem
+  had no material code activity in the window. See report for
+  primary-source URLs and per-item rationale.
+
 ### Wiki preview modal (2026-07-31)
 - **Knowledge preview popup**: clicking the card title (or the new
   preview button) opens a read-only modal overlay with the page's

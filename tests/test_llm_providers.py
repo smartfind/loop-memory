@@ -73,6 +73,44 @@ class OpenAICompatTests(unittest.TestCase):
             p = OpenAICompatProvider(api_key=None, base_url="https://x/v1")
             self.assertEqual(p.api_key, "env-key")
 
+    def test_base_url_env_fallback_OPENAI_BASE_URL(self) -> None:
+        # Mirrors the official OpenAI SDK env-var name. When the
+        # constructor base_url is empty and OPENAI_BASE_URL is set,
+        # the provider should pick it up (and strip any trailing slash
+        # so the URL builder doesn't emit a double slash).
+        env = {"OPENAI_BASE_URL": "http://127.0.0.1:8080/v1/"}
+        with mock.patch.dict("os.environ", env, clear=False):
+            # Make sure the legacy name is not set so we know which
+            # env var won the fallback.
+            p = OpenAICompatProvider(api_key="k", base_url="")
+            self.assertEqual(p.base_url, "http://127.0.0.1:8080/v1")
+
+    def test_base_url_env_fallback_OPENAI_API_BASE(self) -> None:
+        # Some proxies / forks still export OPENAI_API_BASE (the older
+        # name). Kept as a secondary fallback so existing scripts that
+        # already set the legacy variable keep working.
+        env = {"OPENAI_API_BASE": "http://legacy-proxy:9000/v1"}
+        with mock.patch.dict("os.environ", env, clear=False):
+            p = OpenAICompatProvider(api_key="k", base_url="")
+            self.assertEqual(p.base_url, "http://legacy-proxy:9000/v1")
+
+    def test_explicit_base_url_wins_over_env(self) -> None:
+        # Explicit constructor argument always wins — this preserves
+        # the v0.x call sites that pass --base-url on the CLI and
+        # keeps the existing tests green.
+        env = {"OPENAI_BASE_URL": "http://from-env:1234/v1"}
+        with mock.patch.dict("os.environ", env, clear=False):
+            p = OpenAICompatProvider(api_key="k", base_url="https://explicit/v1")
+            self.assertEqual(p.base_url, "https://explicit/v1")
+
+    def test_default_base_url_when_no_env_or_arg(self) -> None:
+        # Sanity: when neither the constructor argument nor any env var
+        # is set, the provider still falls back to the public OpenAI
+        # endpoint so the existing tests / examples keep working.
+        with mock.patch.dict("os.environ", {}, clear=True):
+            p = OpenAICompatProvider(api_key="k")
+            self.assertEqual(p.base_url, "https://api.openai.com/v1")
+
 
 class AnthropicProviderTests(unittest.TestCase):
     def test_joins_text_blocks(self) -> None:

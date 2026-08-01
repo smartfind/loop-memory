@@ -32,6 +32,28 @@ The selection chain at LLM-call time is:
    `echo` rules engine so the UI stays usable offline. A red dot on the
    top-bar **Models** chip indicates this fallback.
 
+### `OPENAI_BASE_URL` for self-hosted proxies
+
+The OpenAI-compatible client also reads `OPENAI_BASE_URL` (and the
+legacy `OPENAI_API_BASE`) as a fallback when the constructor
+argument is empty. Set either variable to point the LLM adapter at a
+self-hosted proxy without touching the CLI:
+
+```bash
+# vLLM, LM Studio, llama.cpp server, OpenRouter, etc.
+export OPENAI_BASE_URL="http://127.0.0.1:8000/v1"
+export OPENAI_API_KEY="not-needed-for-local"
+loop-memory consolidate-now
+```
+
+The explicit `base_url` argument (and the provider's
+`default_base_url`) still win when set, so every existing script
+and config keeps working. Pinned by
+`tests/test_llm_providers.py::OpenAICompatTests`. Mirrors the
+official OpenAI SDK env-var name and the convention the rest of
+the OpenAI-compatible ecosystem has converged on (see
+`mem0ai/mem0#6322`).
+
 ## Token limits (v2)
 
 The default behaviour block is tuned for the new "completeness over
