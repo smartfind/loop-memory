@@ -47,11 +47,28 @@ done
 }
 
 if [[ -n "$(git status --porcelain)" ]]; then
-  echo "Repository has local changes. Skipping to avoid mixing private or unfinished work."
-  exit 0
+  # Ignore-only files (just the upcoming research report path) are fine; refuse any tracked change.
+  UNTRACKED_OK=0
+  while IFS= read -r line; do
+    if [[ "${line:0:2}" != "??" ]]; then
+      UNTRACKED_OK=1
+      break
+    fi
+  done < <(git status --porcelain)
+  if (( UNTRACKED_OK )); then
+    echo "Repository has tracked local changes. Skipping to avoid mixing private or unfinished work."
+    git status --short
+    exit 1
+  fi
+  echo "Only untracked files present; continuing."
 fi
 if [[ "$(git branch --show-current)" != "main" ]]; then
   echo "Repository is not on main. Skipping safely."
+  exit 0
+fi
+
+if [[ -f .git/MERGE_HEAD ]] || [[ -d .git/rebase-merge ]] || [[ -d .git/rebase-apply ]]; then
+  echo "Repository is mid-merge or mid-rebase; skipping safely."
   exit 0
 fi
 
