@@ -21,10 +21,14 @@ ok(/\.ins-head \.ins-meta-datetime\s*\{[^}]*white-space:\s*nowrap/m.test(css),
    'G) date-time stays on one line');
 ok(/\.ins-head \.ins-meta-datetime\s*\{[^}]*font-variant-numeric:\s*tabular-nums/m.test(css),
    'H) changing seconds do not shift the chip width');
+ok(/\.ins-head \.ins-meta-datetime\s*\{[^}]*gap:\s*3px/m.test(css),
+   'I) date and time use compact spacing');
+ok(/\.ins-head \.ins-meta-sep\s*\{[^}]*width:\s*0/m.test(css),
+   'J) separator does not add glyph width');
 
 if (failures === 0) {
-  console.log('OK dashboard datetime: 8 checks passed');
+  console.log('OK dashboard datetime: 10 checks passed');
   process.exit(0);
 }
-console.error(`FAIL dashboard datetime: ${failures} of 8 checks failed`);
+console.error(`FAIL dashboard datetime: ${failures} of 10 checks failed`);
 process.exit(1);

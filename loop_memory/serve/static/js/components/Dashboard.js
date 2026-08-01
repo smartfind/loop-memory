@@ -742,7 +742,7 @@ export const Dashboard = defineComponent({
         <span class="ins-meta ins-meta-datetime" v-if="lastRefreshParts.time" :title="t('dash.ins.refresh')">
           <span class="ins-meta-ico">⟳</span>
           <span class="ins-meta-date">{{ lastRefreshParts.date }}</span>
-          <span class="ins-meta-sep" aria-hidden="true">·</span>
+          <span class="ins-meta-sep" aria-hidden="true"> </span>
           <span class="ins-meta-time">{{ lastRefreshParts.time }}</span>
         </span>
       </div>

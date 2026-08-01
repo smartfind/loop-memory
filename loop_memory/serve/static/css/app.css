@@ -2682,12 +2682,12 @@
     transform-origin: 50% 50%;
   }
   .ins-head .ins-meta-datetime {
-    gap: 5px;
+    gap: 3px;
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
   }
   .ins-head .ins-meta-date { color: var(--text-faint); }
-  .ins-head .ins-meta-sep { color: var(--border-strong, var(--border)); }
+  .ins-head .ins-meta-sep { width: 0; }
   .ins-head .ins-meta-time { color: var(--text-mute); font-weight: 600; }
   .ins-section {
     background: var(--surface);
