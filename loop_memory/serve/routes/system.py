@@ -16,6 +16,7 @@ import re
 import time
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse
 from ...serve.handlers import pipeline_stage_items
 from ...serve.handlers import pipeline_dashboard
 from ...cli._common import DEFAULT_DB
@@ -490,4 +491,3 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None,
                 for r in rows
             ],
         }
-

@@ -319,6 +319,59 @@ class IndexInlineI18nTests(ServeAppSmokeTests):
         self.assertEqual(set(d_zh) - set(disk_zh), set())
         self.assertEqual(set(d_en) - set(disk_en), set())
 
+    def test_index_status_is_200_when_static_present(self) -> None:
+        # Regression guard for the ``FileResponse is not defined``
+        # 500 that used to surface when ``index.html.read_text``
+        # raised any exception (e.g. a launchd sandbox blip). The
+        # previous inline-i18n tests only inspected payload content
+        # and therefore masked the regression. Pin status_code here
+        # so the next refactor that breaks ``FileResponse`` import
+        # lights up immediately.
+        r = self.client.get("/")
+        self.assertEqual(r.status_code, 200)
+
+    def test_index_falls_back_to_raw_html_when_read_text_raises(self) -> None:
+        # If the launcher sandbox or a permissions glitch causes the
+        # index route's ``read_text`` call to fail, the endpoint
+        # must still serve a usable HTML payload instead of
+        # NameError 500. We simulate the failure by stubbing the
+        # index.html ``Path.read_text``.
+        from loop_memory.serve import routes
+        from pathlib import Path as _Path
+        original = _Path.read_text
+        def boom(self, *a, **kw):  # noqa: ANN001, ANN002
+            if self.name == "index.html":
+                raise PermissionError("[Errno 1] Operation not permitted")
+            return original(self, *a, **kw)
+        _Path.read_text = boom  # type: ignore[assignment]
+        try:
+            r = self.client.get("/")
+        finally:
+            _Path.read_text = original  # type: ignore[assignment]
+        self.assertEqual(r.status_code, 200)
+        # Either FileResponse (bytes-equivalent) or HTMLResponse: the
+        # body must still contain the doctype so the browser can
+        # bootstrap the SPA.
+        self.assertIn(b"<!DOCTYPE html>", r.content)
+
+    def test_index_falls_back_when_i18n_json_missing(self) -> None:
+        # Mirrors the sandbox case where the disk JSON files are
+        # readable but i18n JSONs are not (or simply removed). The
+        # endpoint must still serve HTML with the doctype.
+        from pathlib import Path as _Path
+        original = _Path.read_text
+        def selective(self, *a, **kw):  # noqa: ANN001, ANN002
+            if self.name in ("en.json", "zh.json"):
+                raise FileNotFoundError("simulated")
+            return original(self, *a, **kw)
+        _Path.read_text = selective  # type: ignore[assignment]
+        try:
+            r = self.client.get("/")
+        finally:
+            _Path.read_text = original  # type: ignore[assignment]
+        self.assertEqual(r.status_code, 200)
+        self.assertIn(b"<!DOCTYPE html>", r.content)
+
 
 class SecurityHeadersTests(ServeAppSmokeTests):
     """Covers the security headers and CSRF guard in
