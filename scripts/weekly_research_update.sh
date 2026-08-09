@@ -124,7 +124,7 @@ You are running the weekly open-source research and improvement cycle for Loop M
 
 Research first:
 1. Search GitHub releases, changelogs, issues, papers, engineering blogs, and other public web sources from roughly the last seven days.
-2. Compare relevant agent-memory and long-term-memory projects, including Mem0, Letta, Zep/Graphiti, LangMem, OpenMemory, and newly discovered peers.
+2. Compare relevant agent-memory and long-term-memory projects, including Mem0, Letta, Zep/Graphiti, LangMem, OpenMemory, TencentDB Agent Memory (`TencentCloud/tencentdb-agent-memory`, defaults branch `feat/server_team`, 18k+ stars, four-asset model: Chat Memory / Skill / Wiki / CodeGraph + Memory-Proxy MITM injection), and newly discovered peers. TencentDB is on the watchlist but is currently NOT being adopted — track its releases quarterly and surface ideas compatible with our local-first, single-user MIT design.
 3. Prefer primary sources. Record source URLs, publication/update dates, licenses, notable changes, applicability, and explicit adopt/defer/reject decisions.
 4. Never copy incompatible code. Reimplement only general ideas that fit this MIT project and add attribution when required.
 

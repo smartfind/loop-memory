@@ -65,6 +65,26 @@ jobs:
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
 
+      - name: Warm shields.io badge cache
+        # shields.io caches PyPI badges for up to ~15 minutes after a new
+        # release, during which the README flashes "package or version
+        # not found" on the freshly published version. Hit each badge we
+        # use in README.md so the GitHub Release page renders cleanly the
+        # first time someone opens it. Soft step: shields outage is OK.
+        run: |
+          set +e
+          for url in \
+            "https://img.shields.io/pypi/v/loop-memory" \
+            "https://img.shields.io/pypi/pyversions/loop-memory" \
+            "https://img.shields.io/pypi/status/loop-memory" \
+            "https://img.shields.io/pypi/dm/loop-memory" \
+            "https://img.shields.io/pypi/format/loop-memory"
+          do
+            code=$(curl -sSL -o /dev/null -w '%{http_code}' -m 15 "$url" || echo 000)
+            echo "  warmed $(basename "$url") -> HTTP $code"
+          done
+          echo "shields.io caches warmed"
+
   github-release:
     name: GitHub Release
     needs: build
