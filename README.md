@@ -22,6 +22,40 @@
 
 ---
 
+> **What's new in 0.4.1** — CLI dispatch hardened so every subcommand's
+> `--help` / `--version` exits 0 cleanly (no more `ValueError: unknown
+> source: '--help'` on a zero-deps install). Added a static
+> `COMMAND_HELP` table guarded by 10 new regression cases in
+> `tests/test_cli_version.py`, plus GitHub `About` / README lead now
+> surface for "agent loop" searches.
+> [Full changelog →](CHANGELOG.md)
+
+---
+
+## Table of contents
+
+- [What it does](#what-it-does)
+- [Install](#install)
+- [Quickstart](#quickstart)
+- [Why Loop Memory vs. every other agent-memory project](#why-loop-memory-vs-every-other-agent-memory-project)
+- [Architecture & docs](#architecture--docs)
+- [After install: 30-second setup](#after-install-30-second-setup)
+- [Auto-capture (after every conversation)](#auto-capture-after-every-conversation)
+- [Dashboard + Evolution consolidator](#dashboard--evolution-consolidator-看板--进化式蒸馏)
+- [Auto-feedback into every LLM client](#auto-feedback-into-every-llm-client-反哺)
+- [Web UI](#web-ui)
+- [Programmatic use](#programmatic-use)
+- [The four-stage loop](#the-four-stage-loop)
+- [Project layout](#project-layout)
+- [Security & auth token](#security--auth-token)
+- [Wiki scope auto-classification](#wiki-scope-auto-classification)
+- [FAQ & troubleshooting](#faq--troubleshooting)
+- [Run the tests](#run-the-tests)
+- [Using distilled knowledge in your clients](#using-distilled-knowledge-in-your-clients)
+- [License](#license)
+
+---
+
 ## What it does
 
 **Loop Memory** gives every agent you use a single, persistent brain
@@ -63,6 +97,21 @@ via MCP / hooks]
 ```
 
 *One loop, many agents, one evolving wiki.*
+
+**Supported agents:**
+
+| Agent          | Capture path                        | Hook shipped? | Notes |
+| -------------- | ----------------------------------- | :-----------: | ----- |
+| Codex CLI      | `~/.codex/sessions/*.json`          | ✅ | MCP + SessionStart auto-wired by `install-hooks` |
+| Claude Code    | `~/.claude/**/*.jsonl`              | ✅ | MCP + SessionStart auto-wired by `install-hooks` |
+| Hermes         | `~/.hermes/**/*.jsonl`              | ✅ | MCP + SessionStart auto-wired by `install-hooks` |
+| OpenClaw/clawx | `~/.openclaw/agents/main/sessions` + `workspace/memory/*.md` | ✅ | watcher only (no MCP yet); `openclaw-setup` enables launchd |
+| Anything else  | any on-disk transcript dir          | —             | use `loop-memory hook --source <name> --watch <dir>` (see [docs/auto-capture.md](docs/auto-capture.md)) |
+
+The shipped hooks are the four popular agents we maintain in-tree.
+The generic watcher CLI is the supported extension point for every
+other agent — Aider, Cursor, Copilot, Cline, Continue, Goose, your
+own home-grown CLI, anything that drops JSON/JSONL on disk.
 
 ---
 
@@ -185,6 +234,7 @@ flavors:
 | Claude Code                | `loop-memory hook --source claude --watch ~/.claude`           |
 | Hermes                     | `loop-memory hook --source hermes --watch ~/.hermes`           |
 | OpenClaw (clawx)           | `loop-memory hook --source openclaw --watch ~/.openclaw/agents/main/sessions` — also ingests `workspace/memory/*.md` daily logs |
+| Anything else (Aider, Cursor, Copilot, Cline, Continue, Goose, …) | `loop-memory hook --source <name> --watch <path/to/transcripts>` — see [docs/auto-capture.md](docs/auto-capture.md) for loader requirements |
 
 Three of these in a `tmux` session, or persisted via launchd, keeps
 your memory store fresh without any clicks. Run `loop-memory
@@ -291,6 +341,34 @@ User signals close the loop:
 - Every `recall()` / search bumps `recall_count` on the returned
   rows so the next Stage-1 ranks them higher.
 
+### Cognitive sleep (v7)
+
+`loop-memory cognitive-sleep [--apply]` runs an **auditable cleanup
+pass** over the store:
+
+- Surfaces contradictions between memories (e.g. "user prefers X"
+  vs. "user prefers Y") so you can resolve them in one click rather
+  than chasing them across sessions.
+- Drops items that are below the configurable floor (`min_score`) and
+  older than the floor age.
+- Merges near-duplicate memories (cosine ≥ 0.95 with `MergeableBy` rules).
+- Emits a full audit row per action — visible in the Dashboard →
+  **Audit** tab and reachable via the MCP `audit` tool, so every
+  byte the consolidator ever touches is traceable.
+
+Dry-run by default; pass `--apply` to commit.
+
+### Knowledge graph
+
+`loop-memory graph-rebuild` extracts entities from every distilled
+wiki page and every long-term memory, then materialises a typed
+relation graph:
+
+- Visible as the **Knowledge graph** globe tab in the web UI.
+- Queryable via the MCP `subgraph` and `remember_edge` tools.
+- Re-built by the Evolution Consolidator's Stage-5 evolution memo, so
+  the graph evolves alongside the wiki.
+
 ## Auto-feedback into every LLM client (反哺)
 
 Distilled knowledge is only useful if your LLM tools can actually
@@ -347,21 +425,6 @@ configuration, scheduling, language switching, and light/dark themes.
 
 ---
 
-## Time-weighted scoring
-
-Every memory carries a `score ∈ [0, 1]` recomputed from:
-
-```
-score = 0.35 · importance + 0.65 · recency
-recency = ½ ^ (age / half_life)
-```
-
-`half_life` defaults to 30 days, configurable via
-`consolidate(half_life_days=...)`. The UI shows the score as a
-percentage; use `?min_score=0.85` to see only high-relevance memories.
-
----
-
 ## Programmatic use
 
 ```python
@@ -415,26 +478,35 @@ Even though v0.2 is built around local storage, the original
 ```
 loop_memory/
   loop_memory/
+    cli/main.py                # CLI entrypoint + COMMAND_HELP table + `--version`
+    ingest/                    # Codex / Claude / Hermes / OpenClaw / generic loaders
+    wiki/                      # distillation, classifier, scope auto-promotion
+    graph/                     # entity extraction + knowledge-graph build
+    jobs/                      # consolidate / evolve / cognitive-sleep / scheduler / contradiction / graph
+    llm/                       # provider protocol + OpenAI / Anthropic / Ollama / rule-based
+    backends/                  # embedding (hashing / sentence-transformers) + vector store (memory / chroma)
+    storage/                   # SQLite-backed MemoryStore + migrations
+    privacy/                   # <private> stripping + regex redaction
+    security/                  # Keychain / 0600-file secrets wrapper
+    mcp/                       # stdio JSON-RPC MCP server
+    serve/                     # FastAPI app, watcher, web UI (Timeline / Dashboard / Wiki / Graph)
+    export/                    # markdown + v7 portable bundle export/import
+    sdk.py                     # four-verb stable API: remember / recall / forget / feedback
+    sdk_extensions.py          # optional high-level helpers (graph edges, wiki pages)
+    engine/loop.py             # Retrieve → Generate → Reflect → Store loop
     memory/types.py            # MemoryItem + 4 tiers
-    backends/embedding.py      # BaseEmbedder, HashingEmbedder, IdentityEmbedder
-    backends/vector_store.py   # VectorStore protocol + InMemory / Chroma
-    backends/sentence_embedder.py  # optional sentence-transformers
-    llm/base.py                # LLMClient protocol + EchoLLM + helpers
-    llm/openai_adapter.py      # optional OpenAI client
-    engine/loop.py             # the Retrieve → Generate → Reflect → Store loop
-    engine/reflect.py          # reflection & summarization passes
-    storage/sqlite_store.py    # persistent SQLite-backed MemoryStore
-    ingest/loader.py           # CodexLoader, ClaudeLoader, HermesLoader
-    ingest/pipeline.py         # session → MemoryStore
-    jobs/consolidate.py        # background rescore + GC + dedupe
-    serve/app.py               # FastAPI app for the local web UI
-    serve/static/index.html    # the page
-    serve/watcher.py           # filesystem watcher for auto-capture
-    cli/main.py                # CLI entrypoint (chat / stats / ingest / consolidate / serve / hook)
     examples/demo.py           # runnable, zero-API-key demo
     py.typed
-  tests/                       # 92 unit tests, zero deps
-  docs/auto-capture.md         # launchd / systemd / cron recipes
+  tests/                       # 475 unit tests across memory / SDK / serve / CLI / scripts
+  docs/
+    auto-capture.md            # launchd / systemd / cron recipes
+    architecture.md            # layered view + 5-stage evolution pipeline
+    api.md                     # HTTP API reference
+    agent-memory-api.md        # four-verb SDK / HTTP / MCP contract
+    universal-agent-memory.md  # v7 graph memory + cognitive sleep + bundles
+    providers.md               # LLM provider reference
+    settings.md                # settings table + secrets file
+    weekly-research-automation.md  # how the project auto-evolves from upstream research
 ```
 
 ---
@@ -513,6 +585,67 @@ The behavior is controlled by `GET/PUT /api/admin/wiki/scope`:
 `{"enabled": true, "mode": "pattern"}` is the default. `mode="off"`
 keeps new pages client-scoped without automatic global promotion. The
 classifier is local and makes no model or network request on a wiki write.
+
+---
+
+## FAQ & troubleshooting
+
+**Q: `pip install loop-memory` succeeds but `loop-memory serve` says `ModuleNotFoundError: No module named 'fastapi'`.**
+A: `fastapi` is the optional `[serve]` extra. Install it explicitly:
+`pip install 'loop-memory[serve]'` (or `'loop-memory[all]'` for everything).
+
+**Q: My `~/.codex/sessions/` is empty / nothing appears in the UI.**
+A: Run `loop-memory doctor` — it prints per-source paths, last-seen
+mtime, and whether the watcher is running. Then check
+`loop-memory hook --source codex --watch ~/.codex/sessions` is alive
+in another shell (or via launchd — see [docs/auto-capture.md](docs/auto-capture.md)).
+
+**Q: Distillation never finishes / wiki stays empty.**
+A: You need an LLM provider configured. Open the web UI → ⚙ Model,
+pick a provider, paste an API key, and click **Save**. Then either
+wait for the scheduler or hit **� Run now**. Zero-deps installs ship
+with a rule-based provider as a placeholder so the loop never blocks
+on a missing key.
+
+**Q: `loop-memory install-hooks` warns that the token file already exists.**
+A: That's expected — it's idempotent. To force a rewrite, delete the
+target files (`~/.codex/config.toml`, `~/.claude/mcp.json`,
+`~/.hermes/mcp.json`) and re-run. The tool also refuses to touch
+non-loop-memory config keys.
+
+**Q: How big can the SQLite store get before I should worry?**
+A: Practical floor: 100k memories / 10k wiki pages stays under ~80 MB
+and `recall()` returns in <100 ms. The Evolution Consolidator is
+designed to keep the wiki tight (~hundreds of pages) rather than let
+it grow unbounded. Run `loop-memory cognitive-sleep --apply` weekly
+to drop the long tail.
+
+**Q: Can I sync the store across machines?**
+A: The SQLite file is git-friendly and copy-friendly. The `MEMORY.md`
++ graph + memories + metadata **bundle** (`loop-memory export
+<dir>`) is a portable v7 artefact you can commit, share, or
+back-up. There is no first-class sync daemon — by design — so the
+local-first guarantee is never violated.
+
+**Q: Is there a hosted / cloud version?**
+A: No. Loop Memory is MIT-licensed and 100% local; the SQLite file
+lives under `~/.loop_memory/`. The web UI is bound to loopback by
+default; binding to `0.0.0.0` prints a security warning and requires
+an auth token.
+
+**Q: Where do secrets / API keys live?**
+A: Two places. Provider keys you set in the **⚙ Model** UI are
+written to `~/.loop_memory/secrets.json` (mode 0600) via the
+`loop_memory.security.secrets` wrapper, which prefers the macOS
+Keychain on Darwin and falls back to the encrypted file on Linux.
+The auth token used by the web UI is hashed in the SQLite settings
+table — never stored in plaintext.
+
+**Q: I see "no version" / "package not found" on the PyPI badge.**
+A: shields.io pulls from a separate data source that lags PyPI by a
+few minutes after a new release. Re-publish the badge warmer step
+in `.github/workflows/publish.yml` to force a refresh, or wait ~30
+minutes for shields.io to catch up.
 
 ---
 

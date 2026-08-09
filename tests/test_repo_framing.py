@@ -196,3 +196,92 @@ def test_readme_lead_includes_agent_loop_keyword() -> None:
         "matches the GitHub About description keyword set."
     )
 
+def test_readme_includes_table_of_contents() -> None:
+    """Pin the README TOC near the top so the 600+ line file stays
+    navigable. If someone deletes the TOC, this test fails.
+    """
+    # TOC must appear after the badges and before the first content
+    # section ("What it does").
+    toc_marker = "## Table of contents"
+    what_it_does = "## What it does"
+    assert toc_marker in README, (
+        "README must have a Table of contents section near the top"
+    )
+    assert README.index(toc_marker) < README.index(what_it_does), (
+        "Table of contents must appear before '## What it does'"
+    )
+
+
+def test_readme_project_layout_mentions_current_modules() -> None:
+    """Pin the modules that exist in the source tree today so the
+    Project layout tree can't silently drift back to a v0.2-era
+    inventory.
+    """
+    layout_start = README.index("## Project layout")
+    next_section = README.index("## Security & auth token", layout_start)
+    layout = README[layout_start:next_section]
+    expected_modules = (
+        "cli/", "ingest/", "wiki/", "graph/", "jobs/", "llm/",
+        "backends/", "storage/", "privacy/", "security/", "mcp/",
+        "serve/", "export/", "sdk.py",
+    )
+    missing = [m for m in expected_modules if m not in layout]
+    assert not missing, (
+        "Project layout tree is missing current modules: "
+        f"{missing}. Add them so the tree reflects the actual package."
+    )
+
+
+def test_readme_has_faq_section() -> None:
+    """Pin the FAQ / troubleshooting section so users always have a
+    first-stop answer to the most common install / setup questions.
+    """
+    assert "## FAQ & troubleshooting" in README, (
+        "README must include a '## FAQ & troubleshooting' section"
+    )
+
+
+def test_readme_auto_capture_table_includes_generic_watcher_row() -> None:
+    """Pin the generic-watcher row in the Auto-capture table so the
+    agent-agnostic framing stays visible at the operational level too.
+    """
+    table_start = README.index("## Auto-capture")
+    next_section = README.index("## Dashboard", table_start)
+    table = README[table_start:next_section]
+    assert "Anything else" in table, (
+        "Auto-capture table must include an 'Anything else' generic-"
+        "watcher row so non-shipped agents (Aider / Cursor / Copilot "
+        "/ etc.) are visibly supported."
+    )
+
+
+def test_readme_mentions_cognitive_sleep() -> None:
+    """Cognitive sleep is a flagship v7 feature; the README must
+    mention it (the Dashboard section is the right home).
+    """
+    assert "cognitive-sleep" in README.lower() or "cognitive sleep" in README.lower(), (
+        "README must mention 'cognitive-sleep' / 'cognitive sleep'"
+    )
+
+
+def test_readme_supported_agents_table_exists() -> None:
+    """Pin the Supported agents matrix so the agent-agnostic framing
+    stays explicit at the top level.
+    """
+    assert "**Supported agents:**" in README, (
+        "README must include a '**Supported agents:**' matrix so "
+        "users can see shipped hooks vs. generic watcher at a glance"
+    )
+
+
+def test_readme_no_longer_documents_legacy_scoring_formula() -> None:
+    """The legacy v1 score formula (0.35·importance + 0.65·recency)
+    was superseded by Scoring v2 (4-component blend). The legacy
+    formula must not reappear in the README.
+    """
+    forbidden = "score = 0.35 · importance + 0.65 · recency"
+    assert forbidden not in README, (
+        "Legacy v1 scoring formula reappeared in README; the canonical "
+        "formula is now '### Scoring v2: time × usage × feedback'"
+    )
+
