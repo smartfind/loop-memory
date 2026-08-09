@@ -13,6 +13,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/smartfind/loop-memory/tests.yml?branch=main&style=flat-square)](https://github.com/smartfind/loop-memory/actions)
 [![PyPI](https://img.shields.io/pypi/v/loop-memory.svg?style=flat-square)](https://pypi.org/project/loop-memory/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](LICENSE)
+[![Release guide](https://img.shields.io/badge/release-guide-blueviolet.svg?style=flat-square)](docs/release.md)
 [![Python](https://img.shields.io/pypi/pyversions/loop-memory?style=flat-square)](https://pypi.org/project/loop-memory/)
 [![Zero deps](https://img.shields.io/badge/dependencies-0-success.svg?style=flat-square)](pyproject.toml)
 

@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-09
+
 ### Weekly research update (2026-08-01)
 - **OpenAI base URL env-var fallback**: ``OpenAICompatProvider`` now
   reads ``OPENAI_BASE_URL`` (and the legacy ``OPENAI_API_BASE``) when
