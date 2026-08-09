@@ -4,11 +4,14 @@
 
 # Loop Memory
 
-> **A general-purpose memory system for every AI agent you run locally.**
+> **A general-purpose, local-first memory system for every AI agent you run.**
 >
-> Auto-captures every Codex / Claude / Hermes / OpenClaw conversation,
-> distils them into a tight wiki of stable knowledge, and lets the
-> agent recall what matters on demand.
+> Point Loop Memory at any agent's transcript directory and it
+> quietly catches every conversation, scores it, distils the long
+> tail into a tight wiki of stable knowledge, and re-injects the
+> relevant pieces into the next session. Out of the box: hooks for
+> Codex, Claude, Hermes, and OpenClaw; an SDK + generic watcher
+> CLI cover everything else.
 
 [![CI](https://img.shields.io/github/actions/workflow/status/smartfind/loop-memory/tests.yml?branch=main&style=flat-square)](https://github.com/smartfind/loop-memory/actions)
 [![PyPI](https://img.shields.io/pypi/v/loop-memory.svg?style=flat-square)](https://pypi.org/project/loop-memory/)
@@ -22,11 +25,14 @@
 ## What it does
 
 **Loop Memory** gives every agent you use a single, persistent brain
-that outlives any one conversation. Each agent (Codex CLI, Claude
-Code, Hermes, OpenClaw / clawx, …) drops its transcripts onto disk;
-Loop Memory quietly catches them, scores every fragment by *importance
-× recency × usage × feedback*, distils the long tail into a curated
-wiki, and re-injects the relevant pieces into the next session.
+that outlives any one conversation. Any agent that drops transcripts
+on disk — Codex CLI, Claude Code, Hermes, OpenClaw / clawx, Aider,
+Cursor, … — works; the shipped hooks cover the popular ones and a
+generic watcher CLI (`loop-memory hook --source <name> --watch <dir>`)
+accepts anything else. Loop Memory quietly catches every fragment,
+scores it by *importance × recency × usage × feedback*, distils the
+long tail into a curated wiki, and re-injects the relevant pieces
+into the next session.
 
 ```mermaid
 flowchart LR
@@ -98,7 +104,7 @@ following — every other project we looked at lacks at least one:
 
 | Capability | **Loop Memory** | Mem0 v3 | Hindsight | OpenViking | A-MEM |
 | --- | --- | --- | --- | --- | --- |
-| Multi-source capture (Codex / Claude / Hermes / OpenClaw) | ✅ out of the box | ⚠ requires plugin per client | ⚠ hosted only | ⚠ SDK + companion app | ❌ |
+| Multi-source capture (any agent with on-disk transcripts) | ✅ generic watcher CLI; hooks shipped for Codex / Claude / Hermes / OpenClaw | ⚠ requires plugin per client | ⚠ hosted only | ⚠ SDK + companion app | ❌ |
 | Local-first SQLite (zero external services) | ✅ | ❌ Postgres + Qdrant | ❌ Postgres + Qdrant | ⚠ file-system + cloud | ⚠ ChromaDB |
 | Hybrid recall: BM25 + semantic + entity (RRF) | ✅ | ✅ | ✅ | ✅ | ⚠ entity-only |
 | Temporal reasoning in retrieval (boost / suppress by date intent) | ✅ | ✅ | ❌ | ❌ | ❌ |
