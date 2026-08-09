@@ -24,10 +24,10 @@ README = (REPO / "README.md").read_text()
 
 
 GITHUB_DESCRIPTION = (
-    "Local-first, general-purpose memory system that closes the loop on "
-    "any AI agent. Watches any agent's transcript directory on disk and "
-    "distils long sessions into a curated wiki that re-injects into "
-    "the next turn. Out of the box: hooks for Codex, Claude, Hermes, "
+    "Local-first, agent-agnostic memory system that closes the agent loop "
+    "on any AI agent. Watches any agent's transcript directory on disk "
+    "and distils long sessions into a curated wiki that re-injects into "
+    "the next turn. Out of the box: hooks for Codex / Claude / Hermes / "
     "OpenClaw; SDK + generic watcher CLI for the rest."
 )
 def _gh_api_description() -> str:
@@ -162,3 +162,37 @@ def test_github_topics_include_generic_terms() -> None:
         f"gh api -X PUT repos/smartfind/loop-memory/topics "
         f"-f names[]=agent -f names[]=ai-agent -f names[]=memory ..."
     )
+
+def test_github_repo_description_includes_agent_loop_keyword() -> None:
+    """Pin the ``agent loop`` keyword in the GitHub ``About`` description.
+
+    Users find this project by searching for "agent loop", "agent-loop",
+    "agentic loop", "memory loop" — make sure the sidebar description
+    surfaces for those queries. If someone rewrites the description
+    without those keywords, this test fails.
+
+    Accepts either the bare phrase ("agent loop") or the hyphenated
+    topic-tag form ("agent-loop") since both are valid search tokens.
+    """
+    desc = _gh_api_description()
+    lowered = desc.lower()
+    has_phrase = ("agent loop" in lowered) or ("agent-loop" in lowered)
+    assert has_phrase, (
+        "GitHub About description must include 'agent loop' / 'agent-loop' "
+        "so the project surfaces for searches like 'agent loop memory'."
+        f"current: {desc!r}"
+    )
+
+
+def test_readme_lead_includes_agent_loop_keyword() -> None:
+    """Pin the ``agent loop`` keyword in the README headline so the
+    repository's first impression mirrors the GitHub ``About`` sidebar.
+    """
+    lead_start = README.index("# Loop Memory")
+    badge_start = README.index("[![CI]")
+    lead = README[lead_start:badge_start].lower()
+    assert ("agent loop" in lead) or ("agent-loop" in lead), (
+        "README lead must mention 'agent loop' / 'agent-loop' so it "
+        "matches the GitHub About description keyword set."
+    )
+

@@ -4,7 +4,7 @@
 
 # Loop Memory
 
-> **A general-purpose, local-first memory system for every AI agent you run.**
+> **A general-purpose, local-first memory system that closes the agent loop for every AI agent you run.**
 >
 > Point Loop Memory at any agent's transcript directory and it
 > quietly catches every conversation, scores it, distils the long

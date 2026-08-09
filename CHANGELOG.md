@@ -24,6 +24,11 @@
 Pinned by the 10 cases in ``tests/test_cli_version.py`` (4 cases for
 ``--version`` / ``-V`` / ``version`` plus 6 cases for per-subcommand
 ``--help`` dispatch).
+- **GitHub ``About`` description**: rewritten to lead with the
+  ``agent loop`` / ``agent-agnostic`` framing so the project surfaces
+  for searches like ``agent loop memory``. README headline and the
+  ``serve/static/index.html`` meta description updated to match. Pinned
+  by 2 new regression cases in ``tests/test_repo_framing.py``.
 
 
 ## [0.4.0] - 2026-08-09
