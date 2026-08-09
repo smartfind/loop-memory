@@ -24,13 +24,12 @@ README = (REPO / "README.md").read_text()
 
 
 GITHUB_DESCRIPTION = (
-    "Local-first, general-purpose memory system for any AI agent. "
-    "Watches any agent's transcript directory on disk and distils long "
-    "sessions into a curated wiki. Ships with hooks for Codex, Claude, "
-    "Hermes, OpenClaw; SDK + generic watcher CLI for everything else."
+    "Local-first, general-purpose memory system that closes the loop on "
+    "any AI agent. Watches any agent's transcript directory on disk and "
+    "distils long sessions into a curated wiki that re-injects into "
+    "the next turn. Out of the box: hooks for Codex, Claude, Hermes, "
+    "OpenClaw; SDK + generic watcher CLI for the rest."
 )
-
-
 def _gh_api_description() -> str:
     """Fetch the live GitHub About description; only runs when the
     test environment has a working ``gh`` CLI with repo read access.
@@ -156,7 +155,7 @@ def test_github_topics_include_generic_terms() -> None:
     if res.returncode != 0:
         pytest.skip(f"gh api failed: {res.stderr.strip()}")
     topics = {t.strip() for t in res.stdout.split(",") if t.strip()}
-    needed = {"agent", "ai-agent", "memory", "long-term-memory", "local-first"}
+    needed = {"agent", "ai-agent", "memory", "long-term-memory", "local-first", "agent-loop", "agentic"}
     missing = needed - topics
     assert not missing, (
         f"GitHub topics missing general-purpose tags: {missing}. Add via: "

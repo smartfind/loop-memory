@@ -1,5 +1,31 @@
 ## [Unreleased]
 
+## [0.4.1] - 2026-08-09
+
+### Patch
+
+- **CLI dispatch hardened against common `--help` crashes**: ``ingest --help``
+  no longer raises ``ValueError: unknown source: '--help'``;
+  ``serve --help`` no longer raises ``ModuleNotFoundError: No module named
+  'fastapi'`` when the optional ``[serve]`` extra is not installed
+  (it is now a metadata-only probe and exits 0 with a one-liner help).
+  ``hook --help`` now exits 0 (was 2). Three dispatcher-level regressions
+  caught by the install smoke suite on the published 0.4.0 wheel.
+- **CLI `--version` / `-V` flags**: the long-missing flag family is now
+  wired up. ``loop-memory --version``, ``loop-memory -V``, and
+  ``loop-memory version`` all print ``loop-memory <installed-version>``
+  using ``importlib.metadata``, so the answer reflects whatever wheel
+  the user actually has installed (including editable installs).
+- **CLI ``COMMAND_HELP`` table**: every registered subcommand has a
+  static one-line usage in the dispatcher; ``<subcommand> --help``
+  exits 0 with that line and never invokes the handler — so adding a
+  new command without help text fails CI.
+
+Pinned by the 10 cases in ``tests/test_cli_version.py`` (4 cases for
+``--version`` / ``-V`` / ``version`` plus 6 cases for per-subcommand
+``--help`` dispatch).
+
+
 ## [0.4.0] - 2026-08-09
 
 ### Weekly research update (2026-08-01)

@@ -60,6 +60,24 @@ def _run_export(args: list[str]) -> int:
     return cognitive_cmd.run_export(args)
 
 
+def _run_version(_args: list[str]) -> int:
+    """Print the installed distribution version.
+
+    Resolved through :mod:`importlib.metadata` so the answer comes from
+    whatever wheel or sdist the user actually has installed, including
+    editable installs (``pip install -e .``). Falls back to ``"unknown"``
+    if the package metadata is missing (which would itself indicate a
+    broken install).
+    """
+    from importlib import metadata as _ilmd
+    try:
+        ver = _ilmd.version("loop-memory")
+    except _ilmd.PackageNotFoundError:
+        ver = "unknown"
+    print(f"loop-memory {ver}")
+    return 0
+
+
 # Dispatch table: command name -> (callable, optional module doc).
 # Each module's ``run_<name>`` function takes ``args: list[str]`` and
 # returns an integer exit code. Keep the keys matching the docstring
@@ -95,7 +113,47 @@ COMMANDS = {
     "subgraph": cognitive_cmd.run_subgraph,
     "graph-rebuild": cognitive_cmd.run_graph_rebuild,
     "wiki-reclassify-legacy": cognitive_cmd.run_wiki_reclassify_legacy,
+    "version": _run_version,
 }
+
+
+# Per-command usage lines. The dispatcher prints these on
+# ``<subcommand> --help`` *without* invoking the handler, so missing
+# optional deps (e.g. ``[serve]`` for fastapi) and missing required
+# positional args never crash the help path.
+COMMAND_HELP: dict[str, str] = {
+    "ask":                    "loop-memory ask '<question>'   # print a paste-ready context block for any LLM client.",
+    "audit":                  "loop-memory audit [--kind X] [--action Y]   # read the cognitive audit trail.",
+    "chat":                   "loop-memory chat   # REPL with echo LLM.",
+    "cognitive-sleep":        "loop-memory cognitive-sleep [--apply]   # dry-run / apply cognitive sweep.",
+    "consolidate":            "loop-memory consolidate   # rescore + GC + dedupe.",
+    "consolidate-now":        "loop-memory consolidate-now   # ask the running server to trigger a pass right now.",
+    "digest":                 "loop-memory digest [--out PATH]   # compact knowledge digest for AGENTS.md.",
+    "doctor":                 "loop-memory doctor   # diagnose local install (db, hooks, optional deps).",
+    "export":                 "loop-memory export [--out FILE | <out_dir>]   # markdown dump or v7 bundle export.",
+    "export-bundle":          "loop-memory export-bundle <out_dir>   # explicit v7 bundle alias.",
+    "flush":                  "loop-memory flush   # drop volatile caches; keep persisted data.",
+    "fork":                   "loop-memory fork [--branch-tag T]   # snapshot every wiki page.",
+    "graph":                  "loop-memory graph   # print the entities + relations table.",
+    "graph-edge":             "loop-memory graph-edge <src> <dst> [--kind K] [--weight W]   # push a relation.",
+    "graph-rebuild":          "loop-memory graph-rebuild   # rebuild entities + entity_mentions.",
+    "hook":                   "loop-memory hook --source <codex|claude|hermes|openclaw> --watch <path> [--idle SECONDS]\n  Watch a directory for new transcripts and ingest them.",
+    "import":                 "loop-memory import <in_dir>   # re-hydrate a v7 bundle.",
+    "ingest":                 "loop-memory ingest {codex|claude|hermes|openclaw}\n  Ingest transcripts from a local source into the SQLite store.",
+    "inject":                 "loop-memory inject [query]   # dump long-term context block (for SessionStart hooks).",
+    "install-hooks":          "loop-memory install-hooks   # auto-write MCP + SessionStart hooks for known clients.",
+    "mcp":                    "loop-memory mcp   # stdio MCP server (for codex/claude/hermes). Requires ``[serve]`` for HTTP transport.",
+    "openclaw-setup":         "loop-memory openclaw-setup   # install the openclaw/clawx auto-ingest watcher (launchd on macOS).",
+    "recall":                 "loop-memory recall <text>   # show top memories.",
+    "rescore":                "loop-memory rescore [--half-life 30]   # recompute memory scores.",
+    "serve":                  "loop-memory serve [--port 7767] [--no-browser]   # start the local web UI. Requires the ``[serve]`` extra (fastapi + uvicorn).",
+    "stats":                  "loop-memory stats   # counters.",
+    "status":                 "loop-memory status   # one-shot summary of ingest / recall / serve / hook state.",
+    "subgraph":               "loop-memory subgraph <query>   # print a small subgraph.",
+    "version":                "loop-memory version   # print the installed distribution version.",
+    "wiki-reclassify-legacy": "loop-memory wiki-reclassify-legacy   # back-fill scope + scope_filter for H4+H5 pages.",
+}
+
 
 
 def main(argv: list | None = None) -> int:
@@ -103,7 +161,18 @@ def main(argv: list | None = None) -> int:
     if not args or args[0] in {"-h", "--help"}:
         print(__doc__)
         return 0
+    if args[0] in {"-V", "--version"}:
+        return _run_version(args[1:])
     cmd, rest = args[0], args[1:]
+    # Per-subcommand --help / -h: print the static help line and exit 0
+    # *without* invoking the handler. Avoids ValueError on ingest (when
+    # ``--help`` would be treated as a source name) and ModuleNotFoundError
+    # on serve (when [serve] is not installed). Each handler that wants
+    # richer help can still implement it locally — our interceptor is a
+    # fallback.
+    if rest and rest[0] in {"-h", "--help"} and cmd in COMMAND_HELP:
+        print(COMMAND_HELP[cmd])
+        return 0
     fn = COMMANDS.get(cmd)
     if fn is None:
         print(f"unknown command: {cmd}", file=sys.stderr)
