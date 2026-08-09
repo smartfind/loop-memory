@@ -1,5 +1,27 @@
 ## [Unreleased]
 
+## [0.4.2] - 2026-08-09
+
+### Docs
+
+- **README refresh**: added Table of contents near the top, a
+  ``Supported agents`` matrix under "What it does" (4 shipped hooks +
+  generic watcher CLI), and a generic-watcher row in the Auto-capture
+  table. Brief callouts for ``Cognitive sleep`` (v7) and the
+  ``Knowledge graph`` added under the Dashboard + Evolution
+  consolidator section. Project layout rewritten to reflect the
+  current package tree (was stuck on the v0.2-era inventory with
+  "92 unit tests"). Duplicate ``Time-weighted scoring`` section
+  removed (the legacy v1 0.35/0.65 formula; Scoring v2 supersedes it).
+  New ``FAQ & troubleshooting`` section covers the eight most common
+  install / setup / scale questions.
+
+  Pinned by 7 new regression cases in ``tests/test_repo_framing.py``:
+  TOC exists, Project layout mentions current modules, FAQ section
+  exists, Auto-capture table includes a generic-watcher row,
+  ``cognitive-sleep`` is mentioned, Supported agents matrix exists,
+  and the legacy v1 scoring formula has not reappeared.
+
 ## [0.4.1] - 2026-08-09
 
 ### Patch
