@@ -148,6 +148,58 @@ class GraphStoreTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
 
 
+    def test_cross_source_entity_mention_is_shared_intentionally(self) -> None:
+        """Pin the schema-level decision that a single entity can be
+        mentioned by memories from different sources.
+
+        This is the opposite of Mem0's multi-tenant model — there, two
+        ``user_id`` values must never merge into one entity row. Here
+        we are single-user / single-machine, so cross-source merging
+        is a *feature*: when one source asks about ``Codex``, the
+        other source's mention of ``Codex`` boosts recall instead of
+        being silently dropped.
+
+        Regression guard added in the 2026-08-10 weekly research pass
+        (see ``docs/research/2026-08-10.md`` §4).
+        """
+        # Two memories, two different sources, both mention "Codex".
+        mem_codex = self.store.upsert_memory(
+            kind="fact", text="Codex is the CLI agent.", importance=0.5,
+            source="codex",
+        )
+        mem_claude = self.store.upsert_memory(
+            kind="fact", text="Codex runs alongside Claude.", importance=0.5,
+            source="claude",
+        )
+
+        # Extract and write entity_mentions for both.
+        self.store.upsert_entity("Codex")
+        self.store.upsert_entity_mention(mem_codex.id, "Codex")
+        self.store.upsert_entity_mention(mem_claude.id, "Codex")
+
+        with self.store._conn() as c:
+            ent_count = c.execute(
+                "SELECT COUNT(*) FROM entities WHERE name = ?", ("Codex",),
+            ).fetchone()[0]
+            mention_rows = c.execute(
+                "SELECT memory_id FROM entity_mentions em "
+                "JOIN entities e ON e.id = em.entity_id WHERE e.name = ?",
+                ("Codex",),
+            ).fetchall()
+            mention_memory_ids = {r["memory_id"] for r in mention_rows}
+
+        self.assertEqual(ent_count, 1, "exactly one Codex entity row")
+        self.assertEqual(
+            mention_memory_ids, {mem_codex.id, mem_claude.id},
+            "both memories reference the same shared entity",
+        )
+        # And recall() must surface both memories when asked for "Codex".
+        hits = self.store.recall("Codex", limit=10)
+        hit_ids = {h["id"] for h in hits.get("memories", [])}
+        self.assertIn(mem_codex.id, hit_ids)
+        self.assertIn(mem_claude.id, hit_ids)
+
+
 class OpenClawLoaderTests(unittest.TestCase):
     def test_parses_jsonl(self) -> None:
         from loop_memory.ingest.loader import OpenClawLoader
