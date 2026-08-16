@@ -112,6 +112,117 @@ class OpenAICompatTests(unittest.TestCase):
             self.assertEqual(p.base_url, "https://api.openai.com/v1")
 
 
+class LLMEnvVarTests(unittest.TestCase):
+    """Audit 2026-08-16: env-var plumb for LLM_TEMPERATURE / LLM_SEED.
+
+    The OpenAI-compat / Anthropic / Ollama providers should honour
+    ``LLM_TEMPERATURE`` and ``LLM_SEED`` as a global override so a
+    user can pin deterministic distillation without touching the
+    behaviour config (mirrors ``topoteretes/cognee`` v1.5.0 PR
+    #4504). Explicit kwargs still win so existing call sites are
+    unchanged.
+    """
+
+    @staticmethod
+    def _capture_openai_body(env: dict[str, str], **kwargs) -> dict:
+        body = json.dumps({"choices": [{"message": {"content": "x"}}]}).encode()
+        captured: dict = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["body"] = json.loads(req.data.decode("utf-8"))
+            captured["headers"] = dict(req.headers)
+            return _FakeResp(body)
+
+        with mock.patch.dict("os.environ", env, clear=True), \
+             mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            p = OpenAICompatProvider(api_key="k", base_url="https://x/v1")
+            p.complete(_history(), **kwargs)
+        return captured.get("body", {})
+
+    def test_llm_temperature_env_overrides_kwarg(self) -> None:
+        body = self._capture_openai_body(
+            {"LLM_TEMPERATURE": "0.05"}, temperature=0.9,
+        )
+        self.assertEqual(body["temperature"], 0.05)
+
+    def test_llm_temperature_kwarg_wins_when_env_unset(self) -> None:
+        body = self._capture_openai_body({}, temperature=0.42)
+        self.assertEqual(body["temperature"], 0.42)
+
+    def test_llm_temperature_falls_back_to_default(self) -> None:
+        body = self._capture_openai_body({})
+        self.assertEqual(body["temperature"], 0.3)
+
+    def test_llm_temperature_ignores_invalid_env_value(self) -> None:
+        body = self._capture_openai_body({"LLM_TEMPERATURE": "warm"})
+        self.assertEqual(body["temperature"], 0.3)
+
+    def test_llm_seed_env_adds_seed_field(self) -> None:
+        body = self._capture_openai_body({"LLM_SEED": "17"})
+        self.assertEqual(body["seed"], 17)
+
+    def test_llm_seed_kwarg_wins_when_env_unset(self) -> None:
+        body = self._capture_openai_body({}, seed=42)
+        self.assertEqual(body["seed"], 42)
+
+    def test_llm_seed_omitted_when_neither_set(self) -> None:
+        body = self._capture_openai_body({})
+        self.assertNotIn("seed", body)
+
+    def test_llm_seed_ignores_invalid_env_value(self) -> None:
+        body = self._capture_openai_body({"LLM_SEED": "not-a-number"})
+        self.assertNotIn("seed", body)
+
+    def test_anthropic_temperature_env_override(self) -> None:
+        body = json.dumps({"content": [{"type": "text", "text": "ok"}]}).encode()
+        captured: dict = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["body"] = json.loads(req.data.decode("utf-8"))
+            return _FakeResp(body)
+
+        with mock.patch.dict("os.environ",
+                             {"LLM_TEMPERATURE": "0.01"}, clear=True), \
+             mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            p = AnthropicProvider(api_key="k")
+            p.complete(_history(), temperature=0.7)
+        self.assertEqual(captured["body"]["temperature"], 0.01)
+        # The seed override path also runs through the same helper.
+        self.assertNotIn("seed", captured["body"])
+
+    def test_anthropic_seed_env_sets_seed(self) -> None:
+        body = json.dumps({"content": [{"type": "text", "text": "ok"}]}).encode()
+        captured: dict = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["body"] = json.loads(req.data.decode("utf-8"))
+            return _FakeResp(body)
+
+        with mock.patch.dict("os.environ",
+                             {"LLM_SEED": "2026"}, clear=True), \
+             mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            p = AnthropicProvider(api_key="k")
+            p.complete(_history())
+        self.assertEqual(captured["body"]["seed"], 2026)
+
+    def test_ollama_temperature_and_seed_through_options(self) -> None:
+        body = json.dumps({"message": {"content": "ok"}}).encode()
+        captured: dict = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["body"] = json.loads(req.data.decode("utf-8"))
+            return _FakeResp(body)
+
+        with mock.patch.dict("os.environ",
+                             {"LLM_TEMPERATURE": "0.1",
+                              "LLM_SEED": "9"}, clear=True), \
+             mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            p = OllamaProvider(base_url="http://127.0.0.1:11434")
+            p.complete(_history())
+        self.assertEqual(captured["body"]["options"]["temperature"], 0.1)
+        self.assertEqual(captured["body"]["options"]["seed"], 9)
+
+
 class AnthropicProviderTests(unittest.TestCase):
     def test_joins_text_blocks(self) -> None:
         body = json.dumps({

@@ -34,7 +34,7 @@ import math
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from ..storage.sqlite_store import MemoryStore
 
@@ -105,6 +105,14 @@ class CognitiveReport:
     elapsed_ms: float = 0.0
     counts: dict[str, int] = field(default_factory=dict)
     applied: bool = False
+    # Audit 2026-08-16: per-stage timings so a stalled sweep can be
+    # attributed to a specific stage instead of returning a single
+    # opaque number. Mirrors the "fails loudly instead of quietly"
+    # convention from ``EverMind-AI/EverOS`` v1.2.3 where any stall
+    # names the table / phase it happened in.
+    stages: dict[str, float] = field(default_factory=dict)
+    aborted: bool = False
+    abort_reason: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -113,6 +121,9 @@ class CognitiveReport:
             "counts": self.counts,
             "applied": self.applied,
             "total": len(self.actions),
+            "stages": dict(self.stages),
+            "aborted": self.aborted,
+            "abort_reason": self.abort_reason,
         }
 
 
@@ -132,6 +143,8 @@ def cognitive_sleep(
     merge_threshold: float = DEFAULT_MERGE_THRESHOLD,
     limit: int = 1000,
     record_audit: bool = True,
+    progress: Callable[[str], None] | None = None,
+    deadline_seconds: float | None = None,
 ) -> CognitiveReport:
     """Run a single cognitive sweep.
 
@@ -148,19 +161,80 @@ def cognitive_sleep(
     The sweep is bounded to ``limit`` memories per pass to keep it
     cheap; for very large stores the user can call it multiple
     times or wire it into a cron.
+
+    Audit 2026-08-16 -- observability additions
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    * ``progress``: optional ``Callable[[str], None]`` invoked once per
+      stage so the UI can render a live progress bar without polling.
+      Stage names are ``scan``, ``stale``, ``low_value``, ``merge``,
+      ``contradict``, ``apply``, ``audit``.
+    * ``deadline_seconds``: when set, the sweep checks the deadline
+      between the O(n^2) near-duplicate pairs and between
+      individual stages; if it elapses, the sweep stops with
+      ``report.aborted=True`` and ``report.abort_reason`` naming
+      the stage it stalled in. Following the
+      ``EverMind-AI/EverOS`` v1.2.3 pattern: stalls must name the
+      stage so the user can act on them, not return a silent
+      "still working…" spinner. ``report.stages`` carries the
+      per-stage elapsed_ms for the same reason.
     """
     t0 = time.time()
     actions: list[CognitiveAction] = []
     counts: dict[str, int] = {
         "stale": 0, "low_value": 0, "merge": 0, "contradict": 0, "forget": 0,
     }
+    stages: dict[str, float] = {}
+    aborted = False
+    abort_reason = ""
     now = time.time()
+    # Explicit ``is not None`` check guards against the
+    # ``0.0 == falsy`` pitfall (the same bug class Mem0 v2.0.18
+    # fixed for Oracle ``index_accuracy=0``): a caller passing
+    # ``deadline_seconds=0.0`` to mean "fail-fast / never run"
+    # would otherwise be silently downgraded to ``deadline_at=None``
+    # and the sweep would happily run past the deadline.
+    deadline_at: float | None = (
+        now + float(deadline_seconds)
+        if deadline_seconds is not None else None
+    )
+
+    def _deadline_left() -> float:
+        if deadline_at is None:
+            return float("inf")
+        return max(0.0, deadline_at - time.time())
+
+    def _tick(stage: str, stage_t0: float) -> None:
+        nonlocal aborted, abort_reason
+        stages[stage] = round((time.time() - stage_t0) * 1000, 1)
+        if progress is not None:
+            try:
+                progress(stage)
+            except Exception:  # pragma: no cover - progress is best-effort
+                log.warning("cognitive_sleep progress(%r) raised; ignoring", stage)
+        if deadline_at is not None and time.time() >= deadline_at:
+            aborted = True
+            abort_reason = f"deadline exceeded in stage {stage!r} ({stages[stage]} ms)"
+
     stale_cutoff = now - stale_days * 86400.0
 
     # ----- 1. Stale memories --------------------------------------
     # Pull every memory below the score + importance gates. We do a
     # single SQL scan to keep the pass fast.
+    scan_t0 = time.time()
     rows = store.list_memories(limit=limit)
+    _tick("scan", scan_t0)
+    if aborted:
+        return _finalize_report(actions, counts, stages, aborted, abort_reason,
+                                t0, apply, record_audit, store)
+
+    # Stages 1+2: stale gate + low-value gate share one pass over
+    # ``rows`` because both need (score, importance, created_at).
+    sl_t0 = time.time()
+    # Audit 2026-08-16: bulk-fetch signals in one query instead of
+    # one SELECT per memory -- the nightly sweep previously did
+    # ``limit`` round-trips just to read ``recall_count`` for the
+    # low-value gate.
+    signals_by_id = store.get_signals([r.id for r in rows]) if rows else {}
     for r in rows:
         score = float(r.score or 0)
         importance = float(r.importance or 0)
@@ -178,10 +252,9 @@ def cognitive_sleep(
             continue
         # Low value: never recalled, score + importance * 0.5 below
         # ``low_value`` (this is the cheap "noise from a long
-        # transcript" filter).
-        # ``list_memories`` doesn't include recall_count in the
-        # dataclass; re-fetch via the signals table.
-        signals = _signals_for(store, r.id)
+        # transcript" filter). Signals are pre-fetched in bulk above
+        # so this is now a dict lookup, not a per-row SQL hit.
+        signals = signals_by_id.get(r.id, {"recall_count": 0, "positive": 0, "negative": 0})
         if signals["recall_count"] == 0 and score + 0.5 * importance < low_value:
             counts["low_value"] += 1
             actions.append(CognitiveAction(
@@ -190,16 +263,28 @@ def cognitive_sleep(
                 reason=f"never recalled & score+0.5*importance<{low_value}",
                 score=score, payload={"importance": importance},
             ))
+    _tick("stale", sl_t0)
+    if aborted:
+        return _finalize_report(actions, counts, stages, aborted, abort_reason,
+                                t0, apply, record_audit, store)
 
     # ----- 2. Near-duplicate merges ------------------------------
     # Cheap O(n^2) on the first ``limit`` memories; good enough for
     # nightly sweeps on a store of a few thousand rows. We use the
     # ``text`` Jaccard over a small token set so the comparison
     # doesn't need embeddings.
+    merge_t0 = time.time()
     text_index = [(r.id, _token_set(r.text or "")) for r in rows]
     seen_pairs: set[tuple[str, str]] = set()
     for i in range(len(text_index)):
         for j in range(i + 1, len(text_index)):
+            # Check the deadline every 256 pairs so the cost is
+            # amortised away on large sweeps but a runaway near-
+            # duplicate loop can't escape the budget.
+            if deadline_at is not None and (j & 0xFF) == 0 and _deadline_left() <= 0:
+                aborted = True
+                abort_reason = f"deadline exceeded during near-duplicate scan (i={i}, j={j})"
+                break
             mid_i, ti = text_index[i]
             mid_j, tj = text_index[j]
             if not ti or not tj:
@@ -225,12 +310,19 @@ def cognitive_sleep(
                     reason=f"Jaccard={j_sim:.3f} ≥ {merge_threshold}",
                     score=j_sim, payload={"other_id": mid_j, "jaccard": j_sim},
                 ))
+        if aborted:
+            break
+    _tick("merge", merge_t0)
+    if aborted:
+        return _finalize_report(actions, counts, stages, aborted, abort_reason,
+                                t0, apply, record_audit, store)
 
     # ----- 3. Contradictions -------------------------------------
     # Reuse the existing wiki-page contradiction detector. It's
     # cheap (key_facts Jaccard, no LLM) and already returns the
     # matches we need.
     from .contradiction import list_contradictions
+    contr_t0 = time.time()
     try:
         contradictions = list_contradictions(store)
     except Exception as e:
@@ -252,8 +344,13 @@ def cognitive_sleep(
                     "partner_title": partner.get("title"),
                 },
             ))
+    _tick("contradict", contr_t0)
+    if aborted:
+        return _finalize_report(actions, counts, stages, aborted, abort_reason,
+                                t0, apply, record_audit, store)
 
     # ----- 4. Apply (optional) -----------------------------------
+    apply_t0 = time.time()
     if apply:
         applied_actions: list[CognitiveAction] = []
         for a in actions:
@@ -277,8 +374,10 @@ def cognitive_sleep(
                 # both". But we still mark the action as suggested
                 # so the audit trail is complete.
                 continue
+    _tick("apply", apply_t0)
 
     # ----- 5. Persist to cognitive_audit -------------------------
+    audit_t0 = time.time()
     if record_audit:
         for a in actions:
             store.record_audit(
@@ -292,32 +391,67 @@ def cognitive_sleep(
                 payload=a.payload,
             )
 
+    _tick("audit", audit_t0)
     elapsed_ms = (time.time() - t0) * 1000
     return CognitiveReport(
         actions=actions,
         elapsed_ms=round(elapsed_ms, 1),
         counts=counts,
         applied=bool(apply),
+        stages=stages,
+        aborted=aborted,
+        abort_reason=abort_reason,
+    )
+
+
+def _finalize_report(
+    actions: list[CognitiveAction],
+    counts: dict[str, int],
+    stages: dict[str, float],
+    aborted: bool,
+    abort_reason: str,
+    t0: float,
+    apply: bool,
+    record_audit: bool,
+    store: MemoryStore,
+) -> CognitiveReport:
+    """Build an early-return report when the deadline fires.
+
+    The early-return path still runs the audit stage for any actions
+    the sweep already collected, so a partial sweep leaves the same
+    trace a full sweep would.
+    """
+    if record_audit and actions:
+        for a in actions:
+            try:
+                store.record_audit(
+                    kind=a.kind,
+                    action=a.action,
+                    target_kind=a.target_kind,
+                    target_id=a.target_id,
+                    target_text=a.target_text,
+                    reason=a.reason,
+                    score=a.score,
+                    payload=a.payload,
+                )
+            except Exception:  # pragma: no cover - audit is best-effort
+                log.warning("record_audit on early-return failed; skipping")
+        stages["audit"] = round((time.time() - t0) * 1000, 1) - sum(stages.values())
+    elapsed_ms = (time.time() - t0) * 1000
+    return CognitiveReport(
+        actions=actions,
+        elapsed_ms=round(elapsed_ms, 1),
+        counts=counts,
+        applied=bool(apply),
+        stages=stages,
+        aborted=aborted,
+        abort_reason=abort_reason,
     )
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
-
-
-def _signals_for(store: MemoryStore, memory_id: str) -> dict[str, Any]:
-    """Return the signal row for a memory, or zeros if missing."""
-    with store._conn() as c:  # type: ignore[attr-defined]
-        row = c.execute(
-            "SELECT recall_count, positive, negative, last_recalled_at "
-            "FROM memory_signals WHERE memory_id=?",
-            (memory_id,),
-        ).fetchone()
-    if not row:
-        return {"recall_count": 0, "positive": 0, "negative": 0,
-                "last_recalled_at": None}
-    return dict(row)
 
 
 def _token_set(text: str) -> set[str]:

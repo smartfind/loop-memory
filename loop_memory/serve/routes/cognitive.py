@@ -28,6 +28,12 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None) 
     @app.post("/api/v1/cognitive/sleep")
     def v1_cognitive_sleep(body: dict):
         from ...jobs.cognitive import cognitive_sleep
+        # ``deadline_seconds`` is optional. ``None`` / missing means
+        # no deadline; an explicit ``0`` is honoured (the
+        # truthiness-vs-``is not None`` pitfall that bit
+        # ``mem0ai/mem0`` Oracle ``index_accuracy=0`` in v2.0.18
+        # is caught in ``cognitive_sleep`` itself).
+        deadline = body.get("deadline_seconds")
         rpt = cognitive_sleep(
             store,
             apply=bool(body.get("apply", False)),
@@ -38,6 +44,7 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None) 
             merge_threshold=float(body.get("merge_threshold", 0.92)),
             limit=int(body.get("limit", 1000)),
             record_audit=bool(body.get("record_audit", True)),
+            deadline_seconds=float(deadline) if deadline is not None else None,
         )
         return rpt.to_dict()
 

@@ -163,6 +163,41 @@ def _http_post_json(url: str, body: dict, headers: dict, timeout: float) -> dict
         raise LLMHttpError(e.code, url, err)
 
 
+def _env_float(name: str, default: float | None) -> float | None:
+    """Read a float from env, returning *default* when unset or invalid.
+
+    Used to plumb ``LLM_TEMPERATURE`` so a user can pin the consolidator
+    temperature globally without touching the behaviour config. Mirrors
+    the env-var conventions in ``topoteretes/cognee`` v1.5.0 (PR #4504)
+    while keeping the kwargs / behaviour config as the canonical knobs.
+    """
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        log.warning("env %s=%r is not a float; ignoring", name, raw)
+        return default
+
+
+def _env_optional_int(name: str) -> int | None:
+    """Read an int from env, returning None when unset or invalid.
+
+    ``LLM_SEED`` is opt-in for providers that support it (OpenAI /
+    Anthropic / Ollama all accept ``seed``). Leaving it unset keeps the
+    pre-existing "no seed" behaviour so callers do not need to migrate.
+    """
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        log.warning("env %s=%r is not an int; ignoring", name, raw)
+        return None
+
+
 class OpenAICompatProvider(LLMClient):
     """OpenAI-compatible chat completions client.
 
@@ -199,12 +234,22 @@ class OpenAICompatProvider(LLMClient):
             msgs.append({"role": "system", "content": history.system})
         for m in history.messages:
             msgs.append({"role": m.role, "content": m.content})
+        temperature = _env_float(
+            "LLM_TEMPERATURE",
+            float(kwargs.get("temperature", 0.3)),
+        )
         body = {
             "model": self.model,
             "messages": msgs,
-            "temperature": float(kwargs.get("temperature", 0.3)),
+            "temperature": float(temperature if temperature is not None else 0.3),
             "max_tokens": int(kwargs.get("max_tokens", 800)),
         }
+        seed = _env_optional_int("LLM_SEED")
+        if seed is None:
+            seed_val = kwargs.get("seed")
+            seed = int(seed_val) if seed_val is not None else None
+        if seed is not None:
+            body["seed"] = int(seed)
         url = self.base_url + "/chat/completions"
         headers = {"Content-Type": "application/json"}
         if self.api_key:
@@ -236,13 +281,25 @@ class AnthropicProvider(LLMClient):
                 sys_prompt += "\n" + m.content
                 continue
             msgs.append({"role": m.role, "content": m.content})
+        temperature = _env_float(
+            "LLM_TEMPERATURE",
+            float(kwargs.get("temperature", 0.3)),
+        )
         body = {
             "model": self.model,
             "system": sys_prompt or "You are a helpful assistant.",
             "messages": msgs,
             "max_tokens": int(kwargs.get("max_tokens", 800)),
-            "temperature": float(kwargs.get("temperature", 0.3)),
+            "temperature": float(temperature if temperature is not None else 0.3),
         }
+        seed = _env_optional_int("LLM_SEED")
+        if seed is None:
+            seed_val = kwargs.get("seed")
+            seed = int(seed_val) if seed_val is not None else None
+        if seed is not None:
+            # Anthropic only honours an integer seed; non-int env values
+            # are dropped at parse time above.
+            body["seed"] = int(seed)
         url = self.base_url + "/v1/messages"
         headers = {
             "Content-Type": "application/json",
@@ -274,14 +331,25 @@ class OllamaProvider(LLMClient):
             msgs.append({"role": "system", "content": history.system})
         for m in history.messages:
             msgs.append({"role": m.role, "content": m.content})
+        temperature = _env_float(
+            "LLM_TEMPERATURE",
+            float(kwargs.get("temperature", 0.3)),
+        )
+        options = {
+            "temperature": float(temperature if temperature is not None else 0.3),
+            "num_predict": int(kwargs.get("max_tokens", 800)),
+        }
+        seed = _env_optional_int("LLM_SEED")
+        if seed is None:
+            seed_val = kwargs.get("seed")
+            seed = int(seed_val) if seed_val is not None else None
+        if seed is not None:
+            options["seed"] = int(seed)
         body = {
             "model": self.model,
             "messages": msgs,
             "stream": False,
-            "options": {
-                "temperature": float(kwargs.get("temperature", 0.3)),
-                "num_predict": int(kwargs.get("max_tokens", 800)),
-            },
+            "options": options,
         }
         url = self.base_url + "/api/chat"
         data = _http_post_json(url, body, {"Content-Type": "application/json"}, self.timeout)

@@ -32,7 +32,7 @@ import uuid
 # dependency on .retrieval during package import; the helpers used by
 # _hydrate_* are imported here for the same reason.
 from .retrieval import temporal_score  # noqa: E402
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -826,6 +826,40 @@ class MemoryStore:
                 "last_recalled_at": row["last_recalled_at"],
                 "last_feedback_at": row["last_feedback_at"],
             }
+    def get_signals(self, memory_ids):
+        """Bulk fetch signals for many memory ids in a single query.
+
+        Returns a dict keyed by memory_id. Memories with no signal row
+        resolve to the same zero-shape dict as `get_signal`.
+        Used by the cognitive-sweep loop, where iterating per-id caused
+        an N+1 SQL hit on nightly runs over large stores.
+        """
+        ids = [str(x) for x in memory_ids if x]
+        empty = {
+            "recall_count": 0, "positive": 0, "negative": 0,
+            "last_recalled_at": None, "last_feedback_at": None,
+        }
+        out = {mid: dict(empty) for mid in ids}
+        if not ids:
+            return out
+        placeholders = ",".join("?" for _ in ids)
+        with self._conn() as c:
+            rows = c.execute(
+                f"SELECT memory_id, recall_count, positive, negative,"
+                f"       last_recalled_at, last_feedback_at"
+                f"  FROM memory_signals WHERE memory_id IN ({placeholders})",
+                tuple(ids),
+            ).fetchall()
+        for row in rows:
+            mid = row["memory_id"]
+            out[mid] = {
+                "recall_count": row["recall_count"] or 0,
+                "positive": row["positive"] or 0,
+                "negative": row["negative"] or 0,
+                "last_recalled_at": row["last_recalled_at"],
+                "last_feedback_at": row["last_feedback_at"],
+            }
+        return out
 
     def top_signals(self, kind: str = "recall_count", limit: int = 20) -> list[Dict[str, Any]]:
         """Top-N memories by a signal column (recall_count / positive / negative)."""

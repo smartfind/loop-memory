@@ -7,7 +7,29 @@ zero-dependency.
 
 from __future__ import annotations
 
+import os
+
 from ..llm.base import ChatHistory, LLMClient
+
+
+def _env_float(name: str, default: float | None) -> float | None:
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def _env_optional_int(name: str) -> int | None:
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
 
 
 class OpenAIClient(LLMClient):
@@ -22,10 +44,21 @@ class OpenAIClient(LLMClient):
     def complete(self, history: ChatHistory, **kwargs) -> str:
         msgs = [{"role": "system", "content": history.system}] if history.system else []
         msgs += [{"role": m.role, "content": m.content} for m in history.messages]
-        resp = self._client.chat.completions.create(
+        temperature = _env_float(
+            "LLM_TEMPERATURE",
+            float(kwargs.get("temperature", 0.4)),
+        )
+        create_kwargs = dict(
             model=self.model,
             messages=msgs,
-            temperature=kwargs.get("temperature", 0.4),
-            max_tokens=kwargs.get("max_tokens", 600),
+            temperature=float(temperature if temperature is not None else 0.4),
+            max_tokens=int(kwargs.get("max_tokens", 600)),
         )
+        seed = _env_optional_int("LLM_SEED")
+        if seed is None:
+            seed_val = kwargs.get("seed")
+            seed = int(seed_val) if seed_val is not None else None
+        if seed is not None:
+            create_kwargs["seed"] = int(seed)
+        resp = self._client.chat.completions.create(**create_kwargs)
         return resp.choices[0].message.content or ""

@@ -1,5 +1,67 @@
 ## [Unreleased]
 
+## [0.4.3] - 2026-08-16
+
+### Performance
+
+- **Cognitive sweep N+1 fix**: ``MemoryStore.get_signals(memory_ids)``
+  bulk-fetches ``recall_count`` / ``positive`` / ``negative`` for
+  every memory in a single ``SELECT ... WHERE memory_id IN (?, ?, ...)``
+  query, replacing the per-row ``get_signal`` round-trip the
+  nightly ``cognitive_sleep`` sweep used to do. Net result for a
+  ``limit=1000`` sweep: roughly 1000 SQL round-trips → 1. The old
+  per-id helper was the only caller and was removed; every existing
+  call site (``get_signal``) is unchanged. Pinned by 4 new cases in
+  ``tests/test_universal_memory.py::GetSignalsBulkTests``.
+
+### Patch
+
+- **Cognitive sleep observability**: the report now carries
+  ``stages`` (per-stage ``elapsed_ms`` for ``scan``, ``stale``,
+  ``merge``, ``contradict``, ``apply``, ``audit``), ``aborted``
+  (bool), and ``abort_reason`` (string naming the stage that
+  fired the budget). A new ``progress: Callable[[str], None]``
+  callback fires once per stage so the UI can render a live
+  progress bar without polling. ``deadline_seconds`` bounds the
+  sweep; on overrun the sweep returns early with ``aborted=True``
+  and the audit row for any partial work. Mirrors the
+  "fails loudly instead of quietly" convention from
+  ``EverMind-AI/EverOS`` v1.2.3. Pinned by 5 new cases in
+  ``tests/test_universal_memory.py::CognitiveSleepObservabilityTests``
+  and 2 new HTTP-route cases in
+  ``tests/test_universal_memory.py::CognitiveSleepRouteTests``.
+- **LLM env-var overrides**: ``LLM_TEMPERATURE`` (float) and
+  ``LLM_SEED`` (int) now reach the OpenAI-compat, Anthropic,
+  Ollama providers (and the optional ``openai`` adapter) so a
+  user can pin deterministic distillation globally without
+  touching the behaviour config. Explicit ``kwargs`` still win,
+  so every existing call site is unchanged; invalid env values
+  fall back to the existing defaults with a warning. Pinned by
+  11 new cases in
+  ``tests/test_llm_providers.py::LLMEnvVarTests``.
+- **Defensive ``is not None`` audit (cognitive_sleep)**: while
+  reviewing the Mem0 v2.0.18 Oracle ``index_accuracy=0`` fix, the
+  same truthiness-vs-``is not None`` bug class was found in our
+  own ``deadline_at`` computation and corrected. Pinned by the
+  new deadline test cases referenced above.
+
+### Docs
+
+- **Cognitive sleep section** updated with the new ``--deadline-seconds``
+  flag and the report's per-stage observability. **New FAQ entry**
+  documenting ``LLM_TEMPERATURE`` / ``LLM_SEED`` so the env-var
+  knobs are discoverable from the README without grepping the
+  source.
+
+### Internal
+
+- **Weekly ecosystem research**: ``docs/research/2026-08-16.md``
+  covers the 2026-08-10 → 2026-08-16 window, with the Mem0
+  defensive-validation batch (v2.0.18), Cognee v1.5.0 (large-scale
+  migration + LLM env-var plumb), TencentDB v2.0.1-beta.2 (Codex
+  CLI / WorkBuddy / dsh Memory-Proxy clients), and the new
+  EverOS / MemOS watchlist additions.
+
 ## [0.4.2] - 2026-08-09
 
 ### Docs

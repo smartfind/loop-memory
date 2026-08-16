@@ -124,6 +124,10 @@ class CognitiveReportView:
     applied: bool = False
     elapsed_ms: float = 0.0
     total: int = 0
+    # Audit 2026-08-16: per-stage timings + deadline observability.
+    stages: dict[str, float] = field(default_factory=dict)
+    aborted: bool = False
+    abort_reason: str = ""
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> CognitiveReportView:
@@ -133,6 +137,9 @@ class CognitiveReportView:
             applied=bool(d.get("applied", False)),
             elapsed_ms=float(d.get("elapsed_ms", 0) or 0),
             total=int(d.get("total", 0)),
+            stages=dict(d.get("stages", {})),
+            aborted=bool(d.get("aborted", False)),
+            abort_reason=str(d.get("abort_reason", "") or ""),
         )
 
 

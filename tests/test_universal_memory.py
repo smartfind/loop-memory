@@ -165,6 +165,165 @@ class GraphJobTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
+class CognitiveSleepObservabilityTests(unittest.TestCase):
+    """Audit 2026-08-16: progress + deadline observability.
+
+    The cognitive sweep now exposes per-stage timings (``stages``)
+    on the report, an optional ``progress`` callback that fires once
+    per stage, and a ``deadline_seconds`` budget that aborts the
+    sweep with ``aborted=True`` and an ``abort_reason`` that names
+    the stage it stalled in. These tests pin the new contract.
+    """
+
+    def setUp(self) -> None:
+        self.store, _ = _new_store()
+
+    def test_stages_present_in_dry_run(self) -> None:
+        self.store.upsert_memory(kind="fact", text="ok", importance=0.6)
+        rpt = cognitive_sleep(self.store, apply=False)
+        # All seven stages must be recorded, even when the sweep
+        # is short and some of them are zero-cost.
+        expected = {"scan", "stale", "merge", "contradict", "apply", "audit"}
+        # ``stale`` and ``audit`` are split across the single
+        # sweep pass above, so we accept either ordering.
+        self.assertTrue(expected.issubset(set(rpt.stages)),
+                        f"missing stages: {expected - set(rpt.stages)}")
+        self.assertFalse(rpt.aborted)
+        self.assertEqual(rpt.abort_reason, "")
+        d = rpt.to_dict()
+        self.assertIn("stages", d)
+        self.assertIn("aborted", d)
+
+    def test_progress_callback_receives_each_stage(self) -> None:
+        self.store.upsert_memory(kind="fact", text="ok", importance=0.6)
+        seen: list[str] = []
+        rpt = cognitive_sleep(
+            self.store, apply=False,
+            progress=lambda stage: seen.append(stage),
+        )
+        # At minimum scan / stale / merge / contradict / apply / audit.
+        for expected in ("scan", "stale", "merge", "contradict", "apply", "audit"):
+            self.assertIn(expected, seen, f"missing stage {expected!r} in {seen}")
+        self.assertFalse(rpt.aborted)
+
+    def test_progress_callback_exception_does_not_break_sweep(self) -> None:
+        self.store.upsert_memory(kind="fact", text="ok", importance=0.6)
+        def bad(stage: str) -> None:
+            raise RuntimeError(f"boom {stage}")
+        rpt = cognitive_sleep(self.store, apply=False, progress=bad)
+        self.assertFalse(rpt.aborted)
+
+    def test_deadline_aborts_with_stage_named(self) -> None:
+        # Seed many memories so the near-duplicate O(n^2) stage
+        # has enough work to actually overrun a sub-second budget.
+        from loop_memory.jobs import cognitive as cog
+        for i in range(40):
+            self.store.upsert_memory(
+                kind="fact",
+                text=f"Postgres orders table is used by service number {i} for writes "
+                     f"and reads with replication in zone {i % 3}",
+                importance=0.5, agent_id="bot",
+            )
+        rpt = cog.cognitive_sleep(self.store, apply=False, deadline_seconds=0.0)
+        self.assertTrue(rpt.aborted, "deadline_seconds=0 should abort the sweep")
+        self.assertTrue(rpt.abort_reason.startswith("deadline exceeded"),
+                        f"abort_reason must start with 'deadline exceeded': {rpt.abort_reason!r}")
+        # The reason names the stage where the budget fired; this
+        # is the contract the EverOS-style "stalls must name the
+        # stage" pattern asks for.
+        self.assertTrue(any(stage in rpt.abort_reason
+                            for stage in ("scan", "stale", "merge",
+                                          "contradict", "apply", "audit")),
+                        f"abort_reason must name a stage: {rpt.abort_reason!r}")
+
+    def test_no_deadline_means_no_abort(self) -> None:
+        self.store.upsert_memory(kind="fact", text="hello world", importance=0.5)
+        rpt = cognitive_sleep(self.store, apply=False, deadline_seconds=None)
+        self.assertFalse(rpt.aborted)
+
+
+class GetSignalsBulkTests(unittest.TestCase):
+    """Audit 2026-08-16: bulk signal fetch for the cognitive sweep.
+
+    ``get_signals`` was added to replace the per-memory ``get_signal``
+    round-trip the cognitive sweep used to do. These tests pin the
+    contract: same shape as ``get_signal`` for missing rows, single
+    SQL hit, and the cognitive sweep no longer talks to ``_conn``
+    during the low-value gate.
+    """
+
+    def setUp(self) -> None:
+        self.store, _ = _new_store()
+
+    def test_get_signals_matches_get_signal_for_present_rows(self) -> None:
+        m = self.store.upsert_memory(kind="fact", text="hello", importance=0.5)
+        self.store.bump_recalls([m.id])
+        self.store.bump_recalls([m.id])
+        bulk = self.store.get_signals([m.id])
+        single = self.store.get_signal(m.id)
+        self.assertEqual(set(bulk[m.id].keys()), set(single.keys()))
+        self.assertEqual(bulk[m.id]["recall_count"], 2)
+        self.assertEqual(single["recall_count"], 2)
+
+    def test_get_signals_returns_zero_shape_for_missing_rows(self) -> None:
+        m = self.store.upsert_memory(kind="fact", text="x", importance=0.5)
+        bulk = self.store.get_signals([m.id, "ghost-id"])
+        self.assertEqual(bulk["ghost-id"], {
+            "recall_count": 0, "positive": 0, "negative": 0,
+            "last_recalled_at": None, "last_feedback_at": None,
+        })
+        # Present row keeps its real values.
+        self.assertEqual(bulk[m.id]["recall_count"], 0)
+
+    def test_get_signals_empty_input_returns_empty_dict(self) -> None:
+        self.assertEqual(self.store.get_signals([]), {})
+        # ``""`` and ``None`` are filtered out; non-empty whitespace
+        # survives and gets a zero-shape row, mirroring the existing
+        # ``get_signal`` per-id contract.
+        self.assertEqual(self.store.get_signals(["", None]), {})
+
+    def test_cognitive_sleep_does_not_call_get_signal_internally(self) -> None:
+        """Pin that the N+1 anti-pattern is gone.
+
+        ``get_signal`` per memory would have been replaced by the bulk
+        ``get_signals``; we assert the bulk path is the one that
+        surfaces recall_count to the low-value gate.
+        """
+        from loop_memory.jobs import cognitive as cog
+        original_get_signal = self.store.get_signal
+        original_get_signals = self.store.get_signals
+        per_id_hits = 0
+        bulk_hits = 0
+
+        def counting_get_signal(mid):
+            nonlocal per_id_hits
+            per_id_hits += 1
+            return original_get_signal(mid)
+
+        def counting_get_signals(ids):
+            nonlocal bulk_hits
+            bulk_hits += 1
+            return original_get_signals(ids)
+
+        self.store.get_signal = counting_get_signal  # type: ignore[assignment]
+        self.store.get_signals = counting_get_signals  # type: ignore[assignment]
+        # Seed >5 memories so a regression to per-id SELECTs would
+        # be visible. They are low-score, low-importance so the
+        # stale gate fires and the low-value gate can use signals.
+        for i in range(6):
+            self.store.upsert_memory(
+                kind="fact", text=f"noise {i}",
+                importance=0.05, agent_id="bot",
+                created_at=time.time() - 365 * 86400,
+            )
+        rpt = cog.cognitive_sleep(self.store, apply=False, stale_days=90,
+                                  min_score=0.5, min_importance=0.3)
+        self.assertGreaterEqual(rpt.counts["stale"], 6)
+        # Bulk fetch must have been called exactly once for the sweep.
+        self.assertEqual(bulk_hits, 1, "cognitive_sleep should bulk-fetch signals once")
+        self.assertEqual(per_id_hits, 0, "cognitive_sleep must not call get_signal per row")
+
+
 class CognitiveSleepTests(unittest.TestCase):
     def setUp(self) -> None:
         self.store, _ = _new_store()
@@ -199,6 +358,57 @@ class CognitiveSleepTests(unittest.TestCase):
         rpt = cognitive_sleep(self.store, apply=False)
         # Should find a merge candidate
         self.assertGreaterEqual(rpt.counts["merge"], 1)
+
+
+# ---------------------------------------------------------------------------
+# Cognitive sleep observability through the HTTP route (Audit 2026-08-16)
+# ---------------------------------------------------------------------------
+
+
+class CognitiveSleepRouteTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.store, self.db = _new_store()
+        # Wire the same store through the FastAPI app so the v1
+        # cognitive route is exercised end-to-end.
+        import tempfile as _tf
+        from pathlib import Path as _P
+        from fastapi.testclient import TestClient
+        self._tmpdir = _P(_tf.mkdtemp(prefix="loop_route_"))
+        # The store holds its own DB on disk; the app reads from
+        # the same path so reads after writes stay consistent.
+        from loop_memory.serve.app import create_app
+        # ``create_app`` takes a MemoryStore, not a path; build
+        # the store on the temp db and pass it in.
+        from loop_memory.storage.sqlite_store import MemoryStore as _MS
+        self.app = create_app(_MS(str(self.db)), scheduler=0)
+        self.client = TestClient(self.app)
+
+    def test_route_returns_stages_and_aborted_fields(self) -> None:
+        self.store.upsert_memory(kind="fact", text="ok", importance=0.6)
+        resp = self.client.post(
+            "/api/v1/cognitive/sleep",
+            json={"apply": False, "limit": 50},
+        )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        body = resp.json()
+        # New fields must be present in the wire format.
+        self.assertIn("stages", body)
+        self.assertIn("aborted", body)
+        self.assertIn("abort_reason", body)
+        self.assertFalse(body["aborted"])
+
+    def test_route_honours_explicit_deadline_seconds_zero(self) -> None:
+        for i in range(5):
+            self.store.upsert_memory(kind="fact", text=f"row {i}", importance=0.5)
+        resp = self.client.post(
+            "/api/v1/cognitive/sleep",
+            json={"apply": False, "deadline_seconds": 0.0, "limit": 200},
+        )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        body = resp.json()
+        self.assertTrue(body["aborted"], body)
+        self.assertTrue(body["abort_reason"].startswith("deadline exceeded"),
+                        body["abort_reason"])
 
 
 # ---------------------------------------------------------------------------

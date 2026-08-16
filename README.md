@@ -358,6 +358,15 @@ pass** over the store:
 
 Dry-run by default; pass `--apply` to commit.
 
+**Observability (since 0.4.3).** The report carries per-stage
+timings (``scan``, ``stale``, ``merge``, ``contradict``, ``apply``,
+``audit``) and an explicit ``aborted`` flag with an ``abort_reason``
+that names the stage the budget fired in. Pass
+``--deadline-seconds <N>`` (HTTP: ``POST /api/v1/cognitive/sleep``
+with ``{"deadline_seconds": N}``; SDK: ``client.cognitive_sleep(deadline_seconds=N)``)
+to bound the sweep — useful for nightly cron, where a stuck
+sweep should leave a loud trace instead of a silent spinner.
+
 ### Knowledge graph
 
 `loop-memory graph-rebuild` extracts entities from every distilled
@@ -587,6 +596,24 @@ keeps new pages client-scoped without automatic global promotion. The
 classifier is local and makes no model or network request on a wiki write.
 
 ---
+
+### LLM env-var overrides
+
+The OpenAI-compat / Anthropic / Ollama providers (and the optional
+``openai`` adapter) honour two env-var knobs so you can pin
+distillation deterministically without touching the behaviour
+config:
+
+- ``LLM_TEMPERATURE`` — float, defaults to ``0.3`` (or the explicit
+  ``kwargs.temperature``). Invalid values are ignored with a warning.
+- ``LLM_SEED`` — int, sent as ``seed`` for OpenAI / Anthropic /
+  Ollama where supported. Omitting it preserves the existing
+  "no seed" behaviour so older call sites do not need to migrate.
+
+Both env vars are read at every ``complete()`` call, so a single
+``export LLM_SEED=42`` plus a nightly cron makes wiki distillation
+reproducible. Pinned by 11 cases in
+``tests/test_llm_providers.py::LLMEnvVarTests``.
 
 ## FAQ & troubleshooting
 
