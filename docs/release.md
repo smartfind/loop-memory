@@ -72,7 +72,31 @@ local uploads can be disabled again.
 ## Verifying a release
 
 ```bash
-pip index versions loop-memory          # should list 0.4.0
-python -m pip install --upgrade loop-memory
-python -c "import loop_memory; print(loop_memory.__version__)"
+# Replace 0.4.4 with the version you intend to verify.
+TAG=0.4.4
+
+pip index versions loop-memory          # should include $TAG
+python -m pip install --upgrade "loop-memory==$TAG"
+python -c "import loop_memory; print(loop_memory.__version__)"  # -> $TAG
+
+# Sanity: every CLI subcommand exits 0 after a clean install.
+for cmd in "loop-memory --help" \
+          "loop-memory rules --help" \
+          "loop-memory recall --help" \
+          "loop-memory cognitive-sleep --help"; do
+  bash -c "$cmd" >/dev/null || { echo "FAIL: $cmd"; exit 1; }
+done
 ```
+
+The smoke script in `scripts/release.sh --tag v$TAG` automates the
+four bullets above (plus `ruff check .` and a full `pytest -q`) and
+prints a final `0.4.x smoke OK` line — the same one CI runs in
+`.github/workflows/tests.yml`. To discover what is currently live on PyPI run:
+
+```bash
+pip index versions loop-memory
+```
+
+Anything in `pyproject.toml` that hasn't been tagged + pushed via
+step 4 above stays on the next release. (Local code may already be
+ahead — see `git log --oneline origin/main`.)

@@ -51,6 +51,42 @@ Mem0 卖点和文章主推差异化之一。loop-memory v7 把已有但未串到
 * **`GET /api/v1/cognitive/audit?kind=…&action=…`** — 读历史。
 * **`POST /api/v1/cognitive/audit/revert`** — 标记某条为 reverted。
 
+### B.1 Observability：`stages` / `aborted` / `abort_reason`
+
+`CognitiveReportView`（HTTP body 与 SDK 同型）现在除了
+`suggested` / `applied` / `counts` 之外，还带：
+
+```json
+{
+  "stages": {
+    "score":         3.2,    // 毫秒
+    "stale":        41.8,
+    "low_value":     0.7,
+    "merge":       512.6,
+    "contradict":    1.1
+  },
+  "aborted": false,
+  "abort_reason": ""           // e.g. "deadline exceeded in stage 'merge' (512.6 ms)"
+}
+```
+
+* `deadline_seconds`（自 0.4.3 起）— 任意阶段开始前都会
+  比较 `time.time()` 与 `t0 + deadline_seconds`；超过则把
+  `aborted=True` 并把当前阶段的耗时写进 `abort_reason`，
+  已经写下的建议仍然保留（不会回滚半成品）。
+* `deadline_seconds=0.0` 视作「fail-fast / 永不运行」，直接
+  返回一份空报告 + `aborted=True`。
+* `stages` 是 **per-stage elapsed_ms** map；前端可以拿它做
+  「仍在跑」的 spinner / 进度条，比单数 `elapsed_ms` 更易
+  定位慢在哪一段（参见
+  `loop_memory/jobs/cognitive.py::cognitive_sleep` 与
+  回归用例 `tests/test_universal_memory.py::test_cognitive_sleep_*` + `tests/test_serve_handlers.py::test_returns_all_six_stages_even_when_empty`）。
+
+LLM 蒸馏的确定性由
+[`LLM_TEMPERATURE` / `LLM_SEED`](providers.md#llm_temperature--llm_seed-环境变量-确定性蒸馏)
+环境变量管，与 `cognitive_sleep` 协同使用最稳。
+
+
 ### C. MEMORY.md 白盒导出 + Git 回滚
 
 文章钦定的"白盒 + Git 可回滚"形态。`loop_memory/export/memory_md.py`
@@ -145,7 +181,7 @@ loop-memory graph-rebuild
 | `POST` | `/api/v1/graph/edges` | `{src, dst, kind?, weight?, evidence_id?}` | **新** 推语义边 |
 | `GET`  | `/api/v1/graph/subgraph` | `q, max_nodes?, max_edges?` | **新** 拿小图 |
 | `POST` | `/api/v1/graph/rebuild` | — | **新** 重提取实体 |
-| `POST` | `/api/v1/cognitive/sleep` | `{apply?, stale_days?, min_score?, min_importance?, low_value?, merge_threshold?, limit?, record_audit?}` | **新** 跑 sweep |
+| `POST` | `/api/v1/cognitive/sleep` | `{apply?, stale_days?, min_score?, min_importance?, low_value?, merge_threshold?, limit?, deadline_seconds?, record_audit?}` | **新** 跑 sweep（自 0.4.3 起支持 deadline） |
 | `GET`  | `/api/v1/cognitive/audit` | `kind?, action?, limit?` | **新** 读历史 |
 | `POST` | `/api/v1/cognitive/audit/revert` | `{id}` | **新** 标 reverted |
 | `POST` | `/api/v1/export` | `{out_dir, agent_id?, user_id?, scope?, min_importance?}` | **新** 写 MEMORY.md 目录 |

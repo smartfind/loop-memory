@@ -131,7 +131,7 @@ for the full design; the route table is:
 | POST   | `/api/v1/graph/edges`        | `{src, dst, kind?, weight?, evidence_id?}` | Add a semantic edge |
 | GET    | `/api/v1/graph/subgraph`     | `?q=…&max_nodes?&max_edges?` | Retrieve a grounded subgraph |
 | POST   | `/api/v1/graph/rebuild`      | `{}` | Rebuild entity mentions and graph links |
-| POST   | `/api/v1/cognitive/sleep`    | `{apply?, stale_days?, min_score?, …}` | Suggest or apply cognitive cleanup |
+| POST   | `/api/v1/cognitive/sleep`    | `{apply?, stale_days?, min_score?, …, deadline_seconds?, record_audit?}` | Suggest or apply cognitive cleanup. The response carries per-stage timings (`stages`), an `aborted` flag, and an `abort_reason` that names the stage the budget fired in (since 0.4.3). |
 | GET    | `/api/v1/cognitive/audit`    | `?kind=&action=&limit=` | Read cleanup decisions |
 | POST   | `/api/v1/cognitive/audit/revert` | `{id}` | Mark an audit decision reverted |
 | POST   | `/api/v1/export`             | `{out_dir, agent_id?, user_id?, scope?, min_importance?}` | Write a portable memory bundle |

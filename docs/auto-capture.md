@@ -115,3 +115,53 @@ loop-memory ingest codex
 loop-memory ingest claude
 loop-memory ingest hermes
 ```
+
+
+## 6. `loop-memory rules` — make the agent *use* the memory
+
+`install-hooks` wires up the *capture* path (MCP server, SessionStart
+inject). `rules` wires up the *recall-and-write-back* discipline on
+the agent side: it appends a three-phase memory block
+(`## At task start` / `## Mid-task` / `## Wrap-up`) into the agent's
+own rule file, so every fresh session starts with the right muscle
+memory.
+
+```bash
+# Print the generic block to stdout (no write)
+loop-memory rules
+
+# Pick the target that matches your agent and append it in place
+loop-memory rules --agent codex    --write    # -> ./AGENTS.md
+loop-memory rules --agent claude   --write    # -> ./CLAUDE.md
+loop-memory rules --agent hermes   --write    # -> ./AGENTS.md
+loop-memory rules --agent openclaw --write    # -> ./AGENTS.md
+loop-memory rules --agent generic  --write    # -> ./AGENTS.md
+```
+
+### Safety properties
+
+- The block is **appended after** your existing content; nothing
+  before the marker line is touched.
+- A `<!-- loop-memory:rules:installed -->` marker detects a prior
+  install — re-running is a no-op unless you pass `--force`, in which
+  case only the marker span is rewritten (manual edits **between** the
+  two markers are preserved).
+- The CLI exits 0 whether or not the target file exists (it creates an
+  empty one) and whether or not `--agent` is given (it prints the
+  generic block to stdout).
+
+### Recommended two-phase setup
+
+```bash
+# Phase 1 — let the agent ingest its own past sessions.
+loop-memory install-hooks
+loop-memory hook --source codex --watch ~/.codex/sessions &
+
+# Phase 2 — teach the agent the recall / wrap-up discipline so the
+# captured memories actually get consulted next time.
+loop-memory rules --agent codex --write
+```
+
+Pinned by 16 regression cases in `tests/test_cli_rules.py`. The
+pattern is adopted from `2672243194/agentbrain` v0.4.3
+(`agentbrain rules --write`).

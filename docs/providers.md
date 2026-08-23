@@ -54,6 +54,30 @@ official OpenAI SDK env-var name and the convention the rest of
 the OpenAI-compatible ecosystem has converged on (see
 `mem0ai/mem0#6322`).
 
+### `LLM_TEMPERATURE` / `LLM_SEED` for deterministic distillation
+
+Two env-var knobs reach every provider's `complete()` call so a
+single export line pins the consolidator behaviour without touching
+the Settings UI:
+
+- `LLM_TEMPERATURE` — float, defaults to `0.3` (or the explicit
+  `kwargs.temperature`). Invalid values fall back with a warning.
+- `LLM_SEED` — int, sent as `seed` for OpenAI / Anthropic / Ollama
+  where supported. Omitting it preserves the existing "no seed"
+  behaviour.
+
+```bash
+export LLM_TEMPERATURE="0.05"     # tight, reproducible distillation
+export LLM_SEED="42"              # pin the sampler across runs
+loop-memory consolidate-now
+```
+
+Explicit `kwargs.temperature` and `kwargs.seed` still win, so
+existing call sites and the Settings UI behaviour config are
+unchanged. Mirrors the env-var plumb introduced by
+`topoteretes/cognee` v1.5.0 (PR #4504). Pinned by 11 cases in
+`tests/test_llm_providers.py::LLMEnvVarTests`.
+
 ## Token limits (v2)
 
 The default behaviour block is tuned for the new "completeness over

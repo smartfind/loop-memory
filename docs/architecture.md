@@ -77,7 +77,11 @@ flowchart TD
 `jobs.evolution.EvolutionConsolidator` runs the dashboard's main visual loop:
 
 1. **Stage 1 — Signal-Aware Scoring**: blend importance with recall_count and
-   feedback, so "what the user actually uses" floats up.
+   feedback, so "what the user actually uses" floats up. When the recall
+   query is **1–2 tokens** (`MemoryStore.recall()` `short_query` branch, since
+   0.4.4) an extra `recall_count` weight nudges a memory the user has
+   surfaced before over a substring-only match, capped at +30 percent.
+   3+ token queries are unchanged. See `tests/test_short_query.py` (5 cases).
 2. **Stage 2 — Semantic Batching**: greedy cosine clustering into ≤
    `CLUSTER_MAX` buckets (fallback: hashed embeddings).
 3. **Stage 3 — Per-Cluster Distillation**: ask the LLM for a 1-sentence
@@ -91,6 +95,25 @@ flowchart TD
 The rule-based synthesizer is the safety net: if the LLM is missing or
 returns junk, the dashboard still shows real wiki content (with topic-aware
 slugs and recorded evidence_ids for drill-down).
+
+### Storage hot paths worth knowing
+
+- `MemoryStore.get_signals(memory_ids)` — batched `memory_signals` fetch
+  that replaced the per-id N+1 in the recall path. Called once per
+  ranked result page; safe to pass any size (returns a `dict[memory_id]`,
+  defaults to zeros for ids that have no row yet).
+- `MemoryStore.top_signals(kind, limit)` — top-N by `recall_count` /
+  `positive` / `negative`. The dashboard's "most recalled" widget and
+  the wiki distillation prioritisation both call this.
+
+### Cognitive sweep observability
+
+`loop_memory/jobs/cognitive.py::cognitive_sleep` is the only job that
+may run for minutes on a large store. Each stage writes its elapsed
+ms into `CognitiveReportView.stages`; a deadline (`deadline_seconds`)
+short-circuits with `aborted=True` + `abort_reason` naming the slow
+stage. The HTTP body, the in-process SDK and the CLI all share the
+same view — no second JSON shape to maintain.
 
 ## Request lifecycle
 
@@ -126,7 +149,13 @@ sequenceDiagram
 
 ## Testing
 
-- 315 tests across 22 files (all run via `pytest -q`).
+- **526 tests across 39 files** (all run via `pytest -q`), pinned by:
+  - 21 new in 0.4.4 (`tests/test_cli_rules.py` + `tests/test_short_query.py`)
+  - cognitive-sleep stages / abort + bulk `get_signals` covered in
+    `tests/test_universal_memory.py` (e.g. `test_get_signals_*`,
+    `test_cognitive_sleep_*`) and `tests/test_serve_handlers.py`
+    (`test_returns_all_six_stages_even_when_empty`).
+  - prior releases (`tests/test_universal_memory.py` etc.).
 - New code should ship with at least one focused unit test in `tests/`.
 - CI (`.github/workflows/tests.yml`) runs ruff + mypy (advisory) + pytest
   with a 60% coverage floor.
