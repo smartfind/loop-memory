@@ -1,5 +1,54 @@
 ## [Unreleased]
 
+## [0.4.4] - 2026-08-23
+
+### Patch
+
+- **`loop-memory rules --agent <name> --write`**: new CLI
+  subcommand that installs the three-phase memory-discipline
+  block (task start / mid-task / wrap-up) into the agent's
+  rule file under the current working directory. Targets:
+
+  | ``--agent`` | Path under cwd |
+  | --- | --- |
+  | ``codex``    | ``AGENTS.md`` |
+  | ``claude``   | ``CLAUDE.md`` |
+  | ``hermes``   | ``AGENTS.md`` |
+  | ``openclaw`` | ``AGENTS.md`` |
+  | ``generic``  | ``AGENTS.md`` |
+
+  Safety: existing user content is **never overwritten** (the
+  block is bracketed by an idempotency marker comment);
+  ``--force`` refreshes the marker span in place without
+  touching anything outside it. Pattern adopted from
+  ``2672243194/agentbrain`` v0.4.3 (``agentbrain rules
+  --agent … --write``). Pinned by 16 new cases in
+  ``tests/test_cli_rules.py``.
+- **Recall short-query ranking tightening**: when
+  ``recall()`` is called with 1-2 tokens, an additional
+  ``recall_count`` weight is applied to each candidate,
+  capped at +30 % so a memory the user has actually
+  surfaced before wins over a memory that only matches the
+  substring. Long queries (3+ tokens) are unchanged — the
+  lexical overlap is dense enough that the recall_count
+  nudge would over-weight popular memories and hide
+  fresh-but-relevant ones. Pattern adopted from
+  ``topoteretes/cognee`` v1.5.1 / v1.5.2 ("Search
+  relevance tuning for short and ambiguous queries").
+  Pinned by 5 new cases in ``tests/test_short_query.py``
+  covering boost-preference, cap-bound, long-query no-op,
+  2-token boundary, and zero-recall no-change.
+
+### Internal
+
+- **Weekly ecosystem research**: ``docs/research/2026-08-23.md``
+  covers the 2026-08-17 → 2026-08-23 window, with the Cognee
+  v1.5.1 + v1.5.2 short-query + large-file-ingestion work,
+  agentbrain v0.4.3 ``rules --write`` (adopted), Heimdall
+  STRONG/WEAK verdict labels (deferred — needs a
+  per-memory citation surface first), and MarkMem /
+  distill-kura / syndicate-os as new peer projects.
+
 ## [0.4.3] - 2026-08-16
 
 ### Performance

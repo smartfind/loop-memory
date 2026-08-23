@@ -388,6 +388,7 @@ automatically:
 | Command                          | What it does                                                                 |
 | -------------------------------- | ---------------------------------------------------------------------------- |
 | `loop-memory install-hooks`      | Auto-detect `~/.codex`, `~/.claude`, `~/.hermes` and write MCP + SessionStart hook configs in place. Idempotent — re-run any time. |
+| `loop-memory rules --write`       | Append the three-phase memory-discipline block (task start / mid-task / wrap-up) into the agent's rule file (`AGENTS.md` for codex / hermes / openclaw, `CLAUDE.md` for claude). **Never overwrites user content.** |
 | `loop-memory inject [query]`     | Print a `# Long-term memory context` markdown block (distilled wiki + recent relevant memories) for a SessionStart hook. |
 | `loop-memory mcp`                | Run the **stdio MCP server** with memory, graph, and cognitive tools (`recall`, `remember`, `forget`, `feedback`, `remember_edge`, `subgraph`, `cognitive_sleep`, `audit`, and wiki tools). |
 
@@ -404,6 +405,11 @@ loop-memory install-hooks       # writes ~/.codex/config.toml + ~/.claude/{mcp.j
 Manual smoke-test without restarting the client:
 
 ```bash
+# one-shot: install the memory-discipline block into the agent's
+# rule file so the client calls `recall` on every task start.
+loop-memory rules --agent codex --write   # writes ./AGENTS.md (append, never overwrite)
+loop-memory rules --agent claude --write  # writes ./CLAUDE.md
+
 loop-memory inject                       # dumps the warm-start block to stdout
 printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}\n{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"wiki_summary"}}\n' \
   | loop-memory mcp                      # round-trips JSON-RPC over stdio

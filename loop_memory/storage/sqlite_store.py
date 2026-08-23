@@ -1280,6 +1280,13 @@ class MemoryStore:
                     "LIMIT ?"
                 )
                 rows = c.execute(sql, (*params, *tag_params, limit * 3)).fetchall()
+                # Short-query mode: when a query has only 1-2 tokens the
+                # lexical overlap is too narrow to rank by itself, so we
+                # also weight ``recall_count`` -- a memory the user has
+                # surfaced before is more likely to be the one they want
+                # this time too. Capped at +30 % so it nudges rather than
+                # dominates the importance + score multipliers.
+                short_query = len(tokens) <= 2
                 for r in rows:
                     tags = []
                     try:
@@ -1293,6 +1300,11 @@ class MemoryStore:
                     score = body_hits + 2 * tag_hits
                     score *= 0.5 + float(r["importance"] or 0) * 0.8
                     score *= 0.7 + float(r["score"] or 0) * 0.6
+                    if short_query:
+                        recall_count = int(r["recall_count"] or 0)
+                        # log1p saturates so a memory with thousands of
+                        # recalls does not crowd out everything else.
+                        score *= 1.0 + min(0.3, recall_count * 0.03)
                     out["memories"].append({
                         "id": r["id"],
                         "kind": "memory",

@@ -17,6 +17,8 @@ Usage:
     loop-memory consolidate-now    # ask the running server to trigger a pass right now
     loop-memory export             # legacy markdown export (no positional path)
     loop-memory digest [--out PATH] # compact knowledge digest for AGENTS.md (≤ max-chars bytes)
+    loop-memory rules [--agent codex|claude|hermes|openclaw] [--write] [--force]
+                       # install the three-phase memory discipline block into the agent's rule file
     loop-memory ask "what about…"  # print a paste-ready context block for any LLM client
     loop-memory cognitive-sleep [--apply]  # dry-run / apply cognitive sweep (v7)
     loop-memory audit [--kind X] [--action Y]  # read the cognitive audit trail
@@ -38,6 +40,7 @@ from .commands import diag as diag_cmd
 from .commands import graph as graph_cmd
 from .commands import hooks as hooks_cmd
 from .commands import read as read_cmd
+from .commands import rules as rules_cmd
 from .commands import serve as serve_cmd
 from .commands import write as write_cmd
 
@@ -113,6 +116,7 @@ COMMANDS = {
     "subgraph": cognitive_cmd.run_subgraph,
     "graph-rebuild": cognitive_cmd.run_graph_rebuild,
     "wiki-reclassify-legacy": cognitive_cmd.run_wiki_reclassify_legacy,
+    "rules": rules_cmd.run_rules,
     "version": _run_version,
 }
 
@@ -152,6 +156,7 @@ COMMAND_HELP: dict[str, str] = {
     "subgraph":               "loop-memory subgraph <query>   # print a small subgraph.",
     "version":                "loop-memory version   # print the installed distribution version.",
     "wiki-reclassify-legacy": "loop-memory wiki-reclassify-legacy   # back-fill scope + scope_filter for H4+H5 pages.",
+    "rules":                 "loop-memory rules [--agent codex|claude|hermes|openclaw] [--write] [--force]\n  Print, or append into the agent's rule file, the three-phase memory discipline (task start / mid-task / wrap-up). Never overwrites user content.",
 }
 
 
