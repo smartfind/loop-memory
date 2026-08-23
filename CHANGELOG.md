@@ -1,5 +1,24 @@
 ## [Unreleased]
 
+## [0.4.5] - 2026-08-23
+
+### Patch
+
+- **`loop_memory.__version__` was stale at `"0.2.0"`** since
+  the 0.3.0 line — every release from 0.4.0 → 0.4.4 shipped with
+  `pip show loop-memory` reporting the real version but
+  `import loop_memory; loop_memory.__version__` still saying
+  `0.2.0`. `__init__.py` now reads the version from the installed
+  distribution metadata (`importlib.metadata.version("loop-memory")`)
+  with a `"0.0.0+source"` fallback for source checkouts — so
+  `pip show` and `loop_memory.__version__` always agree. Pinned
+  by 5 new cases in `tests/test_package_version.py`
+  (`test_dunder_version_is_a_nonempty_string`,
+  `test_dunder_version_is_not_stale_0_2_0`,
+  `test_dunder_version_matches_installed_metadata`,
+  `test_source_checkout_fallback_is_marker_not_silent_2_0`,
+  `test_version_string_looks_like_a_pep440_version`).
+
 ## [0.4.4] - 2026-08-23
 
 ### Patch

@@ -31,7 +31,17 @@ from .memory.types import (
 )
 from .storage.sqlite_store import MemoryStore, StoredMemory, StoredSession
 
-__version__ = "0.2.0"
+# Single source of truth for the version string: read it from the
+# installed distribution metadata so `loop_memory.__version__` always
+# matches what `pip show loop-memory` reports. When the package is run
+# from a source checkout (no installed metadata) we fall back to
+# "0.0.0+source" instead of a hard-coded string — this was the root
+# cause of the long-standing stale "0.2.0" since 0.3.0.
+try:
+    from importlib.metadata import version as _dist_version, PackageNotFoundError
+    __version__ = _dist_version("loop-memory")
+except PackageNotFoundError:
+    __version__ = "0.0.0+source"
 
 __all__ = [
     # engine
