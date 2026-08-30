@@ -22,12 +22,15 @@
 
 ---
 
-> **What's new in 0.4.1** — CLI dispatch hardened so every subcommand's
-> `--help` / `--version` exits 0 cleanly (no more `ValueError: unknown
-> source: '--help'` on a zero-deps install). Added a static
-> `COMMAND_HELP` table guarded by 10 new regression cases in
-> `tests/test_cli_version.py`, plus GitHub `About` / README lead now
-> surface for "agent loop" searches.
+> **What's new in 0.4.6** — **memory supersession chain** + **recall
+> provenance labels**. `merge_memories()` no longer silently
+> `DELETE`s the loser — it writes an explicit `superseded_by`
+> pointer (audit 2026-08-30, Mem0 v2.0.19 Dream pattern), the new
+> `loop-memory audit-supersede` walks the chain, and every
+> `recall()` hit now carries a `why: [...]` provenance list
+> (adopted from agentmemory v1.2.0) that you can surface with
+> `loop-memory recall --verbose`. 26 new regression cases pin
+> both shapes.
 > [Full changelog →](CHANGELOG.md)
 
 ---

@@ -22,6 +22,7 @@ Usage:
     loop-memory ask "what about…"  # print a paste-ready context block for any LLM client
     loop-memory cognitive-sleep [--apply]  # dry-run / apply cognitive sweep (v7)
     loop-memory audit [--kind X] [--action Y]  # read the cognitive audit trail
+    loop-memory audit-supersede [--target ID]  # walk / list the memory supersession chain
     loop-memory export <out_dir>  # write a MEMORY.md bundle (v7)
     loop-memory export-bundle <out_dir>  # explicit v7 bundle alias
     loop-memory import <in_dir>   # re-hydrate a bundle
@@ -109,6 +110,7 @@ COMMANDS = {
     # Universal Agent Memory v7 — graph, cognitive, export, fork
     "cognitive-sleep": cognitive_cmd.run_cognitive_sleep,
     "audit": cognitive_cmd.run_audit,
+    "audit-supersede": cognitive_cmd.run_audit_supersede,
     "export-bundle": cognitive_cmd.run_export,
     "import": cognitive_cmd.run_import,
     "fork": cognitive_cmd.run_fork,
@@ -128,6 +130,7 @@ COMMANDS = {
 COMMAND_HELP: dict[str, str] = {
     "ask":                    "loop-memory ask '<question>'   # print a paste-ready context block for any LLM client.",
     "audit":                  "loop-memory audit [--kind X] [--action Y]   # read the cognitive audit trail.",
+    "audit-supersede":        "loop-memory audit-supersede [--target ID]   # walk / list supersession chain (Mem0 Dream pattern).",
     "chat":                   "loop-memory chat   # REPL with echo LLM.",
     "cognitive-sleep":        "loop-memory cognitive-sleep [--apply]   # dry-run / apply cognitive sweep.",
     "consolidate":            "loop-memory consolidate   # rescore + GC + dedupe.",

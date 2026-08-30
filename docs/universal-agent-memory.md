@@ -49,7 +49,17 @@ Mem0 卖点和文章主推差异化之一。loop-memory v7 把已有但未串到
 * **`POST /api/v1/cognitive/sleep`** — `apply=true` 真删，否则只列
   建议。
 * **`GET /api/v1/cognitive/audit?kind=…&action=…`** — 读历史。
+  `kind='supersede'` surfaces the merge-time supersession chain
+  (audit 2026-08-30, Mem0 v2.0.19 Dream pattern).
 * **`POST /api/v1/cognitive/audit/revert`** — 标记某条为 reverted。
+* **`GET /api/v1/cognitive/audit/supersede`** — 走 / 列出
+  memory 的 supersession 链（since 0.4.6）：
+
+  ```bash
+  curl 'localhost:7767/api/v1/cognitive/audit/supersede'
+  curl 'localhost:7767/api/v1/cognitive/audit/supersede?target=<id>'   # walk chain
+  curl 'localhost:7767/api/v1/cognitive/audit/supersede?by=<winner>'    # filter by winner
+  ```
 
 ### B.1 Observability：`stages` / `aborted` / `abort_reason`
 

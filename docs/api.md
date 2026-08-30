@@ -40,7 +40,7 @@ appropriate 4xx/5xx status.
 | GET | `/api/sessions/counts` | Session counts grouped by source |
 | GET | `/api/sessions/{session_id}/memories` | Memories of one session |
 | GET | `/api/memories` | List memories (filter by `source`, `session_id`, `min_score`, `limit`, `offset`) |
-| GET | `/api/recall` | Top-K recall for a query (`?q=…&k=10`) |
+| GET | `/api/recall` | Top-K recall for a query (`?q=…&k=10`). Each memory hit carries a `why: [...]` provenance list naming the scoring signals that contributed (`keyword_match`, `tag_match`, `high_importance`, `high_score_field`, `high_recall_count`, `short_query_boost`) since 0.4.6. Superseded memories are filtered out; the chain is queryable via `/api/v1/cognitive/audit/supersede`. |
 | GET | `/api/llm-audit` | Recent LLM calls + token usage |
 | GET | `/api/write-guard` | Write-guard rail status |
 | GET | `/api/wiki` | List wiki pages |
@@ -134,6 +134,7 @@ for the full design; the route table is:
 | POST   | `/api/v1/cognitive/sleep`    | `{apply?, stale_days?, min_score?, …, deadline_seconds?, record_audit?}` | Suggest or apply cognitive cleanup. The response carries per-stage timings (`stages`), an `aborted` flag, and an `abort_reason` that names the stage the budget fired in (since 0.4.3). |
 | GET    | `/api/v1/cognitive/audit`    | `?kind=&action=&limit=` | Read cleanup decisions |
 | POST   | `/api/v1/cognitive/audit/revert` | `{id}` | Mark an audit decision reverted |
+| GET    | `/api/v1/cognitive/audit/supersede` | `?target=&by=&limit=` | Walk / list the memory supersession chain (since 0.4.6, Mem0 v2.0.19 Dream pattern). `target=<id>` returns the chain walking `superseded_by`; `by=<id>` returns all losers pointing at that winner; bare list returns every superseded memory. |
 | POST   | `/api/v1/export`             | `{out_dir, agent_id?, user_id?, scope?, min_importance?}` | Write a portable memory bundle |
 | POST   | `/api/v1/import`             | `{in_dir, agent_id?, user_id?, dry_run?}` | Import a memory bundle |
 | POST   | `/api/v1/fork`               | `{branch_tag?}` | Snapshot Wiki pages into a branch |

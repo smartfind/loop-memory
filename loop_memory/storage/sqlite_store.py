@@ -444,7 +444,7 @@ class MemoryStore:
     The zero-dep claim holds — Python ships with sqlite3 and struct.
     """
 
-    SCHEMA_VERSION = "8"
+    SCHEMA_VERSION = "9"
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path).expanduser()
@@ -509,6 +509,25 @@ class MemoryStore:
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_mem_external "
                 "ON memories(agent_id, user_id, external_id) "
                 "WHERE external_id IS NOT NULL AND external_id != ''"
+            )
+
+            # Audit 2026-08-30 — supersession chain (Mem0 v2.0.19 Dream
+            # pattern, slimmed down). Adds a nullable FK ``superseded_by``
+            # so ``merge_memories()`` can write an explicit pointer on
+            # the loser rather than DELETE-ing the row; ``recall()``
+            # filters it out, and ``list_superseded()`` /
+            # ``trace_supersession()`` walk the chain. SCHEMA_VERSION
+            # bumped "8" -> "9".
+            mem_cols = {row["name"] for row in c.execute("PRAGMA table_info(memories)").fetchall()}
+            if "superseded_by" not in mem_cols:
+                c.execute("ALTER TABLE memories ADD COLUMN superseded_by TEXT")
+            # Partial index keeps the recall filter O(1) even on stores
+            # with millions of memories. ``superseded_by IS NULL`` is
+            # the hot path; the index only covers the rare "show me the
+            # chain" query.
+            c.execute(
+                "CREATE INDEX IF NOT EXISTS idx_mem_superseded_by "
+                "ON memories(superseded_by) WHERE superseded_by IS NOT NULL"
             )
 
             # One-shot FTS5 tokenizer migration. ``CREATE VIRTUAL TABLE
@@ -1272,10 +1291,16 @@ class MemoryStore:
                 sql = (
                     "SELECT m.id, m.kind, m.text, m.importance, m.score, m.source, "
                     "m.tags, m.created_at, m.updated_at, "
-                    "COALESCE(s.recall_count, 0) AS recall_count "
+                    "COALESCE(s.recall_count, 0) AS recall_count, "
+                    "m.superseded_by "
                     "FROM memories m "
                     "LEFT JOIN memory_signals s ON s.memory_id = m.id "
-                    f"WHERE {clause} OR {tag_clause} "
+                    # Filter superseded memories out of the recall stream
+                    # (audit 2026-08-30, Mem0 v2.0.19 Dream pattern). The
+                    # partial index on ``superseded_by`` makes this an
+                    # O(1) skip; the chain itself stays queryable via
+                    # ``list_superseded()`` / ``trace_supersession()``.
+                    f"WHERE m.superseded_by IS NULL AND ({clause} OR {tag_clause}) "
                     "ORDER BY m.score DESC, m.importance DESC, m.created_at DESC "
                     "LIMIT ?"
                 )
@@ -1297,26 +1322,49 @@ class MemoryStore:
                     tag_lc = ",".join(tags).lower()
                     body_hits = sum(txt.count(t) for t in tokens)
                     tag_hits = sum(tag_lc.count(t) for t in tokens)
+                    importance = float(r["importance"] or 0)
+                    score_field = float(r["score"] or 0)
                     score = body_hits + 2 * tag_hits
-                    score *= 0.5 + float(r["importance"] or 0) * 0.8
-                    score *= 0.7 + float(r["score"] or 0) * 0.6
+                    score *= 0.5 + importance * 0.8
+                    score *= 0.7 + score_field * 0.6
+                    # Build a small ``why: [...]`` provenance list
+                    # (audit 2026-08-30, agentmemory v1.2.0 pattern).
+                    # Each label names a scoring signal that actually
+                    # contributed to the hit; users see this through
+                    # ``loop-memory recall --verbose`` and the
+                    # dashboard tooltip. Order is stable so callers
+                    # can render it as a deterministic badge list.
+                    why: list[str] = []
+                    if body_hits > 0:
+                        why.append("keyword_match")
+                    if tag_hits > 0:
+                        why.append("tag_match")
+                    if importance >= 0.7:
+                        why.append("high_importance")
+                    if score_field >= 0.7:
+                        why.append("high_score_field")
+                    recall_count = int(r["recall_count"] or 0)
                     if short_query:
-                        recall_count = int(r["recall_count"] or 0)
                         # log1p saturates so a memory with thousands of
                         # recalls does not crowd out everything else.
                         score *= 1.0 + min(0.3, recall_count * 0.03)
+                        if recall_count > 0:
+                            why.append("short_query_boost")
+                    if recall_count >= 3:
+                        why.append("high_recall_count")
                     out["memories"].append({
                         "id": r["id"],
                         "kind": "memory",
                         "text": r["text"],
-                        "importance": float(r["importance"] or 0),
-                        "score_field": float(r["score"] or 0),
+                        "importance": importance,
+                        "score_field": score_field,
                         "source": r["source"],
                         "tags": tags,
                         "created_at": float(r["created_at"] or 0),
-                        "recall_count": int(r["recall_count"] or 0),
+                        "recall_count": recall_count,
                         "score": round(score, 3),
                         "preview": (r["text"] or "")[:240],
+                        "why": why,
                     })
                 out["memories"].sort(key=lambda m: -m["score"])
                 out["memories"] = out["memories"][:limit]
@@ -3173,13 +3221,18 @@ class MemoryStore:
     def merge_memories(self, a_id: str, b_id: str) -> dict:
         """True memory-pair merge.
 
-        Behaviour:
+        Behaviour (audit 2026-08-30 — supersession chain, Mem0 v2.0.19
+        Dream pattern, slimmed down):
           - The higher-scored memory wins (ties go to ``a_id``).
           - The loser's text is appended to the winner's text (de-duplicated
             if the loser's text is already a substring of the winner's).
           - The winner's ``importance`` and ``score`` are bumped to the max
             of the two so the fused memory keeps the strongest signal.
-          - The loser is deleted in the same transaction.
+          - The loser is **not** deleted: it gets ``superseded_by = winner_id``
+            so the audit trail can walk the chain. ``recall()`` filters
+            out rows with a non-null ``superseded_by`` so callers see the
+            latest view. The chain is queryable via ``list_superseded()``
+            and ``trace_supersession()``.
           - The pair is recorded in ``contradiction_ignored`` so the pulse
             does not surface it again.
 
@@ -3193,22 +3246,35 @@ class MemoryStore:
         now = time.time()
         with self._conn() as c:
             a_row = c.execute(
-                "SELECT id, text, importance, score FROM memories WHERE id=?",
+                "SELECT id, text, importance, score, superseded_by FROM memories WHERE id=?",
                 (a_id,),
             ).fetchone()
             b_row = c.execute(
-                "SELECT id, text, importance, score FROM memories WHERE id=?",
+                "SELECT id, text, importance, score, superseded_by FROM memories WHERE id=?",
                 (b_id,),
             ).fetchone()
             if a_row is None and b_row is None:
                 return {"merged": False, "reason": "neither_exists"}
             if a_row is None:
-                # Only B exists — silently delete the missing A and keep B.
-                c.execute("DELETE FROM memories WHERE id=?", (a_id,))
+                # Only B exists — silently treat the missing A as a tombstone
+                # and keep B. ``a_missing`` is rare (concurrent delete) so
+                # we don't bother writing a supersede row.
                 return {"merged": False, "kept": b_id, "lost": a_id, "reason": "a_missing"}
             if b_row is None:
-                c.execute("DELETE FROM memories WHERE id=?", (b_id,))
                 return {"merged": False, "kept": a_id, "lost": b_id, "reason": "b_missing"}
+
+            # If either side is already superseded, refuse to keep merging
+            # to avoid creating a chain that's harder to reason about
+            # (callers should walk the existing chain first via
+            # ``trace_supersession``). The UI surfaces the existing chain
+            # via ``audit supersede --target``.
+            if a_row["superseded_by"] or b_row["superseded_by"]:
+                return {
+                    "merged": False,
+                    "reason": "already_superseded",
+                    "a_superseded_by": a_row["superseded_by"],
+                    "b_superseded_by": b_row["superseded_by"],
+                }
 
             # Pick winner = higher score; ties go to a_id.
             a_score = a_row["score"] or 0.0
@@ -3239,7 +3305,44 @@ class MemoryStore:
                 "WHERE id=?",
                 (merged_text, importance_max, score_max, now, winner_id),
             )
-            c.execute("DELETE FROM memories WHERE id=?", (loser_id,))
+            # Write an explicit supersession pointer instead of DELETE
+            # (audit 2026-08-30). The loser row stays so
+            # ``list_superseded`` / ``trace_supersession`` can walk the
+            # chain; ``recall()`` filters ``superseded_by IS NULL``.
+            c.execute(
+                "UPDATE memories SET superseded_by=?, score=0, updated_at=? "
+                "WHERE id=?",
+                (winner_id, now, loser_id),
+            )
+
+            # Audit 2026-08-30 — emit a ``supersede`` row into
+            # ``cognitive_audit`` so the dashboard / ``loop-memory audit
+            # --kind supersede`` surface can show "memory X was
+            # superseded by memory Y on date Z". We do this inside the
+            # same transaction so a partial merge never leaves the
+            # audit pointing at a missing row.
+            c.execute(
+                """INSERT INTO cognitive_audit
+                   (id, ts, kind, action, target_kind, target_id,
+                    target_text, reason, score, payload)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    uuid.uuid4().hex,
+                    now,
+                    "supersede",
+                    "applied",
+                    "memory",
+                    loser_id,
+                    (loser_text or "")[:160],
+                    f"merged into {winner_id}",
+                    float(score_max),
+                    json.dumps({
+                        "winner_id": winner_id,
+                        "appended": needs_append,
+                        "winner_was_a": winner_is_a,
+                    }),
+                ),
+            )
 
             # Suppress the pair so the pulse does not resurface it.
             lo, hi = sorted([a_id, b_id])
@@ -3258,6 +3361,112 @@ class MemoryStore:
                 "winner_was_a": winner_is_a,
                 "new_length": len(merged_text),
             }
+
+    # ------------------------------------------------------------------
+    # Supersession chain (audit 2026-08-30, Mem0 v2.0.19 Dream pattern)
+    # ------------------------------------------------------------------
+
+    def list_superseded(self, superseded_by: str | None = None,
+                        limit: int = 200) -> list[dict]:
+        """List memories that have been superseded.
+
+        ``superseded_by=None`` (default) — return every superseded
+        memory (the loser side of every merge). With
+        ``superseded_by=<id>`` — return only the memories that point
+        at that specific winner. Results are ordered by ``updated_at
+        DESC`` so the most recent supersession is first.
+
+        Returned dicts mirror the memory row + the ``superseded_by``
+        pointer + the ``updated_at`` timestamp so the caller can
+        render an audit view without an extra round trip.
+        """
+        limit = max(1, min(int(limit), 5000))
+        sql = (
+            "SELECT id, kind, text, importance, source, session_id, "
+            "tags, created_at, updated_at, score, ttl, "
+            "agent_id, user_id, external_id, superseded_by "
+            "FROM memories WHERE superseded_by IS NOT NULL "
+        )
+        params: list[Any] = []
+        if superseded_by is not None:
+            sql += "AND superseded_by = ? "
+            params.append(str(superseded_by))
+        sql += "ORDER BY updated_at DESC LIMIT ?"
+        params.append(limit)
+        with self._conn() as c:
+            rows = c.execute(sql, params).fetchall()
+        out: list[dict] = []
+        for r in rows:
+            tags_raw = r["tags"] or "[]"
+            try:
+                tags = json.loads(tags_raw)
+            except Exception:
+                tags = []
+            out.append({
+                "id": r["id"],
+                "kind": r["kind"],
+                "text": r["text"] or "",
+                "importance": float(r["importance"] or 0),
+                "source": r["source"],
+                "session_id": r["session_id"],
+                "tags": tags,
+                "created_at": float(r["created_at"] or 0),
+                "updated_at": float(r["updated_at"] or 0),
+                "score": float(r["score"] or 0),
+                "ttl": r["ttl"],
+                "agent_id": r["agent_id"],
+                "user_id": r["user_id"],
+                "external_id": r["external_id"],
+                "superseded_by": r["superseded_by"],
+            })
+        return out
+
+    def trace_supersession(self, target_id: str) -> list[str]:
+        """Walk the supersession chain starting from ``target_id``.
+
+        Returns the **list of memory ids** in the chain from oldest to
+        newest (the last entry is the current "winner"). If the
+        target is itself a winner, the list is just ``[target_id]``.
+        If the target is not in the store, the list is empty.
+
+        Bounded to 64 hops so a corrupted FK cannot spin forever.
+        """
+        target_id = str(target_id or "")
+        if not target_id:
+            return []
+        seen: set[str] = set()
+        out: list[str] = []
+        current = target_id
+        with self._conn() as c:
+            for _ in range(64):
+                if current in seen:
+                    break
+                seen.add(current)
+                row = c.execute(
+                    "SELECT id, superseded_by FROM memories WHERE id=?",
+                    (current,),
+                ).fetchone()
+                if row is None:
+                    break
+                out.append(row["id"])
+                nxt = row["superseded_by"]
+                if not nxt:
+                    break
+                current = nxt
+        return out
+
+    def supersession_count(self) -> int:
+        """Total number of superseded memories in the store.
+
+        Used by the dashboard so the user can see how much history
+        the supersession chain carries. Cheap because the partial
+        index covers it.
+        """
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT COUNT(*) c FROM memories WHERE superseded_by IS NOT NULL"
+            ).fetchone()
+            return int(row["c"] or 0)
 
     def delete_session(self, session_id: str) -> int:
         with self._conn() as c:

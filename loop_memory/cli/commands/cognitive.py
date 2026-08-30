@@ -116,6 +116,45 @@ def run_audit(args: list) -> int:
     return _emit({"rows": s.list_audit(kind=ns.kind, action=ns.action, limit=ns.limit)})
 
 
+def run_audit_supersede(args: list) -> int:
+    """``loop-memory audit-supersede [--target ID] [--limit N] [--by ID]``
+
+    Walks the supersession chain (audit 2026-08-30, Mem0 v2.0.19
+    Dream pattern). Without ``--target`` it lists every superseded
+    memory (the loser side of every merge), most-recent first. With
+    ``--target <id>`` it returns just the chain starting at that
+    memory (oldest to newest). With ``--by <id>`` it filters the
+    list to memories that were superseded by a specific winner.
+
+    The CLI prints JSON so a shell pipeline can consume the output.
+    """
+    import argparse as _ap
+    p = _ap.ArgumentParser(prog="loop-memory audit-supersede")
+    p.add_argument("--target", default=None,
+                   help="Walk the supersession chain starting at this memory id")
+    p.add_argument("--by", default=None,
+                   help="List memories superseded by this specific winner id")
+    p.add_argument("--limit", type=int, default=200)
+    p.add_argument("--db", default=os.environ.get("LOOP_MEMORY_DB", DEFAULT_DB))
+    ns = p.parse_args(args)
+    s = MemoryStore(ns.db)
+    if ns.target:
+        chain = s.trace_supersession(ns.target)
+        return _emit({
+            "target": ns.target,
+            "chain": chain,
+            "chain_length": len(chain),
+            "winner": chain[-1] if chain else None,
+        })
+    rows = s.list_superseded(superseded_by=ns.by, limit=ns.limit)
+    return _emit({
+        "rows": rows,
+        "total": s.supersession_count(),
+        "filtered_by": ns.by,
+        "limit": ns.limit,
+    })
+
+
 def run_export(args: list) -> int:
     p = _build_parser()
     db = os.environ.get("LOOP_MEMORY_DB", DEFAULT_DB)

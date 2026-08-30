@@ -1,5 +1,82 @@
 ## [Unreleased]
 
+## [0.4.6] - 2026-08-30
+
+### Patch
+
+- **Memory supersession chain** (audit 2026-08-30, Mem0 v2.0.19
+  Dream pattern, slimmed down). `merge_memories()` no longer
+  silently `DELETE`s the loser — it writes an explicit
+  `superseded_by = <winner_id>` pointer on the loser row and
+  also emits a `kind='supersede'` row in `cognitive_audit`
+  inside the same transaction. `recall()` filters
+  `superseded_by IS NULL` so callers see the latest view;
+  the chain itself is queryable via three new methods:
+
+  | Method | Purpose |
+  | --- | --- |
+  | `MemoryStore.list_superseded(superseded_by=None, limit=200)` | Enumerate losers (optionally filtered by winner) |
+  | `MemoryStore.trace_supersession(target_id)` | Walk the chain from a memory id, oldest → newest, bounded to 64 hops |
+  | `MemoryStore.supersession_count()` | Total superseded memories (for the dashboard) |
+
+  `SCHEMA_VERSION` bumped "8" → "9". The new `superseded_by`
+  column has a partial index so the recall filter is O(1) on
+  large stores. Pinned by 16 new cases in
+  `tests/test_supersession_chain.py` (chain traversal, audit
+  emission in the same tx, refusal of re-merge on already-
+  superseded pairs, 64-hop bound).
+- **`loop-memory audit-supersede`** (audit 2026-08-30) — new
+  CLI surface to walk / list the chain:
+
+  ```bash
+  loop-memory audit-supersede                       # every loser, newest first
+  loop-memory audit-supersede --by <winner_id>      # only losers pointing at that winner
+  loop-memory audit-supersede --target <id>         # walk the chain from a memory id
+  loop-memory audit-supersede --limit 50            # paginate
+  ```
+
+  Pinned by 6 new cases in
+  `tests/test_cli_audit_supersede.py`.
+- **Recall provenance labels** (audit 2026-08-30, agentmemory
+  v1.2.0 pattern). Every `recall()` memory hit now carries a
+  `why: [...]` array naming the scoring signals that
+  contributed. Labels are stable and additive; the numeric
+  `score` is unaffected (provenance is metadata, never an
+  input to ranking). CLI:
+
+  ```bash
+  loop-memory recall <query>             # default — unchanged output
+  loop-memory recall <query> --verbose   # each hit annotated with `why: …`
+  loop-memory recall <query> --limit 5   # --limit added alongside --verbose
+  ```
+
+  Labels used: `keyword_match`, `tag_match`,
+  `high_importance`, `high_score_field`, `high_recall_count`,
+  `short_query_boost`. Pinned by 10 new cases in
+  `tests/test_recall_provenance.py` and 7 CLI cases in
+  `tests/test_cli_recall_verbose.py`.
+- **Cognitive `supersede` audit trail** — every successful
+  `merge_memories()` now writes one `kind='supersede',
+  action='applied'` row to `cognitive_audit` in the same
+  transaction. `loop-memory audit --kind supersede` (existing
+  surface) now surfaces these rows; the `loop-memory audit`
+  audit query carries the winner id + append flag in
+  `payload`. Pinned by the
+  `SupersessionAuditEmissionTests` triplet in
+  `tests/test_supersession_chain.py`.
+- **Updated `tests/test_contradictions.py`** — the 3
+  `merge` actions through `/api/contradictions/resolve` now
+  expect the chain-aware shape (loser row stays, points at
+  winner via `superseded_by`, score=0). `keepA` and
+  `feedback ignore` actions still DELETE the loser — only
+  the `merge` action carries the new audit-trail contract.
+- **Research → [docs/research/2026-08-30.md](docs/research/2026-08-30.md)** —
+  primary-source survey of agent-memory projects from
+  2026-08-24 → 2026-08-30 (Mem0 v2.0.19, MemOS v1.0.0-M10,
+  agentmemory v1.2.0, TencentDB / Team Memory, CodeAbra,
+  Telemem, Compartment, etc.) with explicit `adopt` /
+  `defer` / `reject` decisions for each.
+
 ## [0.4.5] - 2026-08-23
 
 ### Patch

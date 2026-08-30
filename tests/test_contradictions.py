@@ -67,7 +67,7 @@ class ContradictionResolveTests(unittest.TestCase):
             self.assertEqual(len(data["deleted"]), 1)
             self.assertEqual(data["deleted"][0]["id"], self.b.id)
             self.assertEqual(data["deleted"][0]["kept"], self.a.id)
-            # Both memories should now: A still present, B gone, pair ignored
+            # ``keepA`` action actually DELETE'd B (it's not a merge).
             self.assertIsNotNone(self.store.get_memory(self.a.id))
             self.assertIsNone(self.store.get_memory(self.b.id))
             self.assertTrue(self.store.is_contradiction_ignored(self.a.id, self.b.id))
@@ -104,8 +104,14 @@ class ContradictionResolveTests(unittest.TestCase):
         # The winner's original text + the separator + loser's text.
         self.assertIn(self.b.text, a_text)
         self.assertIn("---", a_text)
-        # Loser is gone.
-        self.assertIsNone(self.store.get_memory(self.b.id))
+        # Audit 2026-08-30 — loser is no longer DELETE'd; it carries
+        # the superseded_by pointer instead.
+        chain = self.store.trace_supersession(self.b.id)
+        self.assertEqual(chain[-1], self.a.id,
+                         "loser must now point at the winner via superseded_by")
+        loser_row = self.store.get_memory(self.b.id)
+        self.assertIsNotNone(loser_row, "loser row stays around as audit trail")
+        self.assertEqual(loser_row.score, 0.0, "superseded loser has score=0")
         # Importance / score are the max of the pair.
         self.assertAlmostEqual(winner.importance, 0.55, places=4)
         self.assertAlmostEqual(winner.score, 0.95, places=4)
@@ -138,7 +144,13 @@ class ContradictionResolveTests(unittest.TestCase):
         winner = self.store.get_memory(self.a.id)
         self.assertIsNotNone(winner)
         self.assertEqual(winner.text.count("---"), 0)
-        self.assertIsNone(self.store.get_memory(self.b.id))
+        # Audit 2026-08-30 — loser is no longer DELETE'd.
+        chain = self.store.trace_supersession(self.b.id)
+        self.assertEqual(chain[-1], self.a.id,
+                         "loser must now point at the winner via superseded_by")
+        loser_row = self.store.get_memory(self.b.id)
+        self.assertIsNotNone(loser_row, "loser row stays around as audit trail")
+        self.assertEqual(loser_row.score, 0.0, "superseded loser has score=0")
 
     def test_resolve_endpoint_merge_tie_keeps_a(self):
         """Ties should resolve to side A; new semantics still report winner."""
@@ -209,6 +221,9 @@ class ContradictionResolveTests(unittest.TestCase):
             r = c.post(f"/api/memories/{self.b.id}/feedback?value=ignore")
             self.assertEqual(r.status_code, 200, r.text)
             self.assertEqual(r.json()["deleted"], 1)
+            # ``feedback ignore`` actually DELETE'd B (it is not a merge;
+            # only ``merge_memories()`` carries the new audit-trail
+            # contract — the soft-delete path stays as DELETE).
             self.assertIsNone(self.store.get_memory(self.b.id))
 
     def test_feedback_endpoint_rejects_bad_value(self):

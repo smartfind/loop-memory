@@ -51,12 +51,45 @@ def run_stats(_args) -> int:
 
 
 def run_recall(args) -> int:
+    """Run ``loop-memory recall <query> [--verbose] [--limit N]``.
+
+    With ``--verbose`` each memory hit is annotated with the
+    ``why: [...]`` provenance labels produced by ``MemoryStore.recall``
+    (audit 2026-08-30, agentmemory v1.2.0 pattern). The wiki and
+    entity sections are unchanged — only the raw-memory block grows
+    the new line.
+    """
     from ...storage.sqlite_store import MemoryStore
     if not args:
-        return die("usage: loop-memory recall <query>")
+        return die("usage: loop-memory recall <query> [--verbose] [--limit N]")
+    # Parse the small flag subset we expose. Keep it dumb-on-purpose:
+    # we don't want argparse to swallow a token that happens to start
+    # with "--" inside the user's query (e.g. ``recall --foo bar``).
+    verbose = False
+    limit = 10
+    qargs: list[str] = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--verbose":
+            verbose = True
+            i += 1
+        elif a == "--limit" and i + 1 < len(args):
+            try:
+                limit = int(args[i + 1])
+            except ValueError:
+                return die(f"--limit must be an integer, got {args[i + 1]!r}")
+            i += 2
+        elif a.startswith("--"):
+            return die(f"unknown flag: {a}")
+        else:
+            qargs.append(a)
+            i += 1
+    if not qargs:
+        return die("usage: loop-memory recall <query> [--verbose] [--limit N]")
     store = MemoryStore(default_db_path())
-    query = " ".join(args)
-    r = store.recall(query, limit=10)
+    query = " ".join(qargs)
+    r = store.recall(query, limit=limit)
     has = False
     if r["wiki"]:
         has = True
@@ -73,6 +106,11 @@ def run_recall(args) -> int:
         for m in r["memories"]:
             tag_s = "  [" + ", ".join(m.get("tags") or []) + "]" if m.get("tags") else ""
             print(f"- [{m['kind']}] (imp={m['importance']:.2f}){tag_s}")
+            if verbose and m.get("why"):
+                # Stable order (built by MemoryStore.recall) so callers can
+                # render the list as a deterministic badge strip without
+                # re-sorting.
+                print(f"  why: {', '.join(m['why'])}")
             print(f"  {m['text'][:240]}")
         print()
     if r["entities"]:
