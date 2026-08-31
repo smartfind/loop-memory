@@ -57,13 +57,19 @@ def _set_scores(store: MemoryStore, mapping: dict[str, float]) -> None:
 
 class RecallVerboseCLITests(unittest.TestCase):
 
+    def setUp(self) -> None:
+        # Every test gets a fresh DB path exposed via the
+        # ``_LOOP_MEMORY_TEST_DB`` env var; ``_run`` propagates it
+        # to the subprocess as ``LOOP_MEMORY_DB``.
+        self.db_path = _new_db_path()
+        os.environ["_LOOP_MEMORY_TEST_DB"] = str(self.db_path)
+
     def test_verbose_off_does_not_print_why_line(self) -> None:
         """Default output must remain the human-friendly form. The
         ``why: [...]`` line is opt-in via ``--verbose`` so existing
         shell pipelines that grep / parse the default output keep
         working unchanged."""
-        db = _new_db_path()
-        s = MemoryStore(db)
+        s = MemoryStore(self.db_path)
         s.upsert_memory(
             kind="fact", text="postgres for orders",
             importance=0.7, agent_id="bot", user_id="u1",
@@ -74,8 +80,7 @@ class RecallVerboseCLITests(unittest.TestCase):
                          "default output must not include the why line")
 
     def test_verbose_on_prints_why_line_for_each_hit(self) -> None:
-        db = _new_db_path()
-        s = MemoryStore(db)
+        s = MemoryStore(self.db_path)
         s.upsert_memory(
             kind="fact", text="postgres for orders",
             importance=0.7, agent_id="bot", user_id="u1",
@@ -91,8 +96,7 @@ class RecallVerboseCLITests(unittest.TestCase):
         self.assertIn("keyword_match", proc.stdout)
 
     def test_recall_known_query_yields_at_least_one_hit_in_verbose(self) -> None:
-        db = _new_db_path()
-        s = MemoryStore(db)
+        s = MemoryStore(self.db_path)
         s.upsert_memory(
             kind="fact", text="postgres is great",
             importance=0.5, agent_id="bot", user_id="u1",
@@ -124,8 +128,7 @@ class RecallVerboseCLITests(unittest.TestCase):
         self.assertIn("unknown flag", proc.stderr.lower())
 
     def test_recall_limit_flag_clamps_hits(self) -> None:
-        db = _new_db_path()
-        s = MemoryStore(db)
+        s = MemoryStore(self.db_path)
         for i in range(7):
             s.upsert_memory(
                 kind="fact", text=f"postgres fact {i}",
