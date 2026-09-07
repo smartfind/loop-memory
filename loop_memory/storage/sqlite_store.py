@@ -896,6 +896,69 @@ class MemoryStore:
             ).fetchall()
             return [dict(r) for r in rows]
 
+    # ----- Per-memory lifetime stats (v10) ---------------------------
+
+    def memory_stats(self, mid: str) -> Dict[str, Any]:
+        """Per-memory lifetime stats (audit 2026-09-06, agentmemory v1.3.0).
+
+        Joins the memories row with its memory_signals row and
+        returns a flat dict suitable for the CLI / HTTP route / MCP
+        surface. The shape is intentionally small — one round-trip,
+        no nested objects — so it round-trips cleanly through JSON.
+
+        text is truncated to 240 chars so a 10-KB memory does
+        not blow up the response; callers who want the full text
+        use get_memory(mid).text or the drill-down endpoint.
+
+        Returns None if the memory id is unknown (the dashboard
+        surfaces this as a 404). The signal counters default to 0
+        if the memory has no memory_signals row yet.
+        """
+        mid = str(mid or "")
+        if not mid:
+            return None
+        with self._conn() as c:
+            row = c.execute(
+                """SELECT m.id, m.kind, m.text, m.importance, m.score,
+                          m.source, m.tags, m.created_at, m.updated_at,
+                          m.superseded_by, m.session_id,
+                          COALESCE(s.recall_count, 0)   AS recall_count,
+                          COALESCE(s.positive, 0)       AS positive,
+                          COALESCE(s.negative, 0)       AS negative,
+                          s.last_recalled_at,
+                          s.last_feedback_at
+                   FROM memories m
+                   LEFT JOIN memory_signals s ON s.memory_id = m.id
+                   WHERE m.id = ?""",
+                (mid,),
+            ).fetchone()
+        if row is None:
+            return None
+        text = row["text"] or ""
+        if len(text) > 240:
+            text = text[:237] + "..."
+        now = time.time()
+        age = max(0.0, now - float(row["created_at"]))
+        return {
+            "id": row["id"],
+            "kind": row["kind"],
+            "text": text,
+            "importance": row["importance"],
+            "score": row["score"],
+            "source": row["source"],
+            "tags": row["tags"],
+            "session_id": row["session_id"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "superseded_by": row["superseded_by"],
+            "recall_count": row["recall_count"],
+            "positive": row["positive"],
+            "negative": row["negative"],
+            "last_recalled_at": row["last_recalled_at"],
+            "last_feedback_at": row["last_feedback_at"],
+            "age_seconds": age,
+        }
+
     # ----- Pipeline stage recording (v5) ------------------------------
 
     def start_pipeline_run(self, stage: str) -> str:

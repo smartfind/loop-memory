@@ -1,5 +1,57 @@
 ## [Unreleased]
 
+## [0.4.7] - 2026-09-06
+
+### Patch
+
+- **Per-memory lifetime stats** (audit 2026-09-06, agentmemory
+  v1.3.0 pattern, slimmed down). `MemoryStore.memory_stats(mid)`
+  joins `memories` with `memory_signals` and returns a flat dict
+  (`recall_count`, `positive`, `negative`, `last_recalled_at`,
+  `last_feedback_at`, `age_seconds`, `superseded_by`, etc.) so a
+  user can ask "is anyone still recalling this memory?" without
+  cracking open the SQLite file. The `text` field is truncated
+  at 240 chars (with `...`) so a 10-KB memory does not blow up
+  the response. New CLI: `loop-memory memory-stats <id>` (with
+  optional `--prefix` for short-id lookup). New HTTP route:
+  `GET /api/memories/{mid}/stats`. Pin: 11 cases in
+  `tests/test_memory_stats.py` + 5 cases in
+  `tests/test_cli_memory_stats.py`.
+- **Portable SQLite snapshot** (audit 2026-09-06, codexa-memory
+  v0.2.0 pattern, slimmed down). Two new module-level helpers
+  in `loop_memory.storage.snapshot`:
+
+    - `snapshot(store, out_path)` writes a single-file SQLite
+      copy of the live store, stamped with a `snapshot_magic`
+      header row in `schema_meta` so a future restore can refuse
+      a wrong-project file. Uses `sqlite3.Connection.backup()`
+      plus `journal_mode=DELETE` so the destination ends up as
+      one self-contained `.memory.sqlite` file (no WAL sidecar
+      to confuse a reader).
+    - `restore(store, in_path)` re-hydrates the snapshot into
+      the current store via `INSERT OR REPLACE` on every PK
+      (idempotent), in FK-order so child tables never trip a
+      constraint. Refuses wrong-magic / missing files loudly
+      so the CLI surfaces a useful error instead of silently
+      corrupting the destination store. Skips transient tables
+      (`schema_meta`, `llm_audit`, `auth_tokens`,
+      `write_guard_drops`) so a restore on top of an existing
+      store never clobbers the live store's own counters.
+
+  New CLI: `loop-memory snapshot <out.memory.sqlite>` /
+  `loop-memory restore <in.memory.sqlite>`. New HTTP routes:
+  `POST /api/snapshot` and `POST /api/snapshot/restore`. Pin:
+  11 cases in `tests/test_snapshot.py` + 6 cases in
+  `tests/test_cli_snapshot.py`.
+- **MCP / cross-MCP client vocabulary note**. Documented the
+  mapping between hypemelse/memory-mcp v0.4.0's MCP tool names
+  and Loop Memory's SDK methods in
+  `docs/universal-agent-memory.md` so a user moving from
+  hypemelse to Loop Memory finds the mapping without opening
+  an issue. No code rename this cycle (would break every
+  Loop Memory MCP consumer); defer to a cycle where repeated
+  requests appear in the issue tracker.
+
 ## [0.4.6] - 2026-08-30
 
 ### Patch

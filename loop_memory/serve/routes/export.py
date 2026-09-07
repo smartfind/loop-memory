@@ -62,4 +62,40 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None) 
             raise HTTPException(500, f"import failed: {e}")
         return r.to_dict()
 
+    @app.post("/api/snapshot")
+    def snapshot_create(body: dict):
+        """Write a portable SQLite snapshot of the live store.
 
+        Body: ``{"out_path": "/path/to/file.memory.sqlite"}``. Returns
+        the summary dict from ``loop_memory.storage.snapshot.snapshot``.
+        """
+        from ...storage.snapshot import snapshot as _snapshot
+        out = (body.get("out_path") or "").strip()
+        if not out:
+            raise HTTPException(400, "out_path is required")
+        try:
+            return _snapshot(store, out)
+        except Exception as e:
+            raise HTTPException(500, f"snapshot failed: {e}")
+
+    @app.post("/api/snapshot/restore")
+    def snapshot_restore(body: dict):
+        """Re-hydrate a portable SQLite snapshot into the live store.
+
+        Body: ``{"in_path": "/path/to/file.memory.sqlite"}``. Returns
+        the summary dict from ``loop_memory.storage.snapshot.restore``.
+        Refuses wrong-magic files with a 400 so the dashboard surfaces
+        the error clearly instead of corrupting the live store.
+        """
+        from ...storage.snapshot import restore as _restore
+        in_path = (body.get("in_path") or "").strip()
+        if not in_path:
+            raise HTTPException(400, "in_path is required")
+        try:
+            return _restore(store, in_path)
+        except FileNotFoundError as e:
+            raise HTTPException(404, str(e))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        except Exception as e:
+            raise HTTPException(500, f"restore failed: {e}")

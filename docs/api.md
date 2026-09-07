@@ -33,6 +33,7 @@ appropriate 4xx/5xx status.
 | GET | `/api/pipeline/score-distribution` | Histogram of memory scores |
 | GET | `/api/pipeline/decay-stats` | Decay curve + per-bucket counts |
 | GET | `/api/memories/{mid}/score` | Score breakdown for a single memory |
+| GET | `/api/memories/{mid}/stats` | Per-memory lifetime stats (since 0.4.7): `recall_count`, `positive`, `negative`, `last_recalled_at`, `last_feedback_at`, `age_seconds`, `superseded_by`, `text` (truncated at 240 chars). 404 if the memory id is unknown. |
 | GET | `/api/signals` | Active scoring signals (recall / feedback / negative) |
 | GET | `/api/graph` | Knowledge-graph nodes + edges (used by the 3D view) |
 | GET | `/api/graph/entity/{name}/memories` | Memories backing a graph entity |
@@ -138,6 +139,8 @@ for the full design; the route table is:
 | POST   | `/api/v1/export`             | `{out_dir, agent_id?, user_id?, scope?, min_importance?}` | Write a portable memory bundle |
 | POST   | `/api/v1/import`             | `{in_dir, agent_id?, user_id?, dry_run?}` | Import a memory bundle |
 | POST   | `/api/v1/fork`               | `{branch_tag?}` | Snapshot Wiki pages into a branch |
+| POST   | `/api/snapshot`               | `{out_path}` | Write a portable SQLite snapshot of the live store (since 0.4.7, codexa-memory v0.2.0 pattern). Returns the summary dict from `loop_memory.storage.snapshot.snapshot`. |
+| POST   | `/api/snapshot/restore`       | `{in_path}` | Re-hydrate a portable SQLite snapshot into the live store (since 0.4.7). Returns 400 on wrong-magic / no-magic files, 404 on missing files; never clobbers the destination store's own `schema_meta` / `llm_audit` / `auth_tokens` / `write_guard_drops` rows. |
 | GET    | `/api/v1/wiki/versions`      | `?page_id=&branch_tag=&limit=` | Read Wiki version history |
 
 The graph, cognitive, export/import, fork, SDK, CLI, and MCP details are

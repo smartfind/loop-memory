@@ -85,6 +85,29 @@ def _build_parser() -> argparse.ArgumentParser:
     rc.add_argument("--dry-run", action="store_true",
                     help="Report what would change without persisting")
 
+    # Audit 2026-09-06: per-memory lifetime stats
+    # (agentmemory v1.3.0 pattern, slimmed down).
+    ms = sub.add_parser(
+        "memory-stats",
+        help="Per-memory lifetime stats (audit 2026-09-06)")
+    ms.add_argument("memory_id",
+                    help="Memory id (or short prefix) to look up")
+    ms.add_argument("--prefix", action="store_true",
+                    help="Allow a short prefix match (first 8+ chars)")
+
+    # Audit 2026-09-06: portable SQLite snapshot
+    # (codexa-memory v0.2.0 pattern).
+    sn = sub.add_parser(
+        "snapshot",
+        help="Write a portable SQLite snapshot of the live store")
+    sn.add_argument("out_path",
+                    help="Destination .memory.sqlite file")
+    rs = sub.add_parser(
+        "restore",
+        help="Re-hydrate a portable SQLite snapshot into the live store")
+    rs.add_argument("in_path",
+                    help="Source .memory.sqlite file")
+
     return p
 
 
@@ -242,3 +265,80 @@ def run_wiki_reclassify_legacy(args: list) -> int:
         })
     summary = reclassify_legacy_pages(s, batch=ns.batch)
     return _emit(summary)
+
+
+def run_memory_stats(args: list) -> int:
+    """``loop-memory memory-stats <id> [--prefix]``
+
+    Per-memory lifetime stats (audit 2026-09-06, agentmemory v1.3.0).
+    Returns a flat dict suitable for ``jq`` and the dashboard.
+
+    With ``--prefix`` the caller can pass the first 8+ chars of the id
+    (handy in a shell pipeline where the full UUID is awkward).
+    """
+    import argparse as _ap
+    p = _ap.ArgumentParser(prog="loop-memory memory-stats")
+    p.add_argument("memory_id")
+    p.add_argument("--prefix", action="store_true")
+    p.add_argument("--db", default=os.environ.get("LOOP_MEMORY_DB", DEFAULT_DB))
+    ns = p.parse_args(args)
+    s = MemoryStore(ns.db)
+    mid = ns.memory_id.strip()
+    if not mid:
+        return _emit({"error": "memory_id is required"})
+    if ns.prefix:
+        # Resolve a prefix to a full id. The store indexes by full
+        # id so we walk a list_memories scan (cheap because prefix
+        # queries are rare / human-driven).
+        candidates = [m.id for m in s.list_memories(limit=10000)
+                      if m.id.startswith(mid)]
+        if not candidates:
+            return _emit({"error": f"no memory matches prefix {mid!r}"})
+        if len(candidates) > 1:
+            return _emit({
+                "error": f"prefix {mid!r} matches {len(candidates)} memories",
+                "candidates": candidates[:8],
+            })
+        mid = candidates[0]
+    res = s.memory_stats(mid)
+    if res is None:
+        return _emit({"error": f"memory {mid!r} not found"})
+    return _emit(res)
+
+
+def run_snapshot(args: list) -> int:
+    """``loop-memory snapshot <out_path>``
+
+    Write a portable SQLite snapshot (audit 2026-09-06,
+    codexa-memory v0.2.0). Returns a summary dict with size + table
+    counts so the caller can confirm the snapshot is sane.
+    """
+    import argparse as _ap
+    p = _ap.ArgumentParser(prog="loop-memory snapshot")
+    p.add_argument("out_path")
+    p.add_argument("--db", default=os.environ.get("LOOP_MEMORY_DB", DEFAULT_DB))
+    ns = p.parse_args(args)
+    s = MemoryStore(ns.db)
+    from ...storage.snapshot import snapshot as _snapshot
+    return _emit(_snapshot(s, ns.out_path))
+
+
+def run_restore(args: list) -> int:
+    """``loop-memory restore <in_path>``
+
+    Re-hydrate a portable SQLite snapshot (audit 2026-09-06,
+    codexa-memory v0.2.0). Returns a summary dict with table counts
+    so the caller can confirm the restore is sane. Refuses
+    wrong-magic files loudly instead of corrupting the live store.
+    """
+    import argparse as _ap
+    p = _ap.ArgumentParser(prog="loop-memory restore")
+    p.add_argument("in_path")
+    p.add_argument("--db", default=os.environ.get("LOOP_MEMORY_DB", DEFAULT_DB))
+    ns = p.parse_args(args)
+    s = MemoryStore(ns.db)
+    from ...storage.snapshot import restore as _restore
+    try:
+        return _emit(_restore(s, ns.in_path))
+    except (FileNotFoundError, ValueError) as e:
+        return _emit({"error": str(e)})

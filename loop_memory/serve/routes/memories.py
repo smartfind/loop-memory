@@ -414,6 +414,22 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None) 
         return {"deleted": n}
 
 
+    @app.get("/api/memories/{mid}/stats")
+    def memory_stats_route(mid: str):
+        """Per-memory lifetime stats (audit 2026-09-06).
+
+        Returns the flat dict produced by ``MemoryStore.memory_stats``
+        — see that method for the field list. 404 if the memory id
+        is unknown. The dashboard uses this to surface
+        recall / positive / negative counters alongside each memory
+        row without a second round-trip.
+        """
+        res = store.memory_stats(mid)
+        if res is None:
+            from fastapi import HTTPException
+            raise HTTPException(404, "memory not found")
+        return res
+
     @app.get("/api/memories/{mid}", name="memory_drill_down")
     def memory_drill_down(mid: str):
         """L2 drill-down for a single memory row (full text)."""

@@ -118,6 +118,10 @@ COMMANDS = {
     "subgraph": cognitive_cmd.run_subgraph,
     "graph-rebuild": cognitive_cmd.run_graph_rebuild,
     "wiki-reclassify-legacy": cognitive_cmd.run_wiki_reclassify_legacy,
+    # Audit 2026-09-06 — per-memory stats + portable snapshot.
+    "memory-stats": cognitive_cmd.run_memory_stats,
+    "snapshot": cognitive_cmd.run_snapshot,
+    "restore": cognitive_cmd.run_restore,
     "rules": rules_cmd.run_rules,
     "version": _run_version,
 }
@@ -159,6 +163,9 @@ COMMAND_HELP: dict[str, str] = {
     "subgraph":               "loop-memory subgraph <query>   # print a small subgraph.",
     "version":                "loop-memory version   # print the installed distribution version.",
     "wiki-reclassify-legacy": "loop-memory wiki-reclassify-legacy   # back-fill scope + scope_filter for H4+H5 pages.",
+    "memory-stats":           "loop-memory memory-stats <id> [--prefix]   # per-memory lifetime stats (audit 2026-09-06, agentmemory v1.3.0).",
+    "snapshot":               "loop-memory snapshot <out.memory.sqlite>   # write a portable SQLite snapshot (audit 2026-09-06, codexa-memory v0.2.0).",
+    "restore":                "loop-memory restore <in.memory.sqlite>   # re-hydrate a portable SQLite snapshot.",
     "rules":                 "loop-memory rules [--agent codex|claude|hermes|openclaw] [--write] [--force]\n  Print, or append into the agent's rule file, the three-phase memory discipline (task start / mid-task / wrap-up). Never overwrites user content.",
 }
 

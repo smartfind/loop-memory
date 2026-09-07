@@ -232,3 +232,40 @@ loop-memory graph-rebuild
   `tests/test_universal_memory.py`）。
 * 在线：`launchctl kickstart -k gui/$(id -u)/com.loopmemory.server`
   后所有 `/api/v1/*` 路由可 curl，详见 CHANGELOG。
+
+## MCP 工具名对照（hypemelse/memory-mcp v0.4.0）
+
+`hypemelse/memory-mcp v0.4.0` 暴露了 22 个 MCP 工具并采用
+snake_case + `memory_` 前缀的命名规范。很多 MCP-aware 客户端
+（Claude Desktop、Cursor、Codex 等）已经学到这套词汇，所以从
+hypemelse 迁移到 loop-memory 的用户经常会按这套词找方法。下表
+给出对应关系，方便不动代码就能找到入口（本周期只做文档映射，
+不做工具重命名——重命名会破坏所有现有 loop-memory MCP 消费者）：
+
+| hypemelse 工具 | loop-memory 等价入口 | 备注 |
+| --- | --- | --- |
+| `memory_recall` | `loop-memory recall '<query>'` 或 `MemoryStore.recall()` / `GET /api/v1/recall` | 命中可携带 `why: [...]`（自 0.4.6） |
+| `memory_remember` | `loop-memory ingest <source>` 或 `MemoryStore.upsert_memory()` / `POST /api/v1/memories` | 写入即同步 |
+| `memory_forget` | `loop-memory audit` + `cognitive-sleep --apply` 或 `DELETE /api/v1/memories/{id}` | 带审计链的 GC 走前者 |
+| `memory_stats` | `loop-memory memory-stats <id>`（自 0.4.7）或 `GET /api/memories/{id}/stats` | 返回 `recall_count` / `positive` / `negative` / `age_seconds` |
+| `memory_search` | `loop-memory recall '<query>' --kind fact` 或 `GET /api/v1/recall?q=…` | 同 `memory_recall` |
+| `memory_delete_older_than` | `loop-memory cognitive-sleep --apply --stale-days <N>` | 走 cognitive-sleep sweep |
+| `memory_export_to_obsidian` | `loop-memory export-bundle <out_dir>` + Obsidian 兼容目录布局 | markdown 格式可直接喂 Obsidian |
+| `memory_import_from_json` | `loop-memory import <in_dir>`（自 0.4.5 起支持 JSONL bundle） | 用同一 `import_bundle` 入口 |
+| `memory_get` / `memory_get_by_external_id` | `MemoryStore.get_memory(mid)` / `GET /api/v1/memories/{id}` 或 `?external_id=…` | 后者走列表过滤 |
+| `memory_update` | `MemoryStore.upsert_memory()`（同 remember，upsert 语义） | 没单独 update |
+| `memory_list` | `loop-memory recall ''` 或 `GET /api/v1/memories?limit=…` | 默认排序按 `score` 倒序 |
+| `memory_graph_query` | `loop-memory subgraph '<query>'` 或 `GET /api/v1/graph/subgraph?q=…` | 实体 + 关系 |
+| `memory_graph_add_edge` | `loop-memory graph-edge <src> <dst>` 或 `POST /api/v1/graph/edges` | |
+| `memory_graph_rebuild` | `loop-memory graph-rebuild` 或 `POST /api/v1/graph/rebuild` | |
+| `memory_fork` | `loop-memory fork [--branch-tag T]` 或 `POST /api/v1/fork` | wiki 分支 |
+| `memory_snapshot` | `loop-memory snapshot <out.memory.sqlite>`（自 0.4.7）或 `POST /api/snapshot` | 单文件 SQLite 快照 |
+| `memory_restore` | `loop-memory restore <in.memory.sqlite>`（自 0.4.7）或 `POST /api/snapshot/restore` | 同上 |
+| `memory_audit` | `loop-memory audit` 或 `GET /api/v1/cognitive/audit` | cognitive 决策历史 |
+| `memory_audit_supersede` | `loop-memory audit-supersede [--target ID]` 或 `GET /api/v1/cognitive/audit/supersede` | 自 0.4.6 |
+| `memory_consolidate` | `loop-memory cognitive-sleep --apply` 或 `POST /api/v1/cognitive/sleep` | |
+| `memory_rescore` | `loop-memory rescore [--half-life 30]` 或 `POST /api/admin/rescore` | |
+| `memory_install_hooks` | `loop-memory install-hooks` 或 `POST /api/install-hooks` | SessionStart hook + MCP |
+
+工具重命名会破坏所有现有 loop-memory MCP 消费者；等 issue tracker
+里出现 ≥2 个相同重命名请求再做（不要凭直觉提前动）。

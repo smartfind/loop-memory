@@ -22,15 +22,19 @@
 
 ---
 
-> **What's new in 0.4.6** — **memory supersession chain** + **recall
-> provenance labels**. `merge_memories()` no longer silently
-> `DELETE`s the loser — it writes an explicit `superseded_by`
-> pointer (audit 2026-08-30, Mem0 v2.0.19 Dream pattern), the new
-> `loop-memory audit-supersede` walks the chain, and every
-> `recall()` hit now carries a `why: [...]` provenance list
-> (adopted from agentmemory v1.2.0) that you can surface with
-> `loop-memory recall --verbose`. 26 new regression cases pin
-> both shapes.
+> **What's new in 0.4.7** — **per-memory lifetime stats** +
+> **portable SQLite snapshot**. `loop-memory memory-stats <id>`
+> returns a flat dict (recall_count, positive, negative, age,
+> etc.) so you can ask "is anyone still using this memory?"
+> without cracking open the SQLite file (audit 2026-09-06,
+> agentmemory v1.3.0 pattern). `loop-memory snapshot <out>` /
+> `loop-memory restore <in>` move a single-file, lossless
+> snapshot of the entire store — including recall-quality
+> signals and the supersession chain — to another machine
+> (audit 2026-09-06, codexa-memory v0.2.0 pattern). Both shapes
+> ship with HTTP routes (`/api/memories/{id}/stats`,
+> `/api/snapshot`, `/api/snapshot/restore`). 33 new regression
+> cases pin both shapes.
 > [Full changelog →](CHANGELOG.md)
 
 ---
