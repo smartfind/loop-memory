@@ -265,7 +265,9 @@ hypemelse 迁移到 loop-memory 的用户经常会按这套词找方法。下表
 | `memory_audit_supersede` | `loop-memory audit-supersede [--target ID]` 或 `GET /api/v1/cognitive/audit/supersede` | 自 0.4.6 |
 | `memory_consolidate` | `loop-memory cognitive-sleep --apply` 或 `POST /api/v1/cognitive/sleep` | |
 | `memory_rescore` | `loop-memory rescore [--half-life 30]` 或 `POST /api/admin/rescore` | |
-| `memory_install_hooks` | `loop-memory install-hooks` 或 `POST /api/install-hooks` | SessionStart hook + MCP |
+| `memory_install_hooks` | `loop-memory install-hooks` 或 `POST /api/install-hooks` | SessionStart hook + MCP；自 0.4.8 还会 bump `agents.last_seen_at` |
+| `memory_recall_outline` | `loop-memory recall-paths <q>`（自 0.4.8）或 `GET /api/recall/outline?q=…` | L0 轮廓（只返回 `id` + `abstract` + `score` + `why`），agent-loop 用 |
+| `memory_init_agent` | `loop-memory init --agent <name>`（自 0.4.8）或 `POST /api/init/agent` | 把一个 agent 注册到 `agents` 表；可附带 `--install-hooks` |
 
 工具重命名会破坏所有现有 loop-memory MCP 消费者；等 issue tracker
 里出现 ≥2 个相同重命名请求再做（不要凭直觉提前动）。

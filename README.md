@@ -22,6 +22,24 @@
 
 ---
 
+> **What's new in 0.4.8** — **L0 outline recall** +
+> **per-agent identity bootstrap**. `loop-memory recall-paths <q>`
+> (and the new `recall --outline` flag) returns only `id` +
+> `abstract` + `score` + `why` for each hit — never the full
+> body — so an agent can identify the top candidates cheaply
+> before deciding which bodies to fetch (audit 2026-09-13,
+> tigerless-labs/agent-memory v0.3.0 recall-ladder pattern).
+> `loop-memory init --agent <name>` registers an agent in the
+> new `agents` table and (with `--install-hooks`) also wires
+> the MCP + SessionStart hooks for codex/claude/hermes; the
+> index is bumped on every `install-hooks` run so a user can
+> always answer "which CLIs are wired into this store?" with
+> one SQL query (audit 2026-09-13, Mem0 CLI `init --agent`
+> pattern). Both shapes ship with HTTP routes
+> (`/api/recall/outline`, `/api/agents`, `/api/init/agent`).
+> 57 new regression cases pin both shapes. [Full
+> changelog →](CHANGELOG.md)
+>
 > **What's new in 0.4.7** — **per-memory lifetime stats** +
 > **portable SQLite snapshot**. `loop-memory memory-stats <id>`
 > returns a flat dict (recall_count, positive, negative, age,

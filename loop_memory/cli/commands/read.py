@@ -66,6 +66,7 @@ def run_recall(args) -> int:
     # we don't want argparse to swallow a token that happens to start
     # with "--" inside the user's query (e.g. ``recall --foo bar``).
     verbose = False
+    outline = False
     limit = 10
     qargs: list[str] = []
     i = 0
@@ -73,6 +74,12 @@ def run_recall(args) -> int:
         a = args[i]
         if a == "--verbose":
             verbose = True
+            i += 1
+        elif a == "--outline":
+            # Audit 2026-09-13 (tigerless-labs/agent-memory v0.3.0) —
+            # cheap L0 list instead of full text. Sets a flag and
+            # routes the call to ``recall_paths`` below.
+            outline = True
             i += 1
         elif a == "--limit" and i + 1 < len(args):
             try:
@@ -86,10 +93,13 @@ def run_recall(args) -> int:
             qargs.append(a)
             i += 1
     if not qargs:
-        return die("usage: loop-memory recall <query> [--verbose] [--limit N]")
+        return die("usage: loop-memory recall <query> [--verbose] [--outline] [--limit N]")
     store = MemoryStore(default_db_path())
     query = " ".join(qargs)
-    r = store.recall(query, limit=limit)
+    if outline:
+        r = store.recall_paths(query, limit=limit)
+    else:
+        r = store.recall(query, limit=limit)
     has = False
     if r["wiki"]:
         has = True
@@ -97,7 +107,9 @@ def run_recall(args) -> int:
         for w in r["wiki"]:
             tag_s = "  [" + ", ".join(w.get("tags") or []) + "]" if w.get("tags") else ""
             print(f"- **{w['title']}** (`{w['slug']}`) — imp {w['importance']:.2f}{tag_s}")
-            if w.get("summary"):
+            if outline:
+                print(f"  > {w.get('abstract','')}")
+            elif w.get("summary"):
                 print(f"  > {w['summary'][:240]}")
         print()
     if r["memories"]:
@@ -111,7 +123,11 @@ def run_recall(args) -> int:
                 # render the list as a deterministic badge strip without
                 # re-sorting.
                 print(f"  why: {', '.join(m['why'])}")
-            print(f"  {m['text'][:240]}")
+            if outline:
+                # L0 outline mode: print only the short abstract.
+                print(f"  {m.get('abstract','')}")
+            else:
+                print(f"  {m['text'][:240]}")
         print()
     if r["entities"]:
         has = True
@@ -397,4 +413,66 @@ def run_inject(args) -> int:
                 if text:
                     out.write(f"  {text}\n")
     sys.stdout.write(out.getvalue())
+    return 0
+
+
+
+def run_recall_paths(args) -> int:
+    """``loop-memory recall-paths <query> [--limit N]``.
+
+    Audit 2026-09-13 (tigerless-labs/agent-memory v0.3.0). Returns
+    only ``id`` + ``abstract`` + ``score`` + ``why`` for each hit —
+    no full text, no body. Use this when an agent needs to *decide*
+    which candidate to open; once it has picked an id, fetch the
+    body via ``GET /api/memories/{id}`` or ``GET /api/wiki/{slug}``.
+    """
+    from ...storage.sqlite_store import MemoryStore
+    if not args:
+        return die("usage: loop-memory recall-paths <query> [--limit N]")
+    limit = 12
+    qargs: list[str] = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--limit" and i + 1 < len(args):
+            try:
+                limit = int(args[i + 1])
+            except ValueError:
+                return die(f"--limit must be an integer, got {args[i + 1]!r}")
+            i += 2
+        elif a.startswith("--"):
+            return die(f"unknown flag: {a}")
+        else:
+            qargs.append(a)
+            i += 1
+    if not qargs:
+        return die("usage: loop-memory recall-paths <query> [--limit N]")
+    store = MemoryStore(default_db_path())
+    query = " ".join(qargs)
+    r = store.recall_paths(query, limit=limit)
+    has = False
+    if r["memories"]:
+        has = True
+        print(f"## Outline (memories, {len(r['memories'])} match{'es' if len(r['memories'])!=1 else ''})")
+        for m in r["memories"]:
+            why = f"  why: {', '.join(m['why'])}" if m.get("why") else ""
+            print(f"- [{m['kind']}] score={m['score']:.2f} id={m['id']}{why}")
+            print(f"  > {m.get('abstract','')}")
+        print()
+    if r["wiki"]:
+        has = True
+        print(f"## Outline (wiki, {len(r['wiki'])} match{'es' if len(r['wiki'])!=1 else ''})")
+        for w in r["wiki"]:
+            why = f"  why: {', '.join(w['why'])}" if w.get("why") else ""
+            print(f"- score={w['score']:.2f} slug={w['slug']}{why}")
+            print(f"  > {w.get('abstract','')}")
+        print()
+    if r["entities"]:
+        has = True
+        print(f"## Outline (entities, {len(r['entities'])})")
+        for e in r["entities"]:
+            print(f"- {e['name']} _({e['entity_kind']}, w={e['weight']:.2f})_")
+        print()
+    if not has:
+        print(f"_( nothing matched {query!r})_")
     return 0

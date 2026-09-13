@@ -46,7 +46,7 @@ def _upsert_block(text: str, block: str, marker: str) -> str:
     return "".join(lines[:start]) + block + "".join(lines[end:])
 
 
-def _install_codex(home: Path, actions: list) -> None:
+def _install_codex(home: Path, actions: list, store=None) -> None:
     codex_dir = home / ".codex"
     codex_cfg = codex_dir / "config.toml"
     # Codex's TOML schema: `hooks` is a struct (HooksToml) keyed by event
@@ -104,11 +104,13 @@ def _install_codex(home: Path, actions: list) -> None:
             except Exception: pass
             return
         actions.append(f"codex → {codex_cfg}" + ("" if parse_ok else " (unverified)"))
+        if store is not None:
+            store.register_agent("codex", hooks_installed=True)
     except Exception as e:
         actions.append(f"codex → SKIP ({e})")
 
 
-def _install_claude(home: Path, actions: list) -> None:
+def _install_claude(home: Path, actions: list, store=None) -> None:
     claude_dir = home / ".claude"
     claude_mcp = claude_dir / "mcp.json"
     claude_settings = claude_dir / "settings.json"
@@ -148,9 +150,11 @@ def _install_claude(home: Path, actions: list) -> None:
         })
     claude_settings.write_text(json.dumps(existing_s, ensure_ascii=False, indent=2), encoding="utf-8")
     actions.append(f"claude (SessionStart hook) → {claude_settings}")
+    if store is not None:
+        store.register_agent("claude", hooks_installed=True)
 
 
-def _install_hermes(home: Path, actions: list) -> None:
+def _install_hermes(home: Path, actions: list, store=None) -> None:
     hermes_dir = home / ".hermes"
     hermes_cfg = hermes_dir / "mcp.json"
     if not hermes_dir.exists():
@@ -168,6 +172,8 @@ def _install_hermes(home: Path, actions: list) -> None:
     hermes_cfg.parent.mkdir(parents=True, exist_ok=True)
     hermes_cfg.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
     actions.append(f"hermes → {hermes_cfg}")
+    if store is not None:
+        store.register_agent("hermes", hooks_installed=True)
 
 
 def _openclaw_hint(home: Path, actions: list) -> None:
@@ -200,13 +206,75 @@ def run_install_hooks(_args) -> int:
     """
     home = Path.home()
     actions: list = []
-    _install_codex(home, actions)
-    _install_claude(home, actions)
-    _install_hermes(home, actions)
+    # Audit 2026-09-13 (Mem0 CLI init --agent pattern) — record which
+    # agents we touched so the per-agent index stays accurate. The
+    # store is best-effort: if the SQLite path can't open, we fall
+    # back to "install only" so the user is never blocked by a DB
+    # hiccup during a one-line CLI install.
+    store = None
+    try:
+        from ...storage.sqlite_store import MemoryStore
+        from ...cli._common import default_db_path
+        store = MemoryStore(default_db_path())
+    except Exception:
+        store = None
+    _install_codex(home, actions, store=store)
+    _install_claude(home, actions, store=store)
+    _install_hermes(home, actions, store=store)
     _openclaw_hint(home, actions)
+    if store is not None:
+        # OpenClaw is hinted (no auto-install) so we only touch it.
+        store.touch_agent("openclaw")
     print("[loop-memory] install-hooks results:")
     for a in actions:
         print(f"  · {a}")
     print()
     print("Restart your CLI to pick up the new MCP server + hooks.")
+    return 0
+
+
+
+def run_init(args) -> int:
+    """``loop-memory init --agent <name> [--install-hooks]``.
+
+    Audit 2026-09-13 (Mem0 CLI ``mem0 init --agent <name>`` pattern).
+    Registers an agent in the per-agent identity index and, when
+    ``--install-hooks`` is passed, also runs the standard
+    ``install-hooks`` flow so MCP + SessionStart hooks are written
+    for that agent's CLI client. Idempotent — re-running for the
+    same name just bumps ``last_seen_at``.
+    """
+    from ...storage.sqlite_store import MemoryStore
+    from ...cli._common import default_db_path, die
+    agent_name: str | None = None
+    install_hooks = False
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--agent" and i + 1 < len(args):
+            agent_name = args[i + 1].strip()
+            i += 2
+        elif a == "--install-hooks":
+            install_hooks = True
+            i += 1
+        elif a == "--help" or a == "-h":
+            print("usage: loop-memory init --agent <name> [--install-hooks]")
+            return 0
+        elif a.startswith("--"):
+            return die(f"[loop-memory] unknown flag: {a}")
+        else:
+            return die(f"[loop-memory] unexpected positional: {a}")
+    if not agent_name:
+        return die("usage: loop-memory init --agent <name> [--install-hooks]")
+    store = MemoryStore(default_db_path())
+    rec = store.register_agent(agent_name, hooks_installed=False)
+    verb = "registered" if rec["created"] else "refreshed"
+    print(f"[loop-memory] {verb} agent {agent_name!r} (scope={rec['scope']}, "
+          f"hooks_installed={rec['hooks_installed']}, "
+          f"last_seen_at={rec['last_seen_at']:.0f}).")
+    if install_hooks:
+        # Delegate to the standard install-hooks flow so the MCP + inject
+        # hook files get written for codex/claude/hermes if any of those
+        # clients are installed.
+        run_install_hooks([])
     return 0

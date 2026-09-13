@@ -122,6 +122,9 @@ COMMANDS = {
     "memory-stats": cognitive_cmd.run_memory_stats,
     "snapshot": cognitive_cmd.run_snapshot,
     "restore": cognitive_cmd.run_restore,
+    # Audit 2026-09-13 — L0 outline recall + per-agent identity bootstrap.
+    "recall-paths": read_cmd.run_recall_paths,
+    "init": hooks_cmd.run_init,
     "rules": rules_cmd.run_rules,
     "version": _run_version,
 }
@@ -166,6 +169,10 @@ COMMAND_HELP: dict[str, str] = {
     "memory-stats":           "loop-memory memory-stats <id> [--prefix]   # per-memory lifetime stats (audit 2026-09-06, agentmemory v1.3.0).",
     "snapshot":               "loop-memory snapshot <out.memory.sqlite>   # write a portable SQLite snapshot (audit 2026-09-06, codexa-memory v0.2.0).",
     "restore":                "loop-memory restore <in.memory.sqlite>   # re-hydrate a portable SQLite snapshot.",
+    # Audit 2026-09-13 — L0 outline recall (tigerless-labs/agent-memory v0.3.0).
+    "recall-paths":           "loop-memory recall-paths <query> [--limit N]   # cheap L0 outline (id+abstract+score) instead of full text (audit 2026-09-13).",
+    # Audit 2026-09-13 — per-agent identity bootstrap (Mem0 CLI init --agent pattern).
+    "init":                   "loop-memory init --agent <name> [--install-hooks]   # register an agent + (optionally) install hooks.",
     "rules":                 "loop-memory rules [--agent codex|claude|hermes|openclaw] [--write] [--force]\n  Print, or append into the agent's rule file, the three-phase memory discipline (task start / mid-task / wrap-up). Never overwrites user content.",
 }
 

@@ -392,6 +392,98 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None,
         }
 
 
+    @app.get("/api/recall/outline")
+    def recall_outline(query: str = "", limit: int = 12,
+                       include: str = "memories,wiki,entities",
+                       bump: int = 0, source: str | None = None):
+        """Audit 2026-09-13 — L0 outline recall (tigerless-labs/agent-memory
+        v0.3.0 recall ladder pattern).
+
+        Returns the same ranked lists as ``GET /api/recall`` but each
+        hit carries only ``id`` + ``kind`` + ``abstract`` (≤80 chars)
+        + ``score`` + ``why`` -- never the full ``text`` / ``body``.
+        Use this when an agent needs to *decide* which candidate to
+        open; once it has picked an id, fetch the body via
+        ``GET /api/memories/{id}`` or ``GET /api/wiki/{slug}``.
+
+        ``bump`` defaults to 0 so the L0 listing does not inflate
+        ``recall_count`` before the agent has actually decided to read
+        the body. Set ``bump=1`` only when the agent commits to the
+        candidate set.
+        """
+        if not query:
+            raise HTTPException(status_code=400, detail="query is required")
+        wanted = tuple(s.strip() for s in include.split(",") if s.strip())
+        if not wanted:
+            wanted = ("memories", "wiki", "entities")
+        r = store.recall_paths(
+            query,
+            limit=limit,
+            include=wanted,
+            bump_signals=bool(bump),
+            source=source,
+        )
+        return {
+            "query": query,
+            "tokens": r.get("tokens", []),
+            "memories": r.get("memories", []),
+            "wiki": r.get("wiki", []),
+            "entities": r.get("entities", []),
+            "mode": "outline",
+            "source": source,
+        }
+
+
+    @app.get("/api/agents")
+    def list_agents_route():
+        """Audit 2026-09-13 — list all registered agents (Mem0 CLI
+        ``init --agent`` pattern). Each entry includes ``name``,
+        ``scope``, ``created_at``, ``last_seen_at``,
+        ``hooks_installed`` so a user can answer "which CLIs are
+        wired into this store?" with a single HTTP GET.
+        """
+        return {"agents": store.list_agents()}
+
+
+    @app.post("/api/init/agent")
+    def init_agent_route(body: dict):
+        """Audit 2026-09-13 — register (or refresh) a named agent.
+
+        Body keys (all optional except ``name``):
+          - ``name`` (str, required) — e.g. ``"codex"``, ``"claude"``,
+            ``"hermes"``, ``"openclaw"``, or a custom name.
+          - ``scope`` (str, default ``"global"``) — reserved for
+            future per-source isolation; today always ``"global"``.
+          - ``install_hooks`` (bool, default ``false``) — when true,
+            also runs the equivalent of ``install-hooks`` so MCP +
+            SessionStart files are written for codex/claude/hermes if
+            those clients are installed locally. Best-effort: a hook
+            failure does not fail the registration.
+
+        Idempotent — re-registering an existing name just bumps
+        ``last_seen_at``. Returns the persisted row.
+        """
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="body must be a JSON object")
+        name = (body.get("name") or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="name is required")
+        scope = (body.get("scope") or "global").strip() or "global"
+        want_hooks = bool(body.get("install_hooks", False))
+        rec = store.register_agent(name, scope=scope, hooks_installed=want_hooks)
+        if want_hooks:
+            # Best-effort: write MCP + SessionStart hooks for whatever
+            # local CLI clients the user has installed. We don't
+            # surface the per-client summary here; ``install-hooks``
+            # already prints its own summary when run from the CLI.
+            try:
+                from ...cli.commands.hooks import run_install_hooks
+                run_install_hooks([])
+            except Exception:
+                pass
+        return rec
+
+
     @app.get("/api/pipeline")
     def pipeline_dashboard_route():
         """5-stage data flow dashboard. See handlers.pipeline_dashboard."""

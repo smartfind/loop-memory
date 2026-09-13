@@ -1,5 +1,52 @@
 ## [Unreleased]
 
+## [0.4.8] - 2026-09-13
+
+### patch
+
+- **L0 outline recall** (audit 2026-09-13,
+  `tigerless-labs/agent-memory v0.3.0` recall-ladder pattern,
+  MIT). `MemoryStore.recall_paths(query, limit=12, ...)`
+  returns the same ranked lists as `recall()` but each hit
+  carries only `id` + `kind` + `abstract` (≤ 80 chars) +
+  `score` + `why` — never the full `text` / `body`. This
+  is the L0 rung of the recall ladder; the L1 rung is the
+  existing `GET /api/memories/{id}` route. The L0 listing
+  does not bump `memory_signals.recall_count` by default
+  (the agent hasn't decided to read the body yet), but
+  callers can opt in with `bump_signals=True`. CLI
+  surface: `loop-memory recall-paths <query> [--limit N]`
+  and the new `--outline` flag on the existing
+  `loop-memory recall <query>` subcommand. HTTP route:
+  `GET /api/recall/outline?query=…&limit=…`. Pin: 16 cases
+  in `tests/test_recall_paths.py` + 9 cases in
+  `tests/test_cli_recall_paths.py` + 4 cases in
+  `tests/test_routes_audit_2026_09_13.py`.
+- **Per-agent identity bootstrap** (audit 2026-09-13, Mem0
+  CLI `init --agent <name>` pattern, Apache-2.0). New
+  `agents(name PRIMARY KEY, scope, created_at,
+  last_seen_at, hooks_installed)` table (SCHEMA_VERSION
+  "9" → "10"). `MemoryStore.register_agent(name, scope,
+  hooks_installed)` is idempotent (re-registration just
+  bumps `last_seen_at`); `list_agents()` returns the full
+  index sorted by `last_seen_at DESC`;
+  `touch_agent(name)` is a silent no-op for unknown names.
+  New CLI: `loop-memory init --agent <name>
+  [--install-hooks]`. New HTTP routes: `GET /api/agents`,
+  `POST /api/init/agent`. The existing `install-hooks`
+  flow also calls `register_agent()` for codex/claude/
+  hermes on every successful install so the per-agent
+  index stays in sync with which CLIs the user actually
+  runs. Pin: 14 cases in `tests/test_agents_init.py` +
+  8 cases in `tests/test_cli_init.py` + 6 cases in
+  `tests/test_routes_audit_2026_09_13.py`.
+
+### research
+
+- See `docs/research/2026-09-13.md` for the full
+  weekly research doc (269 lines). Two patterns adopted
+  (above); the rest deferred or watchlisted.
+
 ## [0.4.7] - 2026-09-06
 
 ### Patch

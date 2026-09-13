@@ -42,6 +42,7 @@ appropriate 4xx/5xx status.
 | GET | `/api/sessions/{session_id}/memories` | Memories of one session |
 | GET | `/api/memories` | List memories (filter by `source`, `session_id`, `min_score`, `limit`, `offset`) |
 | GET | `/api/recall` | Top-K recall for a query (`?q=…&k=10`). Each memory hit carries a `why: [...]` provenance list naming the scoring signals that contributed (`keyword_match`, `tag_match`, `high_importance`, `high_score_field`, `high_recall_count`, `short_query_boost`) since 0.4.6. Superseded memories are filtered out; the chain is queryable via `/api/v1/cognitive/audit/supersede`. |
+| GET | `/api/recall/outline` | L0 outline recall (since 0.4.8, tigerless-labs/agent-memory v0.3.0 recall-ladder pattern). Same ranked lists as `/api/recall` but each hit carries only `id` + `kind` + `abstract` (≤ 80 chars) + `score` + `why` — never the full body. Use this when an agent needs to *decide* which candidate to open; fetch the body via `/api/memories/{id}` once committed. `bump` defaults to 0 so the L0 listing does not inflate `recall_count`. |
 | GET | `/api/llm-audit` | Recent LLM calls + token usage |
 | GET | `/api/write-guard` | Write-guard rail status |
 | GET | `/api/wiki` | List wiki pages |
@@ -141,6 +142,8 @@ for the full design; the route table is:
 | POST   | `/api/v1/fork`               | `{branch_tag?}` | Snapshot Wiki pages into a branch |
 | POST   | `/api/snapshot`               | `{out_path}` | Write a portable SQLite snapshot of the live store (since 0.4.7, codexa-memory v0.2.0 pattern). Returns the summary dict from `loop_memory.storage.snapshot.snapshot`. |
 | POST   | `/api/snapshot/restore`       | `{in_path}` | Re-hydrate a portable SQLite snapshot into the live store (since 0.4.7). Returns 400 on wrong-magic / no-magic files, 404 on missing files; never clobbers the destination store's own `schema_meta` / `llm_audit` / `auth_tokens` / `write_guard_drops` rows. |
+| GET    | `/api/agents`                  | — | List all registered agents (since 0.4.8, Mem0 CLI `init --agent` pattern). Each entry: `name`, `scope`, `created_at`, `last_seen_at`, `hooks_installed`. Sorted by `last_seen_at DESC`. |
+| POST   | `/api/init/agent`              | `{name, scope?, install_hooks?}` | Register (or refresh) a named agent (since 0.4.8). Idempotent — re-registering bumps `last_seen_at`. `install_hooks=true` runs the equivalent of `loop-memory install-hooks` (best-effort). |
 | GET    | `/api/v1/wiki/versions`      | `?page_id=&branch_tag=&limit=` | Read Wiki version history |
 
 The graph, cognitive, export/import, fork, SDK, CLI, and MCP details are

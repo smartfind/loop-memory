@@ -314,6 +314,20 @@ CREATE TABLE IF NOT EXISTS memory_signals (
 CREATE INDEX IF NOT EXISTS idx_signals_recall ON memory_signals(recall_count);
 CREATE INDEX IF NOT EXISTS idx_signals_neg    ON memory_signals(negative);
 
+-- Per-agent identity registry (audit 2026-09-13, Mem0 CLI `mem0 init --agent`
+-- pattern). Each row is a registered CLI client (codex, claude, hermes,
+-- openclaw, or a user-named custom agent). ``last_seen_at`` is bumped by
+-- ``install-hooks`` every time a client touches the store, and by
+-- ``register_agent`` on every subsequent call. ``hooks_installed`` is 1
+-- after a successful ``install-hooks`` for this agent.
+CREATE TABLE IF NOT EXISTS agents (
+    name             TEXT PRIMARY KEY,
+    scope            TEXT NOT NULL DEFAULT 'global',
+    created_at       REAL NOT NULL,
+    last_seen_at     REAL NOT NULL,
+    hooks_installed  INTEGER NOT NULL DEFAULT 0
+);
+
 -- Per-pair ignore list for contradiction detection: keyed by ordered
 -- hash of (a_id, b_id) so the dashboard "ignore" button actually does
 -- something (the pair disappears from future pulses).
@@ -444,7 +458,7 @@ class MemoryStore:
     The zero-dep claim holds — Python ships with sqlite3 and struct.
     """
 
-    SCHEMA_VERSION = "9"
+    SCHEMA_VERSION = "10"
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path).expanduser()
@@ -1531,6 +1545,295 @@ class MemoryStore:
                         (mid, now, now),
                     )
         return out
+
+    # ----------------------------------------------------------------
+    # L0 outline recall (audit 2026-09-13, tigerless-labs/agent-memory
+    # v0.3.0 recall ladder pattern). Same ranked lists as ``recall()``
+    # but each hit carries only ``id``, ``kind``, ``abstract``
+    # (≤80 chars), ``score`` and ``why`` -- never the full ``text`` /
+    # ``body``. Agent-loop callers use this to identify the top
+    # candidates cheaply, then call the existing
+    # ``GET /api/memories/{id}`` or ``GET /api/wiki/{slug}`` for the
+    # full body of only the ones they actually want. ~10× smaller
+    # payload than ``recall()`` for a typical query.
+    #
+    # ``bump_signals`` is honoured but defaults to False so the L0
+    # listing does not inflate ``recall_count`` before the agent has
+    # actually decided to read the body.
+    # ----------------------------------------------------------------
+    _ABSTRACT_MAX = 80
+
+    def recall_paths(
+        self,
+        query: str,
+        limit: int = 12,
+        include: tuple[str, ...] = ("memories", "wiki", "entities"),
+        bump_signals: bool = False,
+        source: str | None = None,
+    ) -> dict[str, list[dict]]:
+        import time as _time
+        tokens = self._tokenize(query)
+        if not tokens:
+            return {"memories": [], "wiki": [], "entities": [], "tokens": []}
+        out: dict[str, list[dict]] = {"memories": [], "wiki": [], "entities": [], "tokens": tokens}
+
+        def _abstract(text: str | None) -> str:
+            t = (text or "").strip().replace("\n", " ").replace("\r", " ")
+            t = " ".join(t.split())
+            if len(t) <= self._ABSTRACT_MAX:
+                return t
+            return t[: self._ABSTRACT_MAX - 1].rstrip() + "\u2026"
+
+        with self._conn() as c:
+            if "memories" in include:
+                clause, params = self._like_clause("text", tokens)
+                tag_clause, tag_params = self._like_clause("tags", tokens)
+                sql = (
+                    "SELECT m.id, m.kind, m.text, m.importance, m.score, m.source, "
+                    "m.tags, m.created_at, m.updated_at, "
+                    "COALESCE(s.recall_count, 0) AS recall_count, "
+                    "m.superseded_by "
+                    "FROM memories m "
+                    "LEFT JOIN memory_signals s ON s.memory_id = m.id "
+                    f"WHERE m.superseded_by IS NULL AND ({clause} OR {tag_clause}) "
+                    "ORDER BY m.score DESC, m.importance DESC, m.created_at DESC "
+                    "LIMIT ?"
+                )
+                rows = c.execute(sql, (*params, *tag_params, limit * 3)).fetchall()
+                short_query = len(tokens) <= 2
+                for r in rows:
+                    try:
+                        tags = json.loads(r["tags"]) if r["tags"] else []
+                    except Exception:
+                        tags = []
+                    txt = (r["text"] or "").lower()
+                    tag_lc = ",".join(tags).lower()
+                    body_hits = sum(txt.count(t) for t in tokens)
+                    tag_hits = sum(tag_lc.count(t) for t in tokens)
+                    importance = float(r["importance"] or 0)
+                    score_field = float(r["score"] or 0)
+                    score = body_hits + 2 * tag_hits
+                    score *= 0.5 + importance * 0.8
+                    score *= 0.7 + score_field * 0.6
+                    why: list[str] = []
+                    if body_hits > 0:
+                        why.append("keyword_match")
+                    if tag_hits > 0:
+                        why.append("tag_match")
+                    if importance >= 0.7:
+                        why.append("high_importance")
+                    if score_field >= 0.7:
+                        why.append("high_score_field")
+                    recall_count = int(r["recall_count"] or 0)
+                    if short_query and recall_count > 0:
+                        score *= 1.0 + min(0.3, recall_count * 0.03)
+                        why.append("short_query_boost")
+                    if recall_count >= 3:
+                        why.append("high_recall_count")
+                    out["memories"].append({
+                        "id": r["id"],
+                        "kind": "memory",
+                        "abstract": _abstract(r["text"]),
+                        "importance": importance,
+                        "score": round(score, 3),
+                        "why": why,
+                    })
+                out["memories"].sort(key=lambda m: -m["score"])
+                out["memories"] = out["memories"][:limit]
+
+            if "wiki" in include:
+                clause, params = self._like_clause("title", tokens)
+                body_clause, body_params = self._like_clause("body", tokens)
+                sum_clause, sum_params = self._like_clause("summary", tokens)
+                tag_clause, tag_params = self._like_clause("tags", tokens)
+                scope_sql = ""
+                scope_params: list[str] = []
+                if source:
+                    scope_token = self._source_token(source)
+                    if scope_token:
+                        scope_sql = " AND (scope IN ('global', 'all') OR instr(','||scope||',', ?) > 0)"
+                        scope_params.append("," + scope_token + ",")
+                sql = (
+                    "SELECT id, slug, title, summary, importance, tags, updated_at "
+                    "FROM wiki_pages "
+                    f"WHERE ({clause} OR {body_clause} OR {sum_clause} OR {tag_clause})"
+                    f"{scope_sql} "
+                    "ORDER BY importance DESC, updated_at DESC "
+                    "LIMIT ?"
+                )
+                rows = c.execute(
+                    sql,
+                    (*params, *body_params, *sum_params, *tag_params, *scope_params, limit * 3),
+                ).fetchall()
+                for r in rows:
+                    try:
+                        tags = json.loads(r["tags"]) if r["tags"] else []
+                    except Exception:
+                        tags = []
+                    t_lc = (r["title"] or "").lower()
+                    s_lc = (r["summary"] or "").lower()
+                    g_lc = ",".join(tags).lower()
+                    hits = (
+                        sum(t_lc.count(t) for t in tokens) * 5
+                        + sum(s_lc.count(t) for t in tokens) * 3
+                        + sum(g_lc.count(t) for t in tokens) * 2
+                    )
+                    score = hits * (0.5 + float(r["importance"] or 0) * 1.5)
+                    why: list[str] = []
+                    if sum(t_lc.count(t) for t in tokens) > 0:
+                        why.append("title_match")
+                    if sum(s_lc.count(t) for t in tokens) > 0:
+                        why.append("summary_match")
+                    if sum(g_lc.count(t) for t in tokens) > 0:
+                        why.append("tag_match")
+                    if float(r["importance"] or 0) >= 0.7:
+                        why.append("high_importance")
+                    out["wiki"].append({
+                        "id": r["id"],
+                        "slug": r["slug"],
+                        "kind": "wiki",
+                        "abstract": _abstract(r["summary"] or r["title"]),
+                        "importance": float(r["importance"] or 0),
+                        "score": round(score, 3),
+                        "why": why,
+                    })
+                out["wiki"].sort(key=lambda w: -w["score"])
+                out["wiki"] = out["wiki"][:limit]
+
+            if "entities" in include:
+                clause, params = self._like_clause("name", tokens)
+                sql = (
+                    "SELECT id, name, kind, mention_count, weight "
+                    f"FROM entities WHERE {clause} "
+                    "ORDER BY weight DESC, mention_count DESC LIMIT ?"
+                )
+                rows = c.execute(sql, (*params, limit)).fetchall()
+                for r in rows:
+                    n_lc = (r["name"] or "").lower()
+                    hits = sum(n_lc.count(t) for t in tokens)
+                    score = hits * (0.5 + float(r["weight"] or 0) * 1.2 + float(r["mention_count"] or 0) * 0.05)
+                    out["entities"].append({
+                        "id": r["id"],
+                        "name": r["name"],
+                        "kind": "entity",
+                        "entity_kind": r["kind"],
+                        "mention_count": int(r["mention_count"] or 0),
+                        "weight": float(r["weight"] or 0),
+                        "score": round(score, 3),
+                        "why": ["name_match"] if hits > 0 else [],
+                    })
+                out["entities"].sort(key=lambda e: -e["score"])
+                out["entities"] = out["entities"][:limit]
+
+        if bump_signals and out["memories"]:
+            now = _time.time()
+            ids = [m["id"] for m in out["memories"]]
+            with self._conn() as c:
+                for mid in ids:
+                    c.execute(
+                        "INSERT INTO memory_signals (memory_id, recall_count, last_recalled_at, updated_at) "
+                        "VALUES (?, 1, ?, ?) "
+                        "ON CONFLICT(memory_id) DO UPDATE SET "
+                        "recall_count = recall_count + 1, "
+                        "last_recalled_at = excluded.last_recalled_at, "
+                        "updated_at = excluded.updated_at",
+                        (mid, now, now),
+                    )
+        return out
+
+    # ----------------------------------------------------------------
+    # Per-agent identity registry (audit 2026-09-13, Mem0 CLI
+    # `mem0 init --agent` pattern). Each CLI client (codex, claude,
+    # hermes, openclaw, or a user-named custom agent) gets a row so
+    # ``install-hooks`` can bump ``last_seen_at`` on every touch and
+    # ``loop-memory init --agent <name>`` can register a new agent
+    # in one call.
+    # ----------------------------------------------------------------
+    def register_agent(self, name: str, scope: str = "global",
+                       hooks_installed: bool = False) -> dict:
+        """Idempotent. Insert-or-update an ``agents`` row.
+
+        Returns the persisted row as a dict so the CLI / HTTP layer
+        can print a one-line summary without a follow-up read.
+        """
+        name = (name or "").strip()
+        if not name:
+            raise ValueError("agent name must be a non-empty string")
+        scope = (scope or "global").strip() or "global"
+        now = time.time()
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT name, scope, created_at, last_seen_at, hooks_installed "
+                "FROM agents WHERE name=?",
+                (name,),
+            ).fetchone()
+            if row is None:
+                c.execute(
+                    "INSERT INTO agents(name, scope, created_at, last_seen_at, hooks_installed) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (name, scope, now, now, 1 if hooks_installed else 0),
+                )
+                created = True
+                created_at = now
+            else:
+                # Idempotent re-registration: bump ``last_seen_at`` and
+                # honour ``hooks_installed=True`` as a one-way set
+                # (we never flip a True back to False on re-register).
+                hi = int(row["hooks_installed"] or 0) or (1 if hooks_installed else 0)
+                c.execute(
+                    "UPDATE agents SET last_seen_at=?, scope=?, hooks_installed=? WHERE name=?",
+                    (now, scope, hi, name),
+                )
+                created = False
+                created_at = float(row["created_at"] or now)
+            row = c.execute(
+                "SELECT name, scope, created_at, last_seen_at, hooks_installed "
+                "FROM agents WHERE name=?",
+                (name,),
+            ).fetchone()
+        return {
+            "name": row["name"],
+            "scope": row["scope"],
+            "created_at": float(row["created_at"] or 0),
+            "last_seen_at": float(row["last_seen_at"] or 0),
+            "hooks_installed": int(row["hooks_installed"] or 0),
+            "created": created,
+            "created_at_iso": created_at,
+        }
+
+    def list_agents(self) -> list[dict]:
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT name, scope, created_at, last_seen_at, hooks_installed "
+                "FROM agents ORDER BY last_seen_at DESC, name ASC"
+            ).fetchall()
+        return [
+            {
+                "name": r["name"],
+                "scope": r["scope"],
+                "created_at": float(r["created_at"] or 0),
+                "last_seen_at": float(r["last_seen_at"] or 0),
+                "hooks_installed": int(r["hooks_installed"] or 0),
+            }
+            for r in rows
+        ]
+
+    def touch_agent(self, name: str) -> None:
+        """Bump ``last_seen_at`` for ``name`` if the row exists.
+
+        Called by ``install-hooks`` so the per-agent index stays fresh
+        without re-running the full ``register_agent`` flow. Silently
+        no-ops on unknown agents so callers can pass any name without
+        having to check first.
+        """
+        name = (name or "").strip()
+        if not name:
+            return
+        with self._conn() as c:
+            c.execute(
+                "UPDATE agents SET last_seen_at=? WHERE name=?",
+                (time.time(), name),
+            )
 
     # ----------------------------------------------------------------
     # Hybrid recall: BM25 (FTS5) + semantic (cosine) + entity overlap
