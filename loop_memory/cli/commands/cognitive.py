@@ -108,6 +108,17 @@ def _build_parser() -> argparse.ArgumentParser:
     rs.add_argument("in_path",
                     help="Source .memory.sqlite file")
 
+    # Audit 2026-09-20: OKF v0.2 bundle export
+    # (akitaonrails/ai-memory 2.0 + okf-memory/okf-agent-memory +
+    # Google OKF v0.2 spec).
+    eo = sub.add_parser(
+        "export-okf",
+        help="Export wiki pages as an OKF v0.2 markdown bundle")
+    eo.add_argument("out_dir",
+                    help="Destination directory for the bundle")
+    eo.add_argument("--scope", default=None,
+                    help="Filter: 'global' or a single source token (e.g. codex)")
+
     return p
 
 
@@ -342,3 +353,25 @@ def run_restore(args: list) -> int:
         return _emit(_restore(s, ns.in_path))
     except (FileNotFoundError, ValueError) as e:
         return _emit({"error": str(e)})
+
+
+def run_export_okf(args) -> int:
+    """``loop-memory export-okf <out_dir> [--scope SCOPE]``
+
+    Audit 2026-09-20: OKF v0.2 bundle export
+    (akitaonrails/ai-memory 2.0 + okf-memory/okf-agent-memory +
+    Google OKF v0.2 spec). Returns a summary dict with the bundle
+    root + per-page list so the caller can confirm the bundle is
+    sane. ``--scope`` accepts ``global`` (only globally-scoped
+    pages) or a single source token (only pages whose scope list
+    contains the token); omit the flag to emit every page.
+    """
+    import argparse as _ap
+    p = _ap.ArgumentParser(prog="loop-memory export-okf")
+    p.add_argument("out_dir")
+    p.add_argument("--scope", default=None)
+    p.add_argument("--db", default=os.environ.get("LOOP_MEMORY_DB", DEFAULT_DB))
+    ns = p.parse_args(args)
+    s = MemoryStore(ns.db)
+    r = s.export_okf(ns.out_dir, scope_filter=ns.scope)
+    return _emit(r)

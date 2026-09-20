@@ -51,13 +51,17 @@ def run_stats(_args) -> int:
 
 
 def run_recall(args) -> int:
-    """Run ``loop-memory recall <query> [--verbose] [--limit N]``.
+    """Run ``loop-memory recall <query> [--verbose] [--outline] [--as-of T] [--limit N]``.
 
     With ``--verbose`` each memory hit is annotated with the
     ``why: [...]`` provenance labels produced by ``MemoryStore.recall``
-    (audit 2026-08-30, agentmemory v1.2.0 pattern). The wiki and
-    entity sections are unchanged — only the raw-memory block grows
-    the new line.
+    (audit 2026-08-30, agentmemory v1.2.0 pattern). ``--outline``
+    switches to the L0 list (audit 2026-09-13, tigerless-labs/
+    agent-memory v0.3.0). ``--as-of <float-or-ISO>`` enables
+    bi-temporal recall (audit 2026-09-20, loomcycle v1.33+) so a
+    caller can ask "what did we know about this query at that
+    moment?". The wiki and entity sections are unchanged — only
+    the raw-memory block grows the new line.
     """
     from ...storage.sqlite_store import MemoryStore
     if not args:
@@ -68,6 +72,7 @@ def run_recall(args) -> int:
     verbose = False
     outline = False
     limit = 10
+    as_of: float | None = None
     qargs: list[str] = []
     i = 0
     while i < len(args):
@@ -81,6 +86,24 @@ def run_recall(args) -> int:
             # routes the call to ``recall_paths`` below.
             outline = True
             i += 1
+        elif a == "--as-of" and i + 1 < len(args):
+            # Audit 2026-09-20 (loomcycle v1.33+) — bi-temporal
+            # recall: "what did we know about this query at that
+            # moment?". Accepts float epoch OR ISO-8601 string.
+            raw = args[i + 1].strip()
+            try:
+                as_of = float(raw)
+            except ValueError:
+                try:
+                    from datetime import datetime
+                    as_of = datetime.fromisoformat(
+                        raw.replace("Z", "+00:00")
+                    ).timestamp()
+                except Exception:
+                    return die(
+                        f"--as-of must be float epoch or ISO-8601; got {raw!r}"
+                    )
+            i += 2
         elif a == "--limit" and i + 1 < len(args):
             try:
                 limit = int(args[i + 1])
@@ -93,10 +116,15 @@ def run_recall(args) -> int:
             qargs.append(a)
             i += 1
     if not qargs:
-        return die("usage: loop-memory recall <query> [--verbose] [--outline] [--limit N]")
+        return die("usage: loop-memory recall <query> [--verbose] [--outline] [--as-of <ISO|epoch>] [--limit N]")
     store = MemoryStore(default_db_path())
     query = " ".join(qargs)
-    if outline:
+    if as_of is not None:
+        try:
+            r = store.recall_as_of(query, as_of, limit=limit)
+        except ValueError as e:
+            return die(str(e))
+    elif outline:
         r = store.recall_paths(query, limit=limit)
     else:
         r = store.recall(query, limit=limit)

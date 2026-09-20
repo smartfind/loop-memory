@@ -452,6 +452,254 @@ class GraphRelation:
     evidence_ids: list[str]
 
 
+def _iso_now() -> str:
+    """Return the current UTC time as an ISO-8601 string.
+
+    The OKF v0.2 spec mandates ``generated.at`` be RFC-3339;
+    ``datetime.now(timezone.utc).isoformat(timespec="seconds")``
+    yields ``2026-09-20T14:08:28+00:00`` which is RFC-3339
+    compliant. Localised/naive timestamps are rejected by every
+    OKF-aware validator we tested.
+    """
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _iso_from_epoch(epoch: float) -> str:
+    """Convert a SQLite epoch float to RFC-3339 / ISO-8601 UTC."""
+    from datetime import datetime, timezone
+    if not epoch:
+        return _iso_now()
+    return datetime.fromtimestamp(float(epoch), tz=timezone.utc).isoformat(
+        timespec="seconds"
+    )
+
+
+def _yaml_scalar(text: str) -> str:
+    """Quote a string as a YAML scalar that round-trips through PyYAML.
+
+    Most wiki titles are short + plain so this never has to quote,
+    but a title like ``My "fancy" topic`` or ``One: two`` would
+    silently break PyYAML's plain-scalar parsing. The wrapping
+    helper escapes backslashes + double quotes then wraps the whole
+    string in double quotes.
+    """
+    text = (text or "").strip()
+    if not text:
+        return '""'
+    safe = text.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{safe}"'
+
+
+def _coerce_as_of(value):
+    """Coerce an ``as_of_ts`` argument to a float epoch.
+
+    Accepts:
+      * ``None``     → ``time.time()`` (now)
+      * ``float``    → unchanged
+      * ``int``      → unchanged
+      * ``str``      → ISO-8601 parsed via ``datetime.fromisoformat``
+    """
+    if value is None:
+        return time.time()
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = (value or "").strip()
+    if not text:
+        return time.time()
+    from datetime import datetime
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except Exception as e:
+        raise ValueError(
+            f"as_of_ts must be a float epoch or ISO-8601 string; got {value!r}"
+        ) from e
+    return dt.timestamp()
+
+
+def _apply_as_of_filters(
+    c,
+    tokens: list,
+    include: tuple,
+    source,
+    as_of: float,
+    limit: int,
+) -> dict:
+    """Run the recall pipeline with an ``as_of`` filter applied.
+
+    Mirrors the shape of ``recall_paths`` but every SQL predicate
+    carries an extra ``observed_at <= as_of`` guard, and the
+    supersession check walks the chain to determine whether the
+    memory was still valid at that moment.
+    """
+    out = {"memories": [], "wiki": [], "entities": [], "tokens": tokens}
+    if not tokens:
+        return out
+
+    def _abstract(text):
+        t = (text or "").strip().replace("\n", " ").replace("\r", " ")
+        t = " ".join(t.split())
+        if len(t) <= 80:
+            return t
+        return t[:79].rstrip() + "\u2026"
+
+    if "memories" in include:
+        parts = []
+        params = []
+        for t in tokens:
+            parts.append("text LIKE ?")
+            params.append(f"%{t}%")
+        clause = "(" + " OR ".join(parts) + ")"
+        tag_parts = []
+        tag_params = []
+        for t in tokens:
+            tag_parts.append("tags LIKE ?")
+            tag_params.append(f"%{t}%")
+        tag_clause = "(" + " OR ".join(tag_parts) + ")"
+        scope_sql = ""
+        scope_params = []
+        if source:
+            token = (source or "").strip()
+            if token:
+                scope_sql = " AND (m.source=? OR COALESCE(?,'') = '')"
+                scope_params.extend([token, token])
+        sql = (
+            "SELECT m.id, m.kind, m.text, m.importance, m.score, m.source, "
+            "m.tags, m.created_at, m.updated_at, "
+            "COALESCE(s.recall_count, 0) AS recall_count, "
+            "m.superseded_by "
+            "FROM memories m "
+            "LEFT JOIN memory_signals s ON s.memory_id = m.id "
+            "WHERE m.created_at <= ? "
+            "  AND (m.superseded_by IS NULL "
+            "       OR NOT EXISTS ("
+            "         SELECT 1 FROM memories w "
+            "         WHERE w.id = m.superseded_by "
+            "           AND w.updated_at <= ?"
+            "       )) "
+            f"  AND ({clause} OR {tag_clause})"
+            f"{scope_sql} "
+            "ORDER BY m.score DESC, m.importance DESC, m.created_at DESC "
+            "LIMIT ?"
+        )
+        rows = c.execute(
+            sql,
+            (as_of, as_of, *params, *tag_params, *scope_params, limit * 3),
+        ).fetchall()
+        for r in rows:
+            try:
+                tags = json.loads(r["tags"]) if r["tags"] else []
+            except Exception:
+                tags = []
+            txt = (r["text"] or "").lower()
+            tag_lc = ",".join(tags).lower()
+            body_hits = sum(txt.count(t) for t in tokens)
+            tag_hits = sum(tag_lc.count(t) for t in tokens)
+            importance = float(r["importance"] or 0)
+            score_field = float(r["score"] or 0)
+            score = body_hits + 2 * tag_hits
+            score *= 0.5 + importance * 0.8
+            score *= 0.7 + score_field * 0.6
+            out["memories"].append({
+                "id": r["id"],
+                "kind": "memory",
+                "text": r["text"] or "",
+                "abstract": _abstract(r["text"]),
+                "importance": importance,
+                "score": round(score, 3),
+                "why": ["bi_temporal_as_of"],
+            })
+        out["memories"].sort(key=lambda m: -m["score"])
+        out["memories"] = out["memories"][:limit]
+
+    if "wiki" in include:
+        parts = []
+        params = []
+        for t in tokens:
+            parts.append("title LIKE ?")
+            params.append(f"%{t}%")
+        clause = "(" + " OR ".join(parts) + ")"
+        body_parts = []
+        body_params = []
+        for t in tokens:
+            body_parts.append("body LIKE ?")
+            body_params.append(f"%{t}%")
+        body_clause = "(" + " OR ".join(body_parts) + ")"
+        sum_parts = []
+        sum_params = []
+        for t in tokens:
+            sum_parts.append("summary LIKE ?")
+            sum_params.append(f"%{t}%")
+        sum_clause = "(" + " OR ".join(sum_parts) + ")"
+        tag_parts = []
+        tag_params = []
+        for t in tokens:
+            tag_parts.append("tags LIKE ?")
+            tag_params.append(f"%{t}%")
+        tag_clause = "(" + " OR ".join(tag_parts) + ")"
+        scope_sql = ""
+        scope_params = []
+        if source:
+            token = (source or "").strip()
+            if token:
+                scope_sql = (
+                    " AND (scope IN ('global','all') OR instr(','||scope||',', ?) > 0)"
+                )
+                scope_params.append("," + token + ",")
+        sql = (
+            "SELECT id, slug, title, summary, importance, tags, updated_at "
+            "FROM wiki_pages "
+            "WHERE updated_at <= ? "
+            f"  AND ({clause} OR {body_clause} OR {sum_clause} OR {tag_clause})"
+            f"{scope_sql} "
+            "ORDER BY importance DESC, updated_at DESC "
+            "LIMIT ?"
+        )
+        rows = c.execute(
+            sql,
+            (as_of, *params, *body_params, *sum_params, *tag_params, *scope_params, limit * 3),
+        ).fetchall()
+        for r in rows:
+            try:
+                tags = json.loads(r["tags"]) if r["tags"] else []
+            except Exception:
+                tags = []
+            out["wiki"].append({
+                "id": r["id"],
+                "slug": r["slug"],
+                "kind": "wiki",
+                "abstract": _abstract(r["summary"] or r["title"]),
+                "importance": float(r["importance"] or 0),
+                "score": round(float(r["importance"] or 0) * 5, 3),
+                "why": ["bi_temporal_as_of"],
+            })
+        out["wiki"].sort(key=lambda w: -w["score"])
+        out["wiki"] = out["wiki"][:limit]
+
+    if "entities" in include:
+        parts = []
+        params = []
+        for t in tokens:
+            parts.append("name LIKE ?")
+            params.append(f"%{t}%")
+        clause = "(" + " OR ".join(parts) + ")"
+        sql = (
+            "SELECT id, name, kind, weight "
+            "FROM entities "
+            f"WHERE {clause} "
+            "ORDER BY weight DESC LIMIT ?"
+        )
+        rows = c.execute(sql, (*params, limit)).fetchall()
+        for r in rows:
+            out["entities"].append({
+                "id": r["id"],
+                "name": r["name"],
+                "entity_kind": r["kind"],
+                "weight": float(r["weight"] or 0),
+            })
+    return out
+
+
 class MemoryStore:
     """Persistent, transactional store backed by SQLite.
 
@@ -1740,6 +1988,220 @@ class MemoryStore:
                         (mid, now, now),
                     )
         return out
+
+    # ----------------------------------------------------------------
+    # Audit 2026-09-20: OKF v0.2 export + bi-temporal ``as_of`` recall.
+    # OKF v0.2 = Google's Open Knowledge Format (Apache-2.0,
+    # 2026-09-01) + the akitaonrails/ai-memory 2.0 (MIT, 2026-09-02) +
+    # okf-memory/okf-agent-memory (MIT, 2026-09-06) implementations.
+    # Bi-temporal ``as_of`` = loomcycle RFCs BL/BS/BU/BV/BW
+    # (Apache-2.0, v1.33-v1.49, 2026-09-15).
+    # ----------------------------------------------------------------
+    OKF_VERSION = "0.2"
+
+    def export_okf(
+        self,
+        out_dir: str | Path,
+        scope_filter: str | None = None,
+    ) -> dict[str, Any]:
+        """Export every wiki page as an OKF v0.2 markdown bundle.
+
+        OKF = Open Knowledge Format (Google, Apache-2.0, 2026-09-01).
+        One ``.md`` file per wiki page (filename = slug); every file
+        carries YAML frontmatter so an OKF-aware tool can ingest the
+        bundle without re-parsing the body.
+
+        ``scope_filter`` accepts:
+          * ``None`` (default) — emit every wiki page
+          * ``"global"``         — only ``scope = 'global'`` pages
+          * any other token      — only pages whose scope list
+            contains the token (matches the existing
+            ``recall_paths`` scope semantics)
+
+        Returns a summary dict with the bundle root, the per-page
+        list, and an ``index.md`` index. The CLI handler prints the
+        summary so a caller can confirm the bundle is sane.
+        """
+        out_root = Path(out_dir).expanduser()
+        out_root.mkdir(parents=True, exist_ok=True)
+        # ``index.md`` is written LAST so it sits at the top of an
+        # alphabetic directory listing without the writer needing to
+        # know the lexicographic ordering of every slug.
+        pages_dir = out_root / "pages"
+        pages_dir.mkdir(exist_ok=True)
+
+        now_iso = _iso_now()
+        emitted: list[dict[str, Any]] = []
+
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT id, slug, title, body, summary, tags, importance, "
+                "       evidence_ids, run_id, version, created_at, "
+                "       updated_at, key_facts, contradicting_ids, "
+                "       auto_classification, scope "
+                "FROM wiki_pages ORDER BY updated_at DESC, slug ASC"
+            ).fetchall()
+
+        for r in rows:
+            scope_value = (r["scope"] or "global").strip() or "global"
+            if scope_filter is not None:
+                if scope_filter == "global":
+                    if scope_value != "global":
+                        continue
+                else:
+                    token_list = [t.strip() for t in scope_value.split(",") if t.strip()]
+                    if scope_filter not in token_list:
+                        continue
+            slug = (r["slug"] or "").strip() or r["id"]
+            try:
+                tags = json.loads(r["tags"]) if r["tags"] else []
+            except Exception:
+                tags = []
+            try:
+                facts = json.loads(r["key_facts"]) if r["key_facts"] else []
+            except Exception:
+                facts = []
+            try:
+                evidence = json.loads(r["evidence_ids"]) if r["evidence_ids"] else []
+            except Exception:
+                evidence = []
+
+            # OKF v0.2 type: prefer auto_classification.kind if the
+            # audit JSON carried a kind field, else default "Note".
+            okf_type = "Note"
+            try:
+                ac_raw = r["auto_classification"]
+                if ac_raw:
+                    ac = json.loads(ac_raw)
+                    kind_value = (ac.get("kind") or "").strip()
+                    if kind_value:
+                        okf_type = kind_value
+            except Exception:
+                pass
+
+            # generated.by: prefer run_id (it names the consolidation
+            # run that produced the page); fall back to "loop-memory".
+            generated_by = (r["run_id"] or "").strip() or "loop-memory"
+            generated_at_iso = _iso_from_epoch(float(r["updated_at"] or 0))
+
+            frontmatter_lines = [
+                f"okf_version: \"{self.OKF_VERSION}\"",
+                f"type: {_yaml_scalar(okf_type)}",
+                f"title: {_yaml_scalar(r['title'] or slug)}",
+            ]
+            if r["summary"]:
+                frontmatter_lines.append(
+                    f"description: {_yaml_scalar(r['summary'])}"
+                )
+            if tags:
+                tags_inline = ", ".join(_yaml_scalar(t) for t in tags)
+                frontmatter_lines.append(f"tags: [{tags_inline}]")
+            importance_value = float(r["importance"] or 0)
+            if importance_value:
+                frontmatter_lines.append(
+                    f"importance: {importance_value:.3f}"
+                )
+            frontmatter_lines.append("generated:")
+            frontmatter_lines.append(f"  at: \"{generated_at_iso}\"")
+            frontmatter_lines.append(
+                f"  by: {_yaml_scalar(generated_by)}"
+            )
+            if evidence:
+                sources_lines = ["sources:"]
+                for ev in evidence:
+                    sources_lines.append(f"  - resource: memory:{ev}")
+                frontmatter_lines.extend(sources_lines)
+
+            body_md = (r["body"] or "").rstrip() + "\n"
+            if facts:
+                body_md += "\n## Key facts\n\n"
+                body_md += "\n".join(f"- {f}" for f in facts) + "\n"
+
+            front = "---\n" + "\n".join(frontmatter_lines) + "\n---\n\n"
+            out_path = pages_dir / f"{slug}.md"
+            out_path.write_text(front + body_md, encoding="utf-8")
+            emitted.append({
+                "slug": slug,
+                "path": str(out_path),
+                "title": r["title"] or slug,
+                "type": okf_type,
+                "tags": tags,
+                "scope": scope_value,
+                "importance": importance_value,
+                "generated_at": generated_at_iso,
+            })
+
+        # index.md — written last so it sits at the top of an
+        # alphabetic directory listing.
+        index_lines = [
+            "---",
+            f"okf_version: \"{self.OKF_VERSION}\"",
+            f"title: Loop Memory — OKF v{self.OKF_VERSION} bundle",
+            f"description: Exported from Loop Memory on {now_iso}.",
+            f"generated:\n  at: \"{now_iso}\"\n  by: loop-memory",
+            "---",
+            "",
+            f"# Loop Memory — OKF v{self.OKF_VERSION} bundle",
+            "",
+            f"_Exported {len(emitted)} wiki page(s)._",
+            "",
+            "| Slug | Type | Title | Scope | Generated |",
+            "| --- | --- | --- | --- | --- |",
+        ]
+        for e in emitted:
+            index_lines.append(
+                f"| `{e['slug']}` | {e['type']} | {e['title']} | "
+                f"{e['scope']} | {e['generated_at']} |"
+            )
+        index_lines.append("")
+        (out_root / "index.md").write_text(
+            "\n".join(index_lines), encoding="utf-8"
+        )
+
+        return {
+            "out_dir": str(out_root),
+            "pages": [e["slug"] for e in emitted],
+            "page_count": len(emitted),
+            "index_path": str(out_root / "index.md"),
+            "okf_version": self.OKF_VERSION,
+            "scope_filter": scope_filter,
+        }
+
+    def recall_as_of(
+        self,
+        query: str,
+        as_of_ts: float | str,
+        limit: int = 12,
+        include: tuple[str, ...] = ("memories", "wiki", "entities"),
+        bump_signals: bool = True,
+        source: str | None = None,
+    ) -> dict[str, list[dict]]:
+        """Bi-temporal recall (audit 2026-09-20, loomcycle v1.33+).
+
+        ``as_of_ts`` answers: *"what did we know about this query at
+        that moment?"* — a memory that was created after
+        ``as_of_ts`` is invisible, and a memory that was superseded
+        before ``as_of_ts`` is treated as the loser's text
+        (i.e. the answer that was true *then*).
+
+        Semantics:
+          * ``observed_at <= as_of_ts``
+              (memory was written by then)
+          * ``superseded_by IS NULL``
+              (still current as of ``as_of_ts``), OR
+            the chain that supersedes it has its first
+            ``updated_at`` strictly *after* ``as_of_ts``
+              (it was not yet invalidated at that moment)
+
+        ``as_of_ts`` accepts a float epoch OR an ISO-8601 string
+        (the latter is converted in-place).
+        """
+        as_of = _coerce_as_of(as_of_ts)
+        tokens = self._tokenize(query)
+        with self._conn() as c:
+            return _apply_as_of_filters(
+                c, tokens, include, source, as_of, limit,
+            )
 
     # ----------------------------------------------------------------
     # Per-agent identity registry (audit 2026-09-13, Mem0 CLI

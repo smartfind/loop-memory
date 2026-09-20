@@ -350,7 +350,8 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None,
     @app.get("/api/recall")
     def recall(query: str, limit: int = 10, include: str = "memories,wiki,entities",
               bump: int = 1, source: str | None = None,
-              mode: str = "hybrid", level: int = 1):
+              mode: str = "hybrid", level: int = 1,
+              as_of: str | None = None):
         """Unified recall — wiki + memories + entities in one ranked stream.
 
         ``mode`` is 'hybrid' (default) for BM25+semantic+entity RRF,
@@ -363,11 +364,31 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None,
         and memories whose source matches this token are boosted. The
         dashboard passes the currently-active client (codex/claude/
         hermes/openclaw); the MCP/CLI tools pass the calling client.
+
+        ``as_of`` (audit 2026-09-20, loomcycle v1.33+) enables
+        bi-temporal recall: a float epoch OR an ISO-8601 string that
+        answers "what did we know about this query at that moment?".
+        When unset (default) the call returns the latest answer
+        (preserves the pre-0.4.9 contract). When set, the call
+        routes through ``MemoryStore.recall_as_of``.
         """
         wanted = tuple(s.strip() for s in include.split(",") if s.strip())
         if not wanted:
             wanted = ("memories", "wiki", "entities")
-        if mode == "legacy" or not hasattr(store, "recall_hybrid"):
+        if as_of is not None and str(as_of).strip():
+            try:
+                r = store.recall_as_of(
+                    query,
+                    as_of,
+                    limit=limit,
+                    include=wanted,
+                    bump_signals=bool(bump),
+                    source=source,
+                )
+                recall_mode = "as_of"
+            except ValueError as e:
+                raise HTTPException(400, str(e))
+        elif mode == "legacy" or not hasattr(store, "recall_hybrid"):
             r = store.recall(
                 query,
                 limit=limit,
@@ -375,22 +396,53 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None,
                 bump_signals=bool(bump),
                 source=source,
             )
+            recall_mode = mode
         else:
             r = store.recall_hybrid(
                 query, limit=limit, include=wanted,
                 bump_signals=bool(bump), source=source, level=level,
             )
+            recall_mode = mode
         return {
             "query": query,
             "tokens": r.get("tokens", []),
             "memories": r.get("memories", []),
             "wiki": r.get("wiki", []),
             "entities": r.get("entities", []),
-            "mode": mode,
+            "mode": recall_mode,
             "source": source,
             "level": level,
+            "as_of": as_of,
         }
 
+
+    @app.post("/api/export/okf")
+    def export_okf(body: dict):
+        """Audit 2026-09-20: OKF v0.2 bundle export.
+
+        Body shape::
+
+            {
+              "out_dir": "/abs/path/to/out",
+              "scope":   "global"   # optional: "global" or a source token
+            }
+
+        Writes one ``.md`` file per wiki page under
+        ``<out_dir>/pages/<slug>.md`` plus an ``index.md`` index.
+        See ``MemoryStore.export_okf`` for the field-mapping
+        contract.
+        """
+        out_dir = (body.get("out_dir") or "").strip()
+        if not out_dir:
+            raise HTTPException(400, "out_dir is required")
+        scope = body.get("scope")
+        if scope is not None:
+            scope = str(scope).strip() or None
+        try:
+            r = store.export_okf(out_dir, scope_filter=scope)
+        except Exception as e:
+            raise HTTPException(500, f"export-okf failed: {e}")
+        return r
 
     @app.get("/api/recall/outline")
     def recall_outline(query: str = "", limit: int = 12,

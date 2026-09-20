@@ -41,12 +41,13 @@ appropriate 4xx/5xx status.
 | GET | `/api/sessions/counts` | Session counts grouped by source |
 | GET | `/api/sessions/{session_id}/memories` | Memories of one session |
 | GET | `/api/memories` | List memories (filter by `source`, `session_id`, `min_score`, `limit`, `offset`) |
-| GET | `/api/recall` | Top-K recall for a query (`?q=…&k=10`). Each memory hit carries a `why: [...]` provenance list naming the scoring signals that contributed (`keyword_match`, `tag_match`, `high_importance`, `high_score_field`, `high_recall_count`, `short_query_boost`) since 0.4.6. Superseded memories are filtered out; the chain is queryable via `/api/v1/cognitive/audit/supersede`. |
+| GET | `/api/recall` | Top-K recall for a query (`?q=…&k=10`). Each memory hit carries a `why: [...]` provenance list naming the scoring signals that contributed (`keyword_match`, `tag_match`, `high_importance`, `high_score_field`, `high_recall_count`, `short_query_boost`) since 0.4.6. Superseded memories are filtered out; the chain is queryable via `/api/v1/cognitive/audit/supersede`. Since 0.4.9 the `as_of` query param enables bi-temporal recall (loomcycle v1.33+): a float epoch or ISO-8601 string that answers "what did we know about this query at that moment?". When set, the response carries `mode: "as_of"` so a caller can tell apart legacy/hybrid/as_of. |
 | GET | `/api/recall/outline` | L0 outline recall (since 0.4.8, tigerless-labs/agent-memory v0.3.0 recall-ladder pattern). Same ranked lists as `/api/recall` but each hit carries only `id` + `kind` + `abstract` (≤ 80 chars) + `score` + `why` — never the full body. Use this when an agent needs to *decide* which candidate to open; fetch the body via `/api/memories/{id}` once committed. `bump` defaults to 0 so the L0 listing does not inflate `recall_count`. |
 | GET | `/api/llm-audit` | Recent LLM calls + token usage |
 | GET | `/api/write-guard` | Write-guard rail status |
 | GET | `/api/wiki` | List wiki pages |
 | GET | `/api/wiki/{page_id}` | Single wiki page (full body, evidence, tags) |
+| POST | `/api/export/okf` | OKF v0.2 bundle export (since 0.4.9, Google OKF v0.2 spec + akitaonrails/ai-memory 2.0 + okf-memory/okf-agent-memory). Body: `{ "out_dir": "...", "scope": "global" | "<source>"? }`. Writes one `.md` file per wiki page under `<out_dir>/pages/<slug>.md` plus an `index.md` index, with YAML frontmatter on every page so an OKF-aware tool can ingest the bundle without re-parsing the body. Returns `{ out_dir, pages, page_count, index_path, okf_version, scope_filter }`. |
 | GET | `/api/wiki/export` | Bulk export (`?format=markdown|json`) |
 | GET | `/api/wiki/{page_id}/export` | Single-page export with context |
 | GET | `/api/admin/llm/providers` | Registered provider specs |

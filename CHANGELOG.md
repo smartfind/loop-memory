@@ -1,5 +1,47 @@
 ## [Unreleased]
 
+## [0.4.9] - 2026-09-20
+
+### patch
+
+- **OKF v0.2 bundle export** (audit 2026-09-20,
+  Google OKF v0.2 spec, Apache-2.0, 2026-09-01 +
+  akitaonrails/ai-memory 2.0, MIT, 2026-09-02 +
+  okf-memory/okf-agent-memory, MIT, 2026-09-06).
+  `MemoryStore.export_okf(out_dir, scope_filter=None)`
+  writes one `.md` file per wiki page under
+  `<out_dir>/pages/<slug>.md` plus an `index.md`
+  index, with YAML frontmatter on every page so an
+  OKF-aware tool can ingest the bundle without
+  re-parsing the body. Field mapping:
+  `wiki_pages.title` → `title`, `wiki_pages.summary`
+  → `description`, `wiki_pages.tags` → `tags`,
+  `wiki_pages.updated_at` → `generated.at`,
+  `wiki_pages.run_id` (or `loop-memory`) →
+  `generated.by`, `wiki_pages.evidence_ids` →
+  `sources[].resource`, `auto_classification.kind`
+  → `type`. CLI surface:
+  `loop-memory export-okf <out_dir> [--scope SCOPE]`.
+  HTTP route: `POST /api/export/okf`.
+
+- **Bi-temporal `as_of` recall** (audit 2026-09-20,
+  loomcycle v1.33-v1.49, Apache-2.0, 2026-09-15,
+  RFCs BL/BS/BU/BV/BW).
+  `MemoryStore.recall_as_of(query, as_of_ts, ...)`
+  answers the bi-temporal question "what did we
+  know about this query at that moment?" —
+  memories created after `as_of_ts` are invisible,
+  and a superseded memory walks its `superseded_by`
+  chain to determine whether the invalidation had
+  happened by then. `as_of_ts` accepts a float epoch
+  OR an ISO-8601 string. CLI surface:
+  `loop-memory recall <q> --as-of <ISO|epoch>`.
+  HTTP route: `GET /api/recall?as_of=...` (when
+  set, the response carries `mode: "as_of"` so a
+  caller can tell apart legacy/hybrid/as_of).
+  Pre-0.4.9 contract is preserved byte-for-byte
+  when the param is absent.
+
 ## [0.4.8] - 2026-09-13
 
 ### patch

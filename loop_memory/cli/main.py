@@ -125,6 +125,9 @@ COMMANDS = {
     # Audit 2026-09-13 — L0 outline recall + per-agent identity bootstrap.
     "recall-paths": read_cmd.run_recall_paths,
     "init": hooks_cmd.run_init,
+    # Audit 2026-09-20 — OKF v0.2 export (akitaonrails/ai-memory 2.0
+    # + okf-agent-memory + Google OKF spec).
+    "export-okf": cognitive_cmd.run_export_okf,
     "rules": rules_cmd.run_rules,
     "version": _run_version,
 }
@@ -158,7 +161,7 @@ COMMAND_HELP: dict[str, str] = {
     "install-hooks":          "loop-memory install-hooks   # auto-write MCP + SessionStart hooks for known clients.",
     "mcp":                    "loop-memory mcp   # stdio MCP server (for codex/claude/hermes). Requires ``[serve]`` for HTTP transport.",
     "openclaw-setup":         "loop-memory openclaw-setup   # install the openclaw/clawx auto-ingest watcher (launchd on macOS).",
-    "recall":                 "loop-memory recall <text>   # show top memories.",
+    "recall":                 "loop-memory recall <text> [--as-of <ISO|epoch>]   # show top memories (--as-of = bi-temporal recall).",
     "rescore":                "loop-memory rescore [--half-life 30]   # recompute memory scores.",
     "serve":                  "loop-memory serve [--port 7767] [--no-browser]   # start the local web UI. Requires the ``[serve]`` extra (fastapi + uvicorn).",
     "stats":                  "loop-memory stats   # counters.",
@@ -168,6 +171,7 @@ COMMAND_HELP: dict[str, str] = {
     "wiki-reclassify-legacy": "loop-memory wiki-reclassify-legacy   # back-fill scope + scope_filter for H4+H5 pages.",
     "memory-stats":           "loop-memory memory-stats <id> [--prefix]   # per-memory lifetime stats (audit 2026-09-06, agentmemory v1.3.0).",
     "snapshot":               "loop-memory snapshot <out.memory.sqlite>   # write a portable SQLite snapshot (audit 2026-09-06, codexa-memory v0.2.0).",
+    "export-okf":             "loop-memory export-okf <out_dir> [--scope S]   # write an OKF v0.2 bundle (audit 2026-09-20).",
     "restore":                "loop-memory restore <in.memory.sqlite>   # re-hydrate a portable SQLite snapshot.",
     # Audit 2026-09-13 — L0 outline recall (tigerless-labs/agent-memory v0.3.0).
     "recall-paths":           "loop-memory recall-paths <query> [--limit N]   # cheap L0 outline (id+abstract+score) instead of full text (audit 2026-09-13).",
