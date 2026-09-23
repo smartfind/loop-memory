@@ -335,6 +335,10 @@ class LLMConsolidator:
         self._cache: dict[str, str] = {}  # batch hash -> LLM reply
         self._cache_ttl = 300.0
         self._cache_ts: dict[str, float] = {}
+        # Audit 2026-09-23: cap the in-process LLM response cache so a
+        # long-running consolidation pass cannot leak memory. Same FIFO
+        # eviction as ``EvolutionRunner._MAX_CACHE_SIZE``.
+        self._MAX_CACHE_SIZE = 256
 
     # --- public -----------------------------------------------------------
 
@@ -620,6 +624,16 @@ class LLMConsolidator:
                 ) or ""
                 self._cache[cache_key] = reply
                 self._cache_ts[cache_key] = now
+                # Bound the cache: drop oldest entries when we exceed
+                # the cap (FIFO via _cache_ts).
+                if len(self._cache) > self._MAX_CACHE_SIZE:
+                    ordered = sorted(
+                        self._cache_ts.items(), key=lambda kv: kv[1]
+                    )
+                    evict_count = len(self._cache) - self._MAX_CACHE_SIZE
+                    for old_key, _ in ordered[:evict_count]:
+                        self._cache.pop(old_key, None)
+                        self._cache_ts.pop(old_key, None)
                 stats.llm_calls += 1
             except Exception as e:
                 stats.notes.append(f"wiki llm error: {type(e).__name__}: {e}")
@@ -863,6 +877,16 @@ class LLMConsolidator:
                 stats.llm_calls += 1
                 self._cache[cache_key] = reply
                 self._cache_ts[cache_key] = now
+                # Bound the cache: drop oldest entries when we exceed
+                # the cap (FIFO via _cache_ts).
+                if len(self._cache) > self._MAX_CACHE_SIZE:
+                    ordered = sorted(
+                        self._cache_ts.items(), key=lambda kv: kv[1]
+                    )
+                    evict_count = len(self._cache) - self._MAX_CACHE_SIZE
+                    for old_key, _ in ordered[:evict_count]:
+                        self._cache.pop(old_key, None)
+                        self._cache_ts.pop(old_key, None)
             except Exception as e:
                 log.warning("LLM call failed: %s", e)
                 stats.notes.append(f"llm error in batch: {type(e).__name__}: {e}")

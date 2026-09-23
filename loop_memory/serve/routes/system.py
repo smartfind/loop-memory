@@ -430,8 +430,10 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None,
         Writes one ``.md`` file per wiki page under
         ``<out_dir>/pages/<slug>.md`` plus an ``index.md`` index.
         See ``MemoryStore.export_okf`` for the field-mapping
-        contract.
+        contract. Audit 2026-09-23: ``out_dir`` is rejected if it
+        points at the live store or a system / sensitive directory.
         """
+        from ._shared import _safe_resolve_path as _safe_path
         out_dir = (body.get("out_dir") or "").strip()
         if not out_dir:
             raise HTTPException(400, "out_dir is required")
@@ -439,7 +441,11 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None,
         if scope is not None:
             scope = str(scope).strip() or None
         try:
-            r = store.export_okf(out_dir, scope_filter=scope)
+            safe_dir = _safe_path(out_dir, kind="write", live_db_path=str(store.path))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        try:
+            r = store.export_okf(safe_dir, scope_filter=scope)
         except Exception as e:
             raise HTTPException(500, f"export-okf failed: {e}")
         return r

@@ -337,46 +337,62 @@ def subgraph_for(
 ) -> Subgraph:
     """Build a small subgraph relevant to ``query``.
 
-    1. Extract entities from the query.
-    2. Pull every relation (1 hop) that touches a query entity.
-    3. Look up the backing memory ids for each entity.
+    1. Extract entities from the query (seed set).
+    2. BFS up to ``max_hops`` edges from the seed set, walking
+       ``store.related_entities`` at each layer.
+    3. Look up the backing memory ids for each entity seen.
     4. Trim to ``max_nodes`` / ``max_edges``.
+
+    Audit 2026-09-23: previously the function ignored ``max_hops``
+    and always walked exactly one hop. The default is unchanged
+    (1 hop) so existing callers see no behaviour delta; callers
+    that explicitly pass ``max_hops >= 2`` now get the multi-hop
+    walk they asked for. ``max_hops`` is hard-capped at 8 so a typo
+    cannot fan out across the whole graph.
 
     Returns a :class:`Subgraph` dataclass so callers can render it
     however they like (Mermaid, JSON for the SDK, etc.).
     """
     from ..graph.extract import extract_entities
-    ents = [n for (n, _) in extract_entities(query) if n]
-    if not ents:
+    max_hops = max(1, min(int(max_hops or 1), 8))
+    seed_ents = [n for (n, _) in extract_entities(query) if n]
+    if not seed_ents:
         return Subgraph(nodes=[], edges=[], memory_ids=[])
     nodes: dict[str, dict[str, Any]] = {}
     edges: list[dict[str, Any]] = []
     memory_ids: set[str] = set()
-    for ent in ents:
-        info = store.entity_by_name(ent)
-        if info:
-            nodes[ent] = {
-                "name": ent,
-                "kind": info.get("kind") or "concept",
-                "weight": float(info.get("weight") or 0),
-                "mention_count": int(info.get("mention_count") or 0),
-            }
-        else:
-            nodes[ent] = {"name": ent, "kind": "concept", "weight": 0.5, "mention_count": 0}
-        for nb in store.related_entities(ent, limit=32):
-            if nb not in nodes:
-                nb_info = store.entity_by_name(nb) or {}
-                nodes[nb] = {
-                    "name": nb,
-                    "kind": nb_info.get("kind") or "concept",
-                    "weight": float(nb_info.get("weight") or 0),
-                    "mention_count": int(nb_info.get("mention_count") or 0),
-                }
-            edge = {"src": ent, "dst": nb, "kind": "related"}
-            if edge not in edges:
-                edges.append(edge)
-        for mid in store.memory_ids_for_entity(ent, limit=32):
+
+    def _record_node(name: str) -> None:
+        if name in nodes:
+            return
+        info = store.entity_by_name(name) or {}
+        nodes[name] = {
+            "name": name,
+            "kind": info.get("kind") or "concept",
+            "weight": float(info.get("weight") or 0),
+            "mention_count": int(info.get("mention_count") or 0),
+        }
+        for mid in store.memory_ids_for_entity(name, limit=32):
             memory_ids.add(mid)
+
+    frontier = list(seed_ents)
+    for ent in frontier:
+        _record_node(ent)
+    seen_edge: set[tuple[str, str]] = set()
+    for _ in range(max_hops):
+        if not frontier:
+            break
+        next_frontier: list[str] = []
+        for ent in frontier:
+            for nb in store.related_entities(ent, limit=32):
+                _record_node(nb)
+                key = (ent, nb)
+                if key in seen_edge:
+                    continue
+                seen_edge.add(key)
+                edges.append({"src": ent, "dst": nb, "kind": "related"})
+                next_frontier.append(nb)
+        frontier = next_frontier
     # Trim
     n_nodes = list(nodes.values())[:max_nodes]
     n_edges = edges[:max_edges]

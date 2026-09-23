@@ -1,5 +1,44 @@
 ## [Unreleased]
 
+## [0.4.10] - 2026-09-23
+
+### patch
+
+- **Path-safety guard for export / snapshot endpoints**
+  (audit 2026-09-23). Added
+  ``loop_memory.serve.routes._shared._safe_resolve_path`` and wired
+  it into the five endpoints that accept a user-supplied path:
+  ``POST /api/export/okf`` (0.4.9), ``POST /api/v1/export``,
+  ``POST /api/v1/import``, ``POST /api/snapshot``,
+  ``POST /api/snapshot/restore``. The helper refuses any path
+  that (a) resolves to the live SQLite store or its WAL/SHM
+  sidecar, (b) sits inside a system / sensitive directory
+  (``/etc``, ``/usr``, ``/System``, ``~/.ssh``, ``~/.aws``,
+  ``~/.gnupg``), or (c) has a non-existent parent on write.
+  This closes a path-traversal vector that the local-only auth
+  middleware (which is a no-op when no bearer token is set)
+  left open. macOS per-user temp (``/private/var/folders/...``)
+  is allow-listed so the install-smoke tests still pass.
+
+- **Bounded LLM response cache** (audit 2026-09-23).
+  ``EvolutionConsolidator._cache`` (jobs/evolution.py) and
+  ``LLMConsolidator._cache`` (jobs/llm_consolidate.py) used to
+  grow without bound: TTL made entries stale but they were never
+  evicted, so a long-running consolidation pass leaked memory.
+  Both caches are now hard-capped at 256 entries with FIFO
+  eviction on overflow. New ``_MAX_CACHE_SIZE`` constant + tests.
+
+- **``subgraph_for`` honours ``max_hops``** (audit 2026-09-23).
+  Previously the function accepted a ``max_hops`` keyword but
+  always walked exactly one ``related_entities`` hop. The
+  default is unchanged (1 hop) so existing callers see no
+  behaviour delta; callers passing ``max_hops >= 2`` now get
+  the multi-hop BFS walk they asked for. ``max_hops`` is
+  hard-capped at 8 so a typo cannot fan out across the whole
+  graph.
+
+29 new regression cases pin all three fixes.
+
 ## [0.4.9] - 2026-09-20
 
 ### patch

@@ -22,6 +22,21 @@
 
 ---
 
+> **What's new in 0.4.10** — **path-safety guard** for the
+five export / snapshot endpoints. ``MemoryStore`` already
+validated query / wiki content; the new
+``_safe_resolve_path`` helper (audit 2026-09-23) closes the
+remaining path-traversal vector by refusing any path that
+points at the live SQLite store, a system directory
+(``/etc`` / ``/usr`` / ``/System``), or a sensitive dotfile
+(``~/.ssh`` / ``~/.aws`` / ``~/.gnupg``). Also in this
+release: a hard cap on the in-process LLM response cache
+(was unbounded; now 256 entries with FIFO eviction) and a
+fix for ``subgraph_for(max_hops=...)`` which used to ignore
+the argument and always walk one hop (now BFS up to N hops,
+hard-capped at 8). 29 new regression cases. [Full
+CHANGELOG →](./CHANGELOG.md#0410---2026-09-23)
+
 > **What's new in 0.4.9** — **OKF v0.2 export** + **bi-temporal `as_of` recall**. `loop-memory export-okf <dir>` writes an [Open Knowledge Format](https://github.com/okf/SPEC) v0.2 bundle — one `.md` file per wiki page with YAML frontmatter + an `index.md` index — so a Loop Memory store can be handed to any OKF-aware tool (Grep, Obsidian, akitaonrails/ai-memory, okf-agent-memory, ...) without re-parsing the body (audit 2026-09-20, Google OKF v0.2 spec + akitaonrails/ai-memory 2.0 + okf-memory/okf-agent-memory, all Apache-2.0/MIT, 2026-09-01 → 2026-09-06). `loop-memory recall <q> --as-of <ISO|epoch>` answers the bi-temporal question "what did we know about this query at that moment?" — a memory written after the moment is invisible, and a superseded memory walks its chain to find whether the invalidation had happened by then (audit 2026-09-20, loomcycle v1.33-v1.49 RFCs BL/BS/BU/BV/BW, Apache-2.0). Both shapes ship with HTTP routes (`POST /api/export/okf`, `GET /api/recall?as_of=...`). 34 new regression cases pin both shapes. [Full CHANGELOG →](./CHANGELOG.md#049---2026-09-20)
 
 > **What's new in 0.4.8** — **L0 outline recall** +

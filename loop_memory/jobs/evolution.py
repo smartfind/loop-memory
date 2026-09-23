@@ -684,6 +684,11 @@ class EvolutionConsolidator:
         self._cache: dict[str, str] = {}
         self._cache_ttl = 300.0
         self._cache_ts: dict[str, float] = {}
+        # Audit 2026-09-23: cap the in-process LLM response cache so a
+        # long-running evolution pass cannot leak memory. When the cache
+        # exceeds ``_MAX_CACHE_SIZE`` we evict the oldest entries (FIFO
+        # via ``_cache_ts``; an LRU variant would also be fine).
+        self._MAX_CACHE_SIZE = 256
         self._run_id: str | None = None
 
     # --- public ----------------------------------------------------------
@@ -1998,6 +2003,15 @@ class EvolutionConsolidator:
             return ""
         self._cache[cache_key] = reply
         self._cache_ts[cache_key] = now
+        # Bound the cache: drop oldest entries when we exceed the cap.
+        # Cheap O(n) walk; the cache holds at most _MAX_CACHE_SIZE so
+        # the walk is bounded too.
+        if len(self._cache) > self._MAX_CACHE_SIZE:
+            ordered = sorted(self._cache_ts.items(), key=lambda kv: kv[1])
+            evict_count = len(self._cache) - self._MAX_CACHE_SIZE
+            for old_key, _ in ordered[:evict_count]:
+                self._cache.pop(old_key, None)
+                self._cache_ts.pop(old_key, None)
         if kind == "cluster":
             stats.cluster_calls += 1
         elif kind == "wiki":
