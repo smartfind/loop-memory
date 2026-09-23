@@ -715,10 +715,19 @@ class MemoryStore:
 
     @contextmanager
     def _conn(self) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(str(self.path))
+        # Audit 2026-09-24: every connection sets three PRAGMAs.
+        # ``busy_timeout=5000`` makes SQLite retry a contended writer
+        # for up to 5 seconds before raising ``OperationalError:
+        # database is locked``. Without it the watcher (launchd
+        # background thread) and the serve thread can fail spuriously
+        # when the consolidator or scheduler also writes concurrently.
+        # 5s is a generous budget for any local operation; an actual
+        # deadlock surfaces faster via the SQLite error code.
+        conn = sqlite3.connect(str(self.path), timeout=5.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA busy_timeout=5000")
         try:
             yield conn
             conn.commit()

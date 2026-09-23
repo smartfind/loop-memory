@@ -36,6 +36,41 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None,
     """
     if static_dir is None:
         static_dir = Path(__file__).parent.parent / "static"
+    @app.get("/api/healthz")
+    def healthz():
+        """Liveness probe.
+
+        Audit 2026-09-24. Returns 200 as long as the process is
+        responsive. **Does not** touch the SQLite store — so the
+        probe cannot deadlock behind a slow writer and cannot give
+        a false negative when the DB is briefly busy. Use this for
+        ``livenessProbe`` in Kubernetes / launchd keepalive scripts.
+        """
+        return {"status": "ok", "ts": time.time()}
+
+    @app.get("/api/readyz")
+    def readyz():
+        """Readiness probe.
+
+        Audit 2026-09-24. Verifies the SQLite store is reachable AND
+        responsive (one trivial ``PRAGMA quick_check`` round-trip
+        inside a 1-second budget). Returns ``{"status": "ok"}`` on
+        success, or ``{"status": "degraded", "error": "..."}`` with
+        HTTP 503 when the DB is unhealthy. Use this for
+        ``readinessProbe`` so a degraded loop-memory is taken out of
+        a load-balancer rotation until it recovers.
+        """
+        import sqlite3 as _sq3
+        try:
+            with _sq3.connect(str(store.path), timeout=1.0) as c:
+                c.execute("PRAGMA quick_check").fetchone()
+            return {"status": "ok", "ts": time.time()}
+        except Exception as e:
+            return JSONResponse(
+                {"status": "degraded", "error": str(e)},
+                status_code=503,
+            )
+
     @app.get("/")
     def index():
         """Serve the dashboard HTML with the i18n JSONs inlined.

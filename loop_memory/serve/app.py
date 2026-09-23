@@ -176,6 +176,12 @@ def create_app(store: MemoryStore, static_dir: Path | None = None, scheduler=Non
         '/api/pipeline', '/api/weekly-report', '/api/llm-audit',
         '/api/source-health', '/api/write-guard', '/api/diag',
         '/api/install-hooks', '/api/insights',
+        # Audit 2026-09-24: probes are intentionally public so a
+        # load balancer / keepalive script doesn't need a Bearer
+        # token to ask "is the process up?". The DB-touching
+        # ``/api/readyz`` only exposes a coarse health signal
+        # (UP / DOWN), no data.
+        '/api/healthz', '/api/readyz',
     ))
 
     def _is_public_path(path: str) -> bool:

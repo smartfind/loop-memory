@@ -1,5 +1,30 @@
 ## [Unreleased]
 
+## [0.4.11] - 2026-09-24
+
+### patch
+
+- **`PRAGMA busy_timeout=5000` on every store connection**
+  (audit 2026-09-24). The previous default of 0 ms meant a
+  concurrent writer (watcher thread + serve thread + scheduler)
+  could fail with ``OperationalError: database is locked``
+  immediately. SQLite now retries internally for up to 5 s
+  before raising, so a brief contention burst no longer surfaces
+  as a 500. Also sets ``sqlite3.connect(timeout=5.0)`` so the
+  *connect* call honours the same budget.
+
+- **Operational probes**: new ``GET /api/healthz`` (liveness,
+  no DB access) and ``GET /api/readyz`` (readiness, runs
+  ``PRAGMA quick_check`` with a 1 s budget). Both are public
+  (no Bearer token required) so a Kubernetes ``livenessProbe``
+  / launchd keepalive can hit them without provisioning
+  credentials. ``/api/readyz`` returns 503 when the DB is
+  unreachable so a load balancer can take a degraded loop-memory
+  out of rotation.
+
+7 new regression cases pin both fixes. Total: 730 passed
+(was 723). Ruff clean. Secret-scan clean.
+
 ## [0.4.10] - 2026-09-23
 
 ### patch

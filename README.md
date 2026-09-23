@@ -22,6 +22,19 @@
 
 ---
 
+> **What's new in 0.4.11** — **operational probes** +
+**SQLite write-contention fix** (audit 2026-09-24). New
+``GET /api/healthz`` (liveness) + ``GET /api/readyz``
+(readiness) endpoints let Kubernetes / launchd keepalive
+polls probe the serve without provisioning a Bearer token;
+``/api/readyz`` returns 503 when the SQLite store is
+unreachable. Also fixed a real concurrency bug: every
+store connection now sets ``PRAGMA busy_timeout=5000``
+(was 0 ms) so the watcher + serve + scheduler threads no
+longer fail with ``database is locked`` when the
+consolidator writes concurrently. 7 new regression cases.
+[Full CHANGELOG →](./CHANGELOG.md#0411---2026-09-24)
+
 > **What's new in 0.4.10** — **path-safety guard** for the
 five export / snapshot endpoints. ``MemoryStore`` already
 validated query / wiki content; the new
