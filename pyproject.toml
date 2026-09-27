@@ -29,7 +29,7 @@ openai   = ["openai~=1.30"]
 chroma   = ["chromadb~=0.4"]
 sentence = ["sentence-transformers~=2.6"]
 serve    = ["fastapi~=0.110", "uvicorn~=0.27"]
-dev      = ["pytest~=8.0", "coverage~=7.0", "ruff~=0.5"]
+dev      = ["pytest>=8,<10", "coverage~=7.0", "ruff~=0.5"]
 all      = ["openai~=1.30", "chromadb~=0.4", "sentence-transformers~=2.6", "fastapi~=0.110", "uvicorn~=0.27"]
 
 [project.urls]
