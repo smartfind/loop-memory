@@ -259,6 +259,7 @@ hypemelse 迁移到 loop-memory 的用户经常会按这套词找方法。下表
 | `memory_graph_add_edge` | `loop-memory graph-edge <src> <dst>` 或 `POST /api/v1/graph/edges` | |
 | `memory_graph_rebuild` | `loop-memory graph-rebuild` 或 `POST /api/v1/graph/rebuild` | |
 | `memory_export_okf` (新, OKF v0.2) | `loop-memory export-okf <out_dir> [--scope S]` 或 `POST /api/export/okf`（自 0.4.9） | 写 OKF v0.2 bundle （Google OKF v0.2 spec + akitaonrails/ai-memory 2.0 + okf-memory/okf-agent-memory），跨工具可移植 |
+| `memory_import_okf` (新, OKF v0.2) | `loop-memory import-okf <in_dir> [--scope S] [--dry-run] [--skip-conflicts]` 或 `POST /api/import/okf`（自 0.4.12） | 读 OKF v0.2 bundle（thecolourfoundation/rune + okf-memory/okf-agent-memory Issues #12-#15 + Deja-Vu + Google OKF v0.2 spec），幂等 upsert 到 `(scope, slug)`；与 `export-okf` 配对，闭环跨工具可移植 |
 | `memory_recall_as_of` (新, bi-temporal) | `loop-memory recall <q> --as-of <ISO|epoch>` 或 `GET /api/recall?as_of=…`（自 0.4.9） | 走 `MemoryStore.recall_as_of()`（loomcycle v1.33+），回答「那一刻我们都知道什么」 |
 | `memory_fork` | `loop-memory fork [--branch-tag T]` 或 `POST /api/v1/fork` | wiki 分支 |
 | `memory_snapshot` | `loop-memory snapshot <out.memory.sqlite>`（自 0.4.7）或 `POST /api/snapshot` | 单文件 SQLite 快照 |

@@ -387,6 +387,23 @@ CREATE TABLE IF NOT EXISTS write_guard_drops (
 );
 CREATE INDEX IF NOT EXISTS idx_wgd_ts  ON write_guard_drops(ts);
 CREATE INDEX IF NOT EXISTS idx_wgd_src ON write_guard_drops(source, kind);
+
+-- DB-level audit log: SQLite triggers fire on every INSERT/UPDATE/DELETE
+-- against memories / wiki_pages / relations / consolidation_runs and
+-- append a row here in the same transaction. Even a raw sqlite3 writer
+-- that bypasses the Python wrapper cannot skip the audit row.
+-- (Audit 2026-09-27, memory-eternal v0.4.3 enforceAudit() pattern.)
+CREATE TABLE IF NOT EXISTS audit_log (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    at          REAL NOT NULL,
+    actor       TEXT NOT NULL,    -- 'db_trigger' | 'loop-memory CLI' | 'serve' | ...
+    op          TEXT NOT NULL,    -- 'INSERT' | 'UPDATE' | 'DELETE'
+    entity      TEXT NOT NULL,    -- 'memories' | 'wiki_pages' | 'relations' | 'consolidation_runs'
+    entity_id   TEXT,             -- NEW.id on INSERT/UPDATE; OLD.id on DELETE
+    meta        TEXT              -- JSON: {rowid?, new_keys?, old_keys?}
+);
+CREATE INDEX IF NOT EXISTS idx_audit_log_at     ON audit_log(at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_log_entity ON audit_log(entity, entity_id);
 """
 
 
@@ -700,13 +717,236 @@ def _apply_as_of_filters(
     return out
 
 
+
+
+# ---------------------------------------------------------------------------
+# Audit 2026-09-27: DB-level audit_log enforcement (memory-eternal v0.4.3).
+# ---------------------------------------------------------------------------
+# ``_AUDIT_TRIGGER_DDL`` is the SQL DDL for twelve SQLite triggers that
+# fire on every INSERT / UPDATE / DELETE against ``memories``,
+# ``wiki_pages``, ``relations``, and ``consolidation_runs``. Each one
+# appends a row to ``audit_log`` in the same transaction, so a raw
+# ``sqlite3`` writer that bypasses the Python wrapper still cannot
+# skip the audit trail. The Python-level audit writes elsewhere in
+# the store are kept (so the ``actor`` field carries caller context
+# like ``loop-memory CLI`` or ``serve``); the DB triggers are the
+# *floor*, not a replacement.
+
+_AUDIT_TRIGGER_DDL = """
+CREATE TRIGGER IF NOT EXISTS trg_memories_ai
+AFTER INSERT ON memories
+BEGIN
+    INSERT INTO audit_log (at, actor, op, entity, entity_id, meta)
+    VALUES (strftime('%s','now'), 'db_trigger', 'INSERT',
+            'memories', NEW.id, json_object('rowid', NEW.rowid));
+END;
+CREATE TRIGGER IF NOT EXISTS trg_memories_au
+AFTER UPDATE ON memories
+BEGIN
+    INSERT INTO audit_log (at, actor, op, entity, entity_id, meta)
+    VALUES (strftime('%s','now'), 'db_trigger', 'UPDATE',
+            'memories', NEW.id, json_object('rowid', NEW.rowid));
+END;
+CREATE TRIGGER IF NOT EXISTS trg_memories_ad
+AFTER DELETE ON memories
+BEGIN
+    INSERT INTO audit_log (at, actor, op, entity, entity_id, meta)
+    VALUES (strftime('%s','now'), 'db_trigger', 'DELETE',
+            'memories', OLD.id, json_object('rowid', OLD.rowid));
+END;
+CREATE TRIGGER IF NOT EXISTS trg_wiki_pages_ai
+AFTER INSERT ON wiki_pages
+BEGIN
+    INSERT INTO audit_log (at, actor, op, entity, entity_id, meta)
+    VALUES (strftime('%s','now'), 'db_trigger', 'INSERT',
+            'wiki_pages', NEW.id, json_object('rowid', NEW.rowid));
+END;
+CREATE TRIGGER IF NOT EXISTS trg_wiki_pages_au
+AFTER UPDATE ON wiki_pages
+BEGIN
+    INSERT INTO audit_log (at, actor, op, entity, entity_id, meta)
+    VALUES (strftime('%s','now'), 'db_trigger', 'UPDATE',
+            'wiki_pages', NEW.id, json_object('rowid', NEW.rowid));
+END;
+CREATE TRIGGER IF NOT EXISTS trg_wiki_pages_ad
+AFTER DELETE ON wiki_pages
+BEGIN
+    INSERT INTO audit_log (at, actor, op, entity, entity_id, meta)
+    VALUES (strftime('%s','now'), 'db_trigger', 'DELETE',
+            'wiki_pages', OLD.id, json_object('rowid', OLD.rowid));
+END;
+CREATE TRIGGER IF NOT EXISTS trg_relations_ai
+AFTER INSERT ON relations
+BEGIN
+    INSERT INTO audit_log (at, actor, op, entity, entity_id, meta)
+    VALUES (strftime('%s','now'), 'db_trigger', 'INSERT',
+            'relations', NEW.id, json_object('rowid', NEW.rowid));
+END;
+CREATE TRIGGER IF NOT EXISTS trg_relations_au
+AFTER UPDATE ON relations
+BEGIN
+    INSERT INTO audit_log (at, actor, op, entity, entity_id, meta)
+    VALUES (strftime('%s','now'), 'db_trigger', 'UPDATE',
+            'relations', NEW.id, json_object('rowid', NEW.rowid));
+END;
+CREATE TRIGGER IF NOT EXISTS trg_relations_ad
+AFTER DELETE ON relations
+BEGIN
+    INSERT INTO audit_log (at, actor, op, entity, entity_id, meta)
+    VALUES (strftime('%s','now'), 'db_trigger', 'DELETE',
+            'relations', OLD.id, json_object('rowid', OLD.rowid));
+END;
+CREATE TRIGGER IF NOT EXISTS trg_consolidation_runs_ai
+AFTER INSERT ON consolidation_runs
+BEGIN
+    INSERT INTO audit_log (at, actor, op, entity, entity_id, meta)
+    VALUES (strftime('%s','now'), 'db_trigger', 'INSERT',
+            'consolidation_runs', NEW.id, json_object('rowid', NEW.rowid));
+END;
+CREATE TRIGGER IF NOT EXISTS trg_consolidation_runs_au
+AFTER UPDATE ON consolidation_runs
+BEGIN
+    INSERT INTO audit_log (at, actor, op, entity, entity_id, meta)
+    VALUES (strftime('%s','now'), 'db_trigger', 'UPDATE',
+            'consolidation_runs', NEW.id, json_object('rowid', NEW.rowid));
+END;
+CREATE TRIGGER IF NOT EXISTS trg_consolidation_runs_ad
+AFTER DELETE ON consolidation_runs
+BEGIN
+    INSERT INTO audit_log (at, actor, op, entity, entity_id, meta)
+    VALUES (strftime('%s','now'), 'db_trigger', 'DELETE',
+            'consolidation_runs', OLD.id, json_object('rowid', OLD.rowid));
+END;
+"""
+
+
+def _slugify(text: str) -> str:
+    """Stable slug from an arbitrary title. Mirrors what we write on
+    export (``pages/<slug>.md``) so import can round-trip.
+
+    Lowercase, ASCII-letters/digits/underscores/hyphens only; any
+    other character becomes a single ``-``. Leading/trailing ``-``
+    are stripped and runs are collapsed. Empty input becomes
+    ``"untitled"``.
+    """
+    import re as _re
+    s = (text or "").strip().lower()
+    if not s:
+        return "untitled"
+    s = _re.sub(r"[^a-z0-9_-]+", "-", s)
+    s = _re.sub(r"-+", "-", s).strip("-")
+    return s or "untitled"
+
+
+def _parse_okf_frontmatter(text: str) -> tuple[dict, str]:
+    """Parse ``---\n<yaml>\n---\n<body>`` into (frontmatter, body).
+
+    The YAML subset we accept is intentionally tiny — list literals
+    in flow form (``[a, b, c]``), strings in double-quote form
+    (``"a"``), unquoted bare scalars (``42``, ``3.14``, ``Note``),
+    and one level of nesting for ``generated: { by: ..., at: ... }``
+    / ``sources: [{resource: ...}, ...]``. Unknown keys are tolerated
+    per the OKF spec. Anything we cannot parse is dropped silently
+    so a malicious frontmatter can't break the import.
+
+    Returns ``({}, text)`` if there is no leading ``---`` block.
+    """
+    if not text or not text.startswith("---"):
+        return {}, text
+    body_start = text.find("\n---", 3)
+    if body_start < 0:
+        return {}, text
+    fm = text[3:body_start].strip("\n")
+    body = text[body_start + 4:].lstrip("\n")
+    out: dict = {}
+    if not fm:
+        return out, body
+    lines = [ln for ln in fm.splitlines() if ln.strip()]
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        # top-level key
+        if ":" not in line or line.startswith(" ") or line.startswith("-"):
+            i += 1
+            continue
+        key, _, raw = line.partition(":")
+        key = key.strip()
+        raw = raw.strip()
+        if not key:
+            i += 1
+            continue
+        if raw == "":
+            # nested block — peek ahead
+            nested: dict = {}
+            j = i + 1
+            while j < len(lines) and (lines[j].startswith("  ") or lines[j].startswith("	")):
+                nline = lines[j].strip()
+                if ":" in nline and not nline.startswith("-"):
+                    nk, _, nv = nline.partition(":")
+                    nested[nk.strip()] = _parse_okf_scalar(nv.strip())
+                elif nline.startswith("- "):
+                    arr = nested.setdefault("_list", [])
+                    arr.append(_parse_okf_scalar(nline[2:].strip()))
+                j += 1
+            if nested:
+                out[key] = nested
+            i = j
+            continue
+        # inline list?
+        if raw.startswith("[") and raw.endswith("]"):
+            inner = raw[1:-1].strip()
+            items: list = []
+            if inner:
+                # split on ", " respecting quoted segments
+                buf = ""
+                in_q = False
+                for ch in inner:
+                    if ch == '"':
+                        in_q = not in_q
+                    if ch == "," and not in_q:
+                        if buf.strip():
+                            items.append(_parse_okf_scalar(buf.strip()))
+                        buf = ""
+                    else:
+                        buf += ch
+                if buf.strip():
+                    items.append(_parse_okf_scalar(buf.strip()))
+            out[key] = items
+        else:
+            out[key] = _parse_okf_scalar(raw)
+        i += 1
+    return out, body
+
+
+def _parse_okf_scalar(value: str):
+    """Coerce a YAML scalar (string, number, or quoted string) to a
+    Python value. Empty -> None; double-quoted -> inner string;
+    bare -> float/int/str fallback.
+    """
+    if value is None:
+        return None
+    s = value.strip()
+    if not s:
+        return None
+    if len(s) >= 2 and s[0] == '"' and s[-1] == '"':
+        return s[1:-1].replace('\\"', '"').replace("\\\\", "\\")
+    # number?
+    try:
+        if "." in s:
+            return float(s)
+        return int(s)
+    except ValueError:
+        return s
+
+
+
 class MemoryStore:
     """Persistent, transactional store backed by SQLite.
 
     The zero-dep claim holds — Python ships with sqlite3 and struct.
     """
 
-    SCHEMA_VERSION = "10"
+    SCHEMA_VERSION = "11"  # audit 2026-09-27: audit_log + triggers
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path).expanduser()
@@ -865,6 +1105,9 @@ class MemoryStore:
                     "ON CONFLICT(k) DO UPDATE SET v=excluded.v",
                     ("trigram",),
                 )
+
+            # Audit 2026-09-27: DB-level audit_log triggers. Idempotent.
+            self._install_audit_triggers(c)
 
             # Default existing wiki pages to 'global' scope on first
             # run after the scope migration. ALTER TABLE already added
@@ -2174,6 +2417,321 @@ class MemoryStore:
             "index_path": str(out_root / "index.md"),
             "okf_version": self.OKF_VERSION,
             "scope_filter": scope_filter,
+        }
+
+    # ----------------------------------------------------------------
+    # Audit 2026-09-27: DB-level audit_log enforcement
+    # (memory-eternal v0.4.3 enforceAudit() pattern).
+    # ----------------------------------------------------------------
+    def _install_audit_triggers(self, c: sqlite3.Connection) -> None:
+        """Install the twelve audit_log SQLite triggers.
+
+        Idempotent: ``CREATE TRIGGER IF NOT EXISTS`` is a no-op on
+        re-open. Called once per ``__init__`` from ``_init_schema``
+        so the triggers are guaranteed to be present before any
+        subsequent write.
+
+        The Python-level audit writes elsewhere in this module are
+        preserved; the DB triggers are the floor. Even a raw
+        ``sqlite3`` writer that bypasses the wrapper will still
+        append an ``audit_log`` row with ``actor='db_trigger'``.
+        """
+        # ``executescript`` runs each statement independently; SQLite
+        # does not allow multiple ``CREATE TRIGGER`` statements in a
+        # single ``executescript`` call without a separator, but
+        # SQLite parses them as separate statements automatically.
+        c.executescript(_AUDIT_TRIGGER_DDL)
+
+    def list_audit_log(
+        self,
+        entity: str | None = None,
+        op: str | None = None,
+        actor: str | None = None,
+        since_ts: float | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Read recent rows from ``audit_log``.
+
+        Mirrors the shape of ``list_audit`` (cognitive_audit) but
+        covers the DB-level audit trail — every INSERT/UPDATE/
+        DELETE on ``memories`` / ``wiki_pages`` / ``relations`` /
+        ``consolidation_runs``, regardless of which code path wrote
+        the row.
+        """
+        clauses: list[str] = []
+        params: list = []
+        if entity:
+            clauses.append("entity = ?")
+            params.append(entity)
+        if op:
+            clauses.append("op = ?")
+            params.append(op)
+        if actor:
+            clauses.append("actor = ?")
+            params.append(actor)
+        if since_ts is not None:
+            clauses.append("at >= ?")
+            params.append(float(since_ts))
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = (
+            f"SELECT id, at, actor, op, entity, entity_id, meta "
+            f"FROM audit_log {where} ORDER BY at DESC, id DESC LIMIT ?"
+        )
+        params.append(int(limit))
+        with self._conn() as c:
+            rows = c.execute(sql, params).fetchall()
+        out = []
+        for r in rows:
+            meta_raw = r["meta"] or ""
+            meta_obj = None
+            if meta_raw:
+                try:
+                    meta_obj = json.loads(meta_raw)
+                except Exception:
+                    meta_obj = meta_raw  # leave as string if non-JSON
+            out.append({
+                "id": int(r["id"]),
+                "at": float(r["at"] or 0.0),
+                "actor": r["actor"] or "",
+                "op": r["op"] or "",
+                "entity": r["entity"] or "",
+                "entity_id": r["entity_id"] or "",
+                "meta": meta_obj,
+            })
+        return out
+
+    # ----------------------------------------------------------------
+    # Audit 2026-09-27: OKF v0.2 import
+    # (thecolourfoundation/rune + okf-memory/okf-agent-memory Issues
+    # #12-#15 + Deja-Vu HN front-page). Symmetric counterpart to
+    # ``export_okf`` (0.4.9): an OKF bundle can now be brought back
+    # into Loop Memory as wiki pages.
+    # ----------------------------------------------------------------
+    def import_okf(
+        self,
+        in_dir: str | Path,
+        scope: str | None = None,
+        dry_run: bool = False,
+        skip_conflicts: bool = False,
+    ) -> dict[str, Any]:
+        """Walk an OKF v0.2 bundle directory and upsert each page.
+
+        ``in_dir`` must point at a directory containing ``index.md``
+        (the OKF bundle index — the caller confirms ``okf_version``
+        is present in its frontmatter) and ``pages/`` (one ``.md``
+        file per wiki page, filename = slug). The traversal skips
+        non-``.md`` files and any subdirectory called ``pages``
+        itself, so a bundle's internal structure stays private to
+        us.
+
+        Upsert semantics:
+          * ``(scope, slug)`` is the lookup key.
+          * On INSERT the body, summary, tags, importance, and
+            ``updated_at`` are taken from the bundle's frontmatter
+            + body. The ``generated.at`` ISO-8601 string is the
+            authoritative timestamp when present; otherwise the
+            file's mtime is used (which still gives a sensible
+            ``updated_at`` for an OKF bundle that lacks timestamps).
+          * On UPDATE the wiki row's ``version`` is bumped and
+            ``updated_at`` becomes the bundle's ``generated.at``
+            (or the current epoch if missing).
+          * On ``--skip-conflicts``, an INSERT that would clash on
+            ``slug`` (within the same scope) is recorded as a
+            ``skipped`` entry rather than overwriting.
+
+        The ``scope`` argument defaults to ``"global"``; a non-
+        global scope is recorded on the wiki row verbatim. When
+        ``scope=None`` and the bundle's ``index.md`` declares a
+        ``scope: <token>`` extension field, that token wins.
+
+        Returns ``{in_dir, imported, updated, skipped, errors,
+        scope, okf_version}``. ``errors`` is a list of
+        ``{path, reason}`` for individual parse failures; the rest
+        of the bundle is still processed.
+        """
+        in_root = Path(in_dir).expanduser().resolve()
+        if not in_root.exists() or not in_root.is_dir():
+            return {
+                "in_dir": str(in_root),
+                "imported": 0,
+                "updated": 0,
+                "skipped": 0,
+                "errors": [{"path": str(in_root),
+                            "reason": "directory does not exist"}],
+                "okf_version": None,
+                "scope": scope,
+            }
+        index_path = in_root / "index.md"
+        if not index_path.exists():
+            return {
+                "in_dir": str(in_root),
+                "imported": 0,
+                "updated": 0,
+                "skipped": 0,
+                "errors": [{"path": str(index_path),
+                            "reason": "missing index.md (not an OKF bundle?)"}],
+                "okf_version": None,
+                "scope": scope,
+            }
+        index_text = index_path.read_text(encoding="utf-8")
+        index_fm, _ = _parse_okf_frontmatter(index_text)
+        okf_version = index_fm.get("okf_version") or self.OKF_VERSION
+        # Extension field: the OKF spec says consumers MUST tolerate
+        # unknown keys, so honour a `scope:` in index.md when the
+        # caller didn't pass an explicit ``scope=``.
+        if scope is None:
+            scope = index_fm.get("scope") or "global"
+        scope = (scope or "global").strip() or "global"
+
+        pages_dir = in_root / "pages"
+        if not pages_dir.exists():
+            pages_dir = in_root  # tolerate flat bundles
+
+        result = {
+            "in_dir": str(in_root),
+            "imported": 0,
+            "updated": 0,
+            "skipped": 0,
+            "errors": [],
+            "okf_version": okf_version,
+            "scope": scope,
+            "dry_run": bool(dry_run),
+        }
+
+        if dry_run:
+            # In dry-run we still parse every file so the caller
+            # gets a faithful preview, but no writes happen.
+            files = sorted(
+                p for p in pages_dir.glob("*.md")
+                if p.is_file()
+            )
+            for p in files:
+                try:
+                    text = p.read_text(encoding="utf-8")
+                    fm, body = _parse_okf_frontmatter(text)
+                    slug = p.stem
+                    title = fm.get("title") or slug
+                    _ = body  # parse-only
+                    _ = title
+                    result["imported"] += 1
+                except Exception as e:
+                    result["errors"].append({"path": str(p), "reason": str(e)})
+            return result
+
+        files = sorted(p for p in pages_dir.glob("*.md") if p.is_file())
+        for p in files:
+            try:
+                text = p.read_text(encoding="utf-8")
+                fm, body = _parse_okf_frontmatter(text)
+                # Concept ID = filename stem. This mirrors the OKF
+                # convention (``filename = concept ID``) and gives
+                # us a deterministic upsert key.
+                slug = p.stem
+                title_raw = fm.get("title")
+                if not title_raw or not str(title_raw).strip():
+                    title_raw = slug.replace("-", " ").title()
+                title = str(title_raw)
+                summary_val = fm.get("description") or fm.get("summary")
+                if summary_val is not None:
+                    summary_val = str(summary_val)
+                # Tags must be a list of strings.
+                tags_raw = fm.get("tags")
+                tags: list[str] = []
+                if isinstance(tags_raw, list):
+                    tags = [str(t) for t in tags_raw if str(t).strip()]
+                # importance (optional).
+                importance_val = fm.get("importance")
+                try:
+                    importance = float(importance_val) if importance_val is not None else 0.5
+                except (TypeError, ValueError):
+                    importance = 0.5
+                # generated.at → epoch.
+                gen_at = fm.get("generated")
+                gen_at_iso: str | None = None
+                if isinstance(gen_at, dict):
+                    ga = gen_at.get("at")
+                    if ga:
+                        gen_at_iso = str(ga)
+                file_mtime = p.stat().st_mtime
+                if gen_at_iso:
+                    try:
+                        from datetime import datetime as _dt
+                        parsed = _dt.fromisoformat(
+                            gen_at_iso.replace("Z", "+00:00")
+                        )
+                        updated_at = parsed.timestamp()
+                    except Exception:
+                        updated_at = file_mtime
+                else:
+                    updated_at = file_mtime
+                # sources (optional list of dicts).
+                sources_raw = fm.get("sources")
+                evidence_ids: list[str] = []
+                if isinstance(sources_raw, list):
+                    for entry in sources_raw:
+                        if isinstance(entry, dict):
+                            ev = entry.get("resource")
+                            if ev:
+                                evidence_ids.append(str(ev))
+                # Conflict detection on (scope, slug) — skip_conflicts
+                # would otherwise let us overwrite an existing page.
+                existing = self._existing_wiki_for_scope_slug(scope, slug)
+                if existing and skip_conflicts:
+                    result["skipped"] += 1
+                    continue
+                row = self.upsert_wiki_page(
+                    slug=slug,
+                    title=title,
+                    body=body,
+                    summary=summary_val,
+                    tags=tags,
+                    importance=importance,
+                    evidence_ids=evidence_ids,
+                    run_id="okf-import",
+                    scope=scope,
+                    source_hint="okf",
+                )
+                # If the caller passed an ``updated_at`` different
+                # from ``time.time()`` (e.g. a backfill), honour it
+                # by patching the row directly. The trigger will
+                # record the UPDATE with ``actor='db_trigger'`` so
+                # the audit trail stays consistent.
+                if updated_at and abs(float(updated_at) - float(row.get("updated_at") or 0)) > 1.0:
+                    with self._conn() as c:
+                        c.execute(
+                            "UPDATE wiki_pages SET updated_at=? WHERE id=?",
+                            (float(updated_at), row["id"]),
+                        )
+                if existing:
+                    result["updated"] += 1
+                else:
+                    result["imported"] += 1
+            except Exception as e:
+                result["errors"].append({"path": str(p), "reason": str(e)})
+
+        return result
+
+    def _existing_wiki_for_scope_slug(
+        self, scope: str, slug: str
+    ) -> dict | None:
+        """Lookup helper for ``import_okf``: returns the wiki row when
+        ``(scope, slug)`` already exists, else ``None``.
+        """
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT id, slug, title, scope, version, updated_at "
+                "FROM wiki_pages WHERE scope=? AND slug=? LIMIT 1",
+                (scope, slug),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "id": row["id"],
+            "slug": row["slug"],
+            "title": row["title"],
+            "scope": row["scope"],
+            "version": row["version"],
+            "updated_at": row["updated_at"],
         }
 
     def recall_as_of(
@@ -4329,6 +4887,17 @@ class MemoryStore:
             n_relations = c.execute("SELECT COUNT(*) c FROM relations").fetchone()["c"]
             avg = c.execute("SELECT AVG(score) a FROM memories").fetchone()["a"] or 0.0
             wiki_avg = c.execute("SELECT AVG(importance) a FROM wiki_pages").fetchone()["a"] or 0.0
+            try:
+                n_audit = c.execute("SELECT COUNT(*) c FROM audit_log").fetchone()["c"]
+            except sqlite3.OperationalError:
+                n_audit = 0  # legacy DB pre-0.4.12 without audit_log
+            try:
+                n_trig = c.execute(
+                    "SELECT COUNT(*) c FROM sqlite_master "
+                    "WHERE type='trigger' AND name LIKE 'trg_%_a%'"
+                ).fetchone()["c"]
+            except sqlite3.OperationalError:
+                n_trig = 0
             return {
                 "memories": n_mem,
                 "sessions": n_ses,
@@ -4337,6 +4906,8 @@ class MemoryStore:
                 "relations": n_relations,
                 "wiki_avg_importance": round(float(wiki_avg), 4),
                 "avg_score": round(avg, 4),
+                "audit_log": n_audit,
+                "audit_triggers": n_trig,
                 "path": str(self.path),
                 "db_size_bytes": self.db_size_bytes(),
             }

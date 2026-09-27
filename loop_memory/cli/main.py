@@ -26,6 +26,7 @@ Usage:
     loop-memory export <out_dir>  # write a MEMORY.md bundle (v7)
     loop-memory export-bundle <out_dir>  # explicit v7 bundle alias
     loop-memory import <in_dir>   # re-hydrate a bundle
+    loop-memory import-okf <in_dir> [--scope S] [--dry-run] [--skip-conflicts]  # ingest an OKF v0.2 bundle as wiki pages (audit 2026-09-27)
     loop-memory fork [--branch-tag T]  # snapshot every wiki page
     loop-memory graph-edge <src> <dst> [--kind K] [--weight W]  # push a relation
     loop-memory subgraph <query>  # print a small subgraph
@@ -128,6 +129,8 @@ COMMANDS = {
     # Audit 2026-09-20 — OKF v0.2 export (akitaonrails/ai-memory 2.0
     # + okf-agent-memory + Google OKF spec).
     "export-okf": cognitive_cmd.run_export_okf,
+    # Audit 2026-09-27: OKF v0.2 bundle import (rune + okf-agent-memory #12-#15 + Deja-Vu).
+    "import-okf": cognitive_cmd.run_import_okf,
     "rules": rules_cmd.run_rules,
     "version": _run_version,
 }
@@ -172,6 +175,7 @@ COMMAND_HELP: dict[str, str] = {
     "memory-stats":           "loop-memory memory-stats <id> [--prefix]   # per-memory lifetime stats (audit 2026-09-06, agentmemory v1.3.0).",
     "snapshot":               "loop-memory snapshot <out.memory.sqlite>   # write a portable SQLite snapshot (audit 2026-09-06, codexa-memory v0.2.0).",
     "export-okf":             "loop-memory export-okf <out_dir> [--scope S]   # write an OKF v0.2 bundle (audit 2026-09-20).",
+    "import-okf":             "loop-memory import-okf <in_dir> [--scope S] [--dry-run] [--skip-conflicts]   # ingest an OKF v0.2 bundle as wiki pages (audit 2026-09-27).",
     "restore":                "loop-memory restore <in.memory.sqlite>   # re-hydrate a portable SQLite snapshot.",
     # Audit 2026-09-13 — L0 outline recall (tigerless-labs/agent-memory v0.3.0).
     "recall-paths":           "loop-memory recall-paths <query> [--limit N]   # cheap L0 outline (id+abstract+score) instead of full text (audit 2026-09-13).",

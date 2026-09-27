@@ -485,6 +485,49 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None,
             raise HTTPException(500, f"export-okf failed: {e}")
         return r
 
+    @app.post("/api/import/okf")
+    def import_okf(body: dict):
+        """Audit 2026-09-27: OKF v0.2 bundle import.
+
+        Body shape::
+
+            {
+              "in_dir":         "/abs/path/to/bundle",
+              "scope":          "global",          # optional
+              "dry_run":        false,             # optional
+              "skip_conflicts": false              # optional
+            }
+
+        Walks ``<in_dir>/index.md`` + ``<in_dir>/pages/*.md`` and
+        upserts each page as a wiki row keyed on ``(scope, slug)``.
+        ``in_dir`` is validated by ``_safe_resolve_path`` (live DB
+        + system dirs are still refused; per-user temp is OK).
+        Returns the same summary dict as the CLI handler.
+        """
+        from ._shared import _safe_resolve_path as _safe_path
+        in_dir = (body.get("in_dir") or "").strip()
+        if not in_dir:
+            raise HTTPException(400, "in_dir is required")
+        scope = body.get("scope")
+        if scope is not None:
+            scope = str(scope).strip() or None
+        dry_run = bool(body.get("dry_run", False))
+        skip_conflicts = bool(body.get("skip_conflicts", False))
+        try:
+            safe_dir = _safe_path(in_dir, kind="read", live_db_path=str(store.path))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        try:
+            r = store.import_okf(
+                safe_dir,
+                scope=scope,
+                dry_run=dry_run,
+                skip_conflicts=skip_conflicts,
+            )
+        except Exception as e:
+            raise HTTPException(500, f"import-okf failed: {e}")
+        return r
+
     @app.get("/api/recall/outline")
     def recall_outline(query: str = "", limit: int = 12,
                        include: str = "memories,wiki,entities",

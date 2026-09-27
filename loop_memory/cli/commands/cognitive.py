@@ -119,6 +119,23 @@ def _build_parser() -> argparse.ArgumentParser:
     eo.add_argument("--scope", default=None,
                     help="Filter: 'global' or a single source token (e.g. codex)")
 
+    # Audit 2026-09-27: OKF v0.2 bundle import
+    # (thecolourfoundation/rune + okf-memory/okf-agent-memory Issues
+    # #12-#15 + Deja-Vu HN front-page). Symmetric counterpart to
+    # ``export-okf`` (0.4.9): bring an OKF bundle back into Loop
+    # Memory as wiki pages. Idempotent upsert on (scope, slug).
+    io = sub.add_parser(
+        "import-okf",
+        help="Import an OKF v0.2 bundle directory as wiki pages")
+    io.add_argument("in_dir",
+                    help="Bundle directory containing index.md and pages/")
+    io.add_argument("--scope", default=None,
+                    help="Scope tag for imported pages (default: bundle's index.md, then 'global')")
+    io.add_argument("--dry-run", action="store_true",
+                    help="Parse every file but do not write")
+    io.add_argument("--skip-conflicts", action="store_true",
+                    help="Don't overwrite an existing (scope, slug) row")
+
     return p
 
 
@@ -374,4 +391,33 @@ def run_export_okf(args) -> int:
     ns = p.parse_args(args)
     s = MemoryStore(ns.db)
     r = s.export_okf(ns.out_dir, scope_filter=ns.scope)
+    return _emit(r)
+
+
+def run_import_okf(args) -> int:
+    """``loop-memory import-okf <in_dir> [--scope S] [--dry-run] [--skip-conflicts]``
+
+    Audit 2026-09-27: OKF v0.2 bundle import
+    (thecolourfoundation/rune + okf-memory/okf-agent-memory Issues
+    #12-#15 + Deja-Vu HN front-page). Returns the summary dict
+    from ``MemoryStore.import_okf`` so the caller can confirm what
+    landed where. ``--dry-run`` parses every file but writes nothing;
+    ``--skip-conflicts`` turns INSERT-vs-existing conflicts into
+    a ``skipped`` counter rather than an UPDATE.
+    """
+    import argparse as _ap
+    p = _ap.ArgumentParser(prog="loop-memory import-okf")
+    p.add_argument("in_dir")
+    p.add_argument("--scope", default=None)
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--skip-conflicts", action="store_true")
+    p.add_argument("--db", default=os.environ.get("LOOP_MEMORY_DB", DEFAULT_DB))
+    ns = p.parse_args(args)
+    s = MemoryStore(ns.db)
+    r = s.import_okf(
+        ns.in_dir,
+        scope=ns.scope,
+        dry_run=ns.dry_run,
+        skip_conflicts=ns.skip_conflicts,
+    )
     return _emit(r)

@@ -1,5 +1,66 @@
 ## [Unreleased]
 
+## [0.4.12] - 2026-09-27
+
+### feature
+
+- **OKF v0.2 bundle import** as the symmetric counterpart to
+  ``export-okf`` (audit 2026-09-27).  ``MemoryStore.import_okf()``
+  walks an OKF bundle directory (``index.md`` + ``pages/*.md``)
+  and upserts each page as a wiki row keyed on
+  ``(scope, slug)``.  CLI: ``loop-memory import-okf <in_dir>
+  [--scope S] [--dry-run] [--skip-conflicts]``.  HTTP:
+  ``POST /api/import/okf`` with ``{in_dir, scope?, dry_run?,
+  skip_conflicts?}``.  The path-safety guard from 0.4.10
+  (``_safe_resolve_path``) is reused unchanged so the live DB
+  + system dirs remain off-limits.  Source attribution:
+  ``thecolourfoundation/rune`` HN launch (MIT, 2026-09-25) +
+  ``okf-memory/okf-agent-memory`` Issues #12-#15 (MIT,
+  2026-09-22 → 2026-09-25) + ``Deja-Vu`` HN front-page (MIT,
+  2026-09-24) + Google OKF v0.2 spec (Apache-2.0, 2026-09-01).
+
+- **DB-level ``audit_log`` enforcement via SQLite triggers**
+  (audit 2026-09-27).  Today, the audit trail was a Python-
+  level invariant — a writer that opened the SQLite file with
+  the stdlib ``sqlite3`` module directly could
+  ``UPDATE memories SET body=...`` and leave no audit row.
+  The new ``MemoryStore._install_audit_triggers()`` installs
+  12 SQLite triggers (``trg_*_ai``/``_au``/``_ad`` on
+  ``memories`` / ``wiki_pages`` / ``relations`` /
+  ``consolidation_runs``) that append to ``audit_log`` in the
+  same transaction.  The Python-level audit writes are kept
+  (so the ``actor`` field carries caller context like
+  ``loop-memory CLI`` or ``serve``); the DB trigger is the
+  **floor** — even a raw ``sqlite3`` writer cannot skip the
+  audit row.  New ``MemoryStore.list_audit_log()`` reads the
+  log with the same shape as ``list_audit`` (cognitive_audit).
+  ``GET /api/stats`` now reports ``audit_log`` and
+  ``audit_triggers`` counts.  Source attribution:
+  ``cogstate-eng/memory-eternal v0.4.3`` ``enforceAudit()``
+  pattern (MIT, 2026-09-23).
+
+### internal
+
+- **31 new regression cases** this cycle
+  (``tests/test_import_okf_2026_09_27.py`` — 22 tests across
+  the slug helper, frontmatter parser, store-level
+  ``import_okf``, CLI handler, and HTTP route; plus
+  ``tests/test_audit_triggers_2026_09_27.py`` — 9 tests
+  covering trigger installation, idempotent re-open, and
+  direct-SQL bypass coverage).  Total test count now 761 +
+  33 subtests.
+- **No new third-party dependency.** Both features are
+  stdlib-only.  No new pip extras enabled.  No new submodule.
+- **SCHEMA_VERSION bump** ``10`` → ``11`` (with the audit_log
+  table + 12 triggers added on every store open; the existing
+  ``schema_meta`` upsert makes a downgrade loud).
+- **Watchlist added this cycle:**
+  ``thecolourfoundation/rune`` (Git-as-memory substrate
+  thesis) — **deferred** for 0.4.13 / 0.5.0.
+- See ``docs/research/2026-09-27.md`` for the full weekly
+  survey (15 projects + 4 academic papers across the
+  2026-09-20 → 2026-09-27 window).
+
 ## [0.4.11] - 2026-09-24
 
 ### patch

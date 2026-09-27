@@ -34,13 +34,13 @@ class AgentsRegistryStoreTests(unittest.TestCase):
             ).fetchone()
             self.assertIsNotNone(row, "agents table must be created by _init_schema")
 
-    def test_schema_version_bumped_to_10(self) -> None:
-        """Audit 2026-09-13: SCHEMA_VERSION goes 9 -> 10."""
+    def test_schema_version_bumped_to_11(self) -> None:
+        """Audit 2026-09-13 bumped to 10, audit 2026-09-27 bumps 10 -> 11."""
         with self.store._conn() as c:  # noqa: SLF001
             v = c.execute(
                 "SELECT v FROM schema_meta WHERE k='version'"
             ).fetchone()["v"]
-        self.assertEqual(v, "10")
+        self.assertEqual(v, "11")
 
     def test_register_agent_creates_new_row(self) -> None:
         rec = self.store.register_agent("codex")

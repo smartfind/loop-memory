@@ -48,6 +48,7 @@ appropriate 4xx/5xx status.
 | GET | `/api/wiki` | List wiki pages |
 | GET | `/api/wiki/{page_id}` | Single wiki page (full body, evidence, tags) |
 | POST | `/api/export/okf` | OKF v0.2 bundle export (since 0.4.9, Google OKF v0.2 spec + akitaonrails/ai-memory 2.0 + okf-memory/okf-agent-memory). Body: `{ "out_dir": "...", "scope": "global" | "<source>"? }`. Writes one `.md` file per wiki page under `<out_dir>/pages/<slug>.md` plus an `index.md` index, with YAML frontmatter on every page so an OKF-aware tool can ingest the bundle without re-parsing the body. Returns `{ out_dir, pages, page_count, index_path, okf_version, scope_filter }`. |
+| POST | `/api/import/okf` | OKF v0.2 bundle import (since 0.4.12, thecolourfoundation/rune + okf-memory/okf-agent-memory Issues #12-#15 + Deja-Vu + Google OKF v0.2 spec). Body: `{ "in_dir": "...", "scope": "global" | "<source>"?, "dry_run": false?, "skip_conflicts": false? }`. Walks `<in_dir>/index.md` + `<in_dir>/pages/*.md` and upserts each page as a wiki row keyed on `(scope, slug)`. `in_dir` is validated by `_safe_resolve_path` (live DB + system dirs are still refused). Returns `{ in_dir, imported, updated, skipped, errors: [{path, reason}], okf_version, scope, dry_run }`. |
 | GET | `/api/wiki/export` | Bulk export (`?format=markdown|json`) |
 | GET | `/api/wiki/{page_id}/export` | Single-page export with context |
 | GET | `/api/admin/llm/providers` | Registered provider specs |

@@ -22,6 +22,8 @@
 
 ---
 
+> **What's new in 0.4.12** — **OKF bundle import** + **DB-level audit enforcement** (audit 2026-09-27). The new `loop-memory import-okf <in_dir>` (and `POST /api/import/okf`) is the symmetric counterpart to `export-okf` (0.4.9) — bring an OKF v0.2 bundle back into Loop Memory as wiki pages, with idempotent upsert on `(scope, slug)`, optional `--dry-run` and `--skip-conflicts`. Source: `thecolourfoundation/rune` HN launch (MIT, 2026-09-25) + `okf-memory/okf-agent-memory` Issues #12-#15 + `Deja-Vu` (MIT, 2026-09-24) + Google OKF v0.2 spec (Apache-2.0, 2026-09-01). The new `MemoryStore._install_audit_triggers()` installs 12 SQLite triggers on `memories` / `wiki_pages` / `relations` / `consolidation_runs` so the `audit_log` table cannot be skipped — even a raw `sqlite3` writer that bypasses the Python wrapper still appends an audit row with `actor='db_trigger'`. New `MemoryStore.list_audit_log()` reads the log; `GET /api/stats` reports `audit_log` + `audit_triggers` counts. Source: `cogstate-eng/memory-eternal v0.4.3` `enforceAudit()` pattern (MIT, 2026-09-23). 31 new regression cases. [Full CHANGELOG →](./CHANGELOG.md#0412---2026-09-27)
+
 > **What's new in 0.4.11** — **operational probes** +
 **SQLite write-contention fix** (audit 2026-09-24). New
 ``GET /api/healthz`` (liveness) + ``GET /api/readyz``
