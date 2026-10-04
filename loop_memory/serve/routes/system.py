@@ -386,7 +386,8 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None,
     def recall(query: str, limit: int = 10, include: str = "memories,wiki,entities",
               bump: int = 1, source: str | None = None,
               mode: str = "hybrid", level: int = 1,
-              as_of: str | None = None):
+              as_of: str | None = None,
+              max_chars: int | None = None):
         """Unified recall — wiki + memories + entities in one ranked stream.
 
         ``mode`` is 'hybrid' (default) for BM25+semantic+entity RRF,
@@ -406,10 +407,33 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None,
         When unset (default) the call returns the latest answer
         (preserves the pre-0.4.9 contract). When set, the call
         routes through ``MemoryStore.recall_as_of``.
+
+        ``level`` (audit 2026-10-05) is the OpenViking-style
+        tiered-loader knob: 0 = L0 abstract ladder rung (titles +
+        tags + abstract only, never the full ``text`` / ``body``),
+        1 = L1 default (full ``text``, ``body`` capped at 800),
+        2 = L2 (full body, full text).
+
+        ``max_chars`` (audit 2026-10-05) caps the total payload
+        (sum of ``text`` + ``body`` across all hits) so an agent
+        loop can ask for a bounded retrieval. ``None`` (default)
+        preserves the byte-identical legacy payload. Source:
+        vectorize-io/hindsight v0.10.2 "concise extraction by
+        default" + aiming-lab/SimpleMem ICML'26 semantic-lossless-
+        compression.
         """
         wanted = tuple(s.strip() for s in include.split(",") if s.strip())
         if not wanted:
             wanted = ("memories", "wiki", "entities")
+        # Coerce max_chars to ``int | None`` so the route accepts
+        # ``?max_chars=`` (empty) and ``?max_chars=0`` as "no cap".
+        if max_chars is not None:
+            try:
+                max_chars = int(max_chars)
+            except (TypeError, ValueError):
+                max_chars = None
+            if max_chars is not None and max_chars <= 0:
+                max_chars = None
         if as_of is not None and str(as_of).strip():
             try:
                 r = store.recall_as_of(
@@ -419,6 +443,8 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None,
                     include=wanted,
                     bump_signals=bool(bump),
                     source=source,
+                    max_chars=max_chars,
+                    level=level,
                 )
                 recall_mode = "as_of"
             except ValueError as e:
@@ -430,12 +456,15 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None,
                 include=wanted,
                 bump_signals=bool(bump),
                 source=source,
+                max_chars=max_chars,
+                level=level,
             )
             recall_mode = mode
         else:
             r = store.recall_hybrid(
                 query, limit=limit, include=wanted,
                 bump_signals=bool(bump), source=source, level=level,
+                max_chars=max_chars,
             )
             recall_mode = mode
         return {
@@ -448,6 +477,7 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None,
             "source": source,
             "level": level,
             "as_of": as_of,
+            "max_chars": max_chars,
         }
 
 
@@ -531,7 +561,8 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None,
     @app.get("/api/recall/outline")
     def recall_outline(query: str = "", limit: int = 12,
                        include: str = "memories,wiki,entities",
-                       bump: int = 0, source: str | None = None):
+                       bump: int = 0, source: str | None = None,
+                       max_chars: int | None = None):
         """Audit 2026-09-13 — L0 outline recall (tigerless-labs/agent-memory
         v0.3.0 recall ladder pattern).
 
@@ -546,18 +577,32 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None,
         ``recall_count`` before the agent has actually decided to read
         the body. Set ``bump=1`` only when the agent commits to the
         candidate set.
+
+        ``max_chars`` (audit 2026-10-05) caps the total payload of
+        the *abstracts* across all returned hits so a downstream UI
+        never has to hand-trim a giant chip stream. ``None``
+        (default) keeps the legacy byte-identical abstract ladder
+        rung.
         """
         if not query:
             raise HTTPException(status_code=400, detail="query is required")
         wanted = tuple(s.strip() for s in include.split(",") if s.strip())
         if not wanted:
             wanted = ("memories", "wiki", "entities")
+        if max_chars is not None:
+            try:
+                max_chars = int(max_chars)
+            except (TypeError, ValueError):
+                max_chars = None
+            if max_chars is not None and max_chars <= 0:
+                max_chars = None
         r = store.recall_paths(
             query,
             limit=limit,
             include=wanted,
             bump_signals=bool(bump),
             source=source,
+            max_chars=max_chars,
         )
         return {
             "query": query,
@@ -567,6 +612,7 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None,
             "entities": r.get("entities", []),
             "mode": "outline",
             "source": source,
+            "max_chars": max_chars,
         }
 
 

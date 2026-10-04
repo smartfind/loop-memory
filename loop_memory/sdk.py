@@ -243,8 +243,15 @@ class MemoryClient(MemoryClientExt, AbstractContextManager):
         agent_id: str | None = None,
         user_id: str | None = None,
         include: str = "memories,wiki,entities",
+        max_chars: int | None = None,
+        level: int = 1,
     ) -> RecallResult:
-        """Unified search across the user's memory store."""
+        """Unified search across the user's memory store.
+
+        ``max_chars`` (audit 2026-10-05) caps the total payload so an
+        MCP-loop caller never has to hand-trim a giant response.
+        ``level`` (0..2) is the tiered-loader knob.
+        """
         raise NotImplementedError
 
     def forget(
@@ -351,6 +358,8 @@ class _InProcessClient(MemoryClient):
         agent_id: str | None = None,
         user_id: str | None = None,
         include: str = "memories,wiki,entities",
+        max_chars: int | None = None,
+        level: int = 1,
     ) -> RecallResult:
         # ``recall_hybrid`` is the production code path; fall back to
         # the legacy LIKE-based ``recall`` if a stale DB doesn't have
@@ -359,7 +368,8 @@ class _InProcessClient(MemoryClient):
         if hasattr(self._store, "recall_hybrid"):
             r = self._store.recall_hybrid(
                 query, limit=limit, include=wanted,
-                bump_signals=True, source=source, level=1,
+                bump_signals=True, source=source, level=level,
+                max_chars=max_chars,
             )
         else:
             r = self._store.recall(
@@ -367,6 +377,8 @@ class _InProcessClient(MemoryClient):
                 limit=limit,
                 include=wanted,
                 source=source,
+                max_chars=max_chars,
+                level=level,
             )
         # Optional post-filter: even if the store returned hits, the
         # caller may want only their agent's namespace.
@@ -661,13 +673,18 @@ class _HttpClient(MemoryClient):
         agent_id: str | None = None,
         user_id: str | None = None,
         include: str = "memories,wiki,entities",
+        max_chars: int | None = None,
+        level: int = 1,
     ) -> RecallResult:
         params = {
             "q": query,
             "limit": int(limit),
             "include": include,
             "source": source or "",
+            "level": int(level),
         }
+        if max_chars is not None:
+            params["max_chars"] = int(max_chars)
         if agent_id is not None:
             params["agent_id"] = agent_id
         if user_id is not None:

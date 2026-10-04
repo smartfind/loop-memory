@@ -164,7 +164,7 @@ COMMAND_HELP: dict[str, str] = {
     "install-hooks":          "loop-memory install-hooks   # auto-write MCP + SessionStart hooks for known clients.",
     "mcp":                    "loop-memory mcp   # stdio MCP server (for codex/claude/hermes). Requires ``[serve]`` for HTTP transport.",
     "openclaw-setup":         "loop-memory openclaw-setup   # install the openclaw/clawx auto-ingest watcher (launchd on macOS).",
-    "recall":                 "loop-memory recall <text> [--as-of <ISO|epoch>]   # show top memories (--as-of = bi-temporal recall).",
+    "recall":                 "loop-memory recall <text> [--as-of <ISO|epoch>] [--max-chars N] [--level 0|1|2]   # show top memories (--as-of = bi-temporal recall; --max-chars = total payload cap; --level 0 = L0 abstract ladder rung; audit 2026-10-05).",
     "rescore":                "loop-memory rescore [--half-life 30]   # recompute memory scores.",
     "serve":                  "loop-memory serve [--port 7767] [--no-browser]   # start the local web UI. Requires the ``[serve]`` extra (fastapi + uvicorn).",
     "stats":                  "loop-memory stats   # counters.",
@@ -178,7 +178,7 @@ COMMAND_HELP: dict[str, str] = {
     "import-okf":             "loop-memory import-okf <in_dir> [--scope S] [--dry-run] [--skip-conflicts]   # ingest an OKF v0.2 bundle as wiki pages (audit 2026-09-27).",
     "restore":                "loop-memory restore <in.memory.sqlite>   # re-hydrate a portable SQLite snapshot.",
     # Audit 2026-09-13 — L0 outline recall (tigerless-labs/agent-memory v0.3.0).
-    "recall-paths":           "loop-memory recall-paths <query> [--limit N]   # cheap L0 outline (id+abstract+score) instead of full text (audit 2026-09-13).",
+    "recall-paths":           "loop-memory recall-paths <query> [--limit N] [--max-chars N]   # cheap L0 outline (id+abstract+score) instead of full text (audit 2026-09-13; --max-chars caps the chip stream, audit 2026-10-05).",
     # Audit 2026-09-13 — per-agent identity bootstrap (Mem0 CLI init --agent pattern).
     "init":                   "loop-memory init --agent <name> [--install-hooks]   # register an agent + (optionally) install hooks.",
     "rules":                 "loop-memory rules [--agent codex|claude|hermes|openclaw] [--write] [--force]\n  Print, or append into the agent's rule file, the three-phase memory discipline (task start / mid-task / wrap-up). Never overwrites user content.",

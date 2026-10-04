@@ -1,4 +1,72 @@
-## [Unreleased]
+## [0.4.13] - 2026-10-05
+
+### feature
+
+- **Recall token / char budget cap** (audit 2026-10-05).  New
+  ``max_chars`` parameter on ``MemoryStore.recall()``,
+  ``recall_paths()``, ``recall_hybrid()``, and
+  ``recall_as_of()`` caps the *total* payload across all
+  returned hits.  When the budget is exceeded the lowest-ranked
+  hit is shrunk first, then the next-lowest, and so on, so the
+  top-scoring hits always keep their full body.  Default
+  ``None`` preserves the byte-identical legacy payload.  Source
+  attribution: ``vectorize-io/hindsight v0.10.2`` "concise
+  extraction by default, configurable and synced" (Apache-2.0,
+  2026-09-29) + ``aiming-lab/SimpleMem`` ICML'26 semantic-
+  lossless-compression (Apache-2.0, 2026-10-04) +
+  ``mem0ai/mem0 v2.2.0`` "User Profiles" shape (Apache-2.0,
+  2026-09-23).
+
+- **Unify the OpenViking-style ``level=0|1|2`` tiered-loader
+  knob across every recall method** (audit 2026-10-05).
+  ``MemoryStore.recall_hybrid()`` already accepted ``level``
+  (audit 2026-09-13).  ``recall()``, ``recall_paths()``, and
+  ``recall_as_of()`` now accept the same knob so an MCP / CLI /
+  HTTP caller can ask for the L0 abstract ladder rung inline
+  (titles + tags + abstract only, never full ``text`` /
+  ``body``) without routing through ``recall_paths()``
+  separately.  Source attribution: ``volcengine/OpenViking``
+  tiered-loader (AGPLv3, 2026-10-02) — same idea, our
+  MIT-compatible implementation.  (The *pattern* is not
+  copyrightable, only code is.  No code copied.)
+
+- **HTTP / CLI / SDK surface**:
+    * ``GET /api/recall?max_chars=N&level=0|1|2`` threads both
+      knobs through.  The response carries ``max_chars`` so a
+      caller can confirm the budget was honoured.
+    * ``GET /api/recall/outline?max_chars=N`` caps the abstract
+      chip-stream total.
+    * ``loop-memory recall <query> --max-chars N --level 0|1|2``
+      on the CLI; ``loop-memory recall-paths <query> --max-chars N``
+      on the outline variant.
+    * ``LoopMemoryClient.recall(..., max_chars=..., level=...)``
+      on the HTTP-backed and in-process SDK clients.
+    * ``tool_recall`` on the MCP stdio server now accepts
+      ``max_chars`` + ``level`` arguments.
+
+### internal
+
+- **26 new regression cases** this cycle
+  (``tests/test_recall_budget_2026_10_05.py`` — 7 unit tests on
+  ``_truncate_to_budget()`` + 6 store-level tests on
+  ``recall()`` / ``recall_paths()`` / ``recall_hybrid()`` /
+  ``recall_as_of()`` + 4 HTTP route tests + 4 CLI surface
+  tests + 2 SDK-shape regression tests via the store layer +
+  3 integration tests on the joined cap semantics).  Total
+  test count now **787** (was 761).
+- **No new third-party dependency.**  Both patterns (budget
+  cap, level unification) are stdlib-only.  No new pip
+  extras enabled.  No new submodule.
+- **Watchlist updated**:
+  ``TencentCloud/tencentdb-agent-memory`` (watch-only, per the
+  2026-09-13 + 2026-09-20 + 2026-09-27 + 2026-10-05 cycles),
+  plus the new ``cogstate-eng/memory-eternal`` 404 marker.
+  The ``thecolourfoundation/rune`` Git-as-memory-substrate
+  thesis stays deferred.  ``volcengine/OpenViking`` is rejected
+  (AGPLv3 incompatible with MIT; pattern-only).
+- See ``docs/research/2026-10-05.md`` for the full weekly
+  survey (17 projects + 3 academic papers across the
+  2026-09-28 → 2026-10-04 window).
 
 ## [0.4.12] - 2026-09-27
 

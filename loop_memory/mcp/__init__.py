@@ -78,7 +78,27 @@ def tool_recall(arguments: dict[str, Any]) -> list[dict[str, Any]]:
         return [_err("missing 'query' argument")]
     store = _store()
     source = arguments.get("source") or _agent_context()[0]
-    r = store.recall(query, limit=limit, source=source)
+    # Audit 2026-10-05: thread ``max_chars`` (token / char budget cap)
+    # + ``level`` (tiered-loader) through the MCP tool so an MCP-aware
+    # agent loop can ask for a bounded retrieval inline. ``None`` and
+    # the default ``1`` preserve the byte-identical legacy payload.
+    raw_max = arguments.get("max_chars")
+    max_chars: int | None = None
+    if raw_max is not None:
+        try:
+            max_chars = int(raw_max)
+            if max_chars <= 0:
+                max_chars = None
+        except (TypeError, ValueError):
+            max_chars = None
+    try:
+        level = int(arguments.get("level") or 1)
+        if level not in (0, 1, 2):
+            level = 1
+    except (TypeError, ValueError):
+        level = 1
+    r = store.recall(query, limit=limit, source=source,
+                     max_chars=max_chars, level=level)
     n_mem = len(r["memories"])
     n_wiki = len(r["wiki"])
     n_ent = len(r["entities"])

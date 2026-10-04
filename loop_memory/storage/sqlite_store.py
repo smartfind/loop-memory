@@ -1829,6 +1829,182 @@ class MemoryStore:
         return out
 
     @staticmethod
+    def _truncate_to_budget_joined(
+        joined_hits: list[dict],
+        *,
+        max_chars: int,
+    ) -> list[dict]:
+        """Apply ``_truncate_to_budget`` to a heterogeneous list
+        that mixes memory hits (with a ``text`` field) and wiki hits
+        (with a ``body`` field) so the *total* across both kinds is
+        bounded by ``max_chars``. The per-kind text key is chosen
+        per-hit by inspecting the dict; preview / summary are
+        regenerated from whatever got truncated.
+
+        This is the audit 2026-10-05 token / char budget cap
+        adopted from vectorize-io/hindsight v0.10.2 +
+        aiming-lab/SimpleMem ICML'26 + mem0ai/mem0 v2.2.0.
+        """
+        # Build per-hit text_keys + a temporary cloned list with a
+        # single canonical key ``_budget_text`` so the existing helper
+        # can do its one-pass shrink. Then re-emit each truncated
+        # value back to the original field name.
+        if not joined_hits:
+            return joined_hits
+        cloned: list[dict] = []
+        meta: list[tuple[dict, str, str | None]] = []
+        # meta[i] = (orig_hit, text_key, preview_or_summary_key_to_regen)
+        for h in joined_hits:
+            if "body" in h:
+                tk = "body"
+                cloned.append({"_budget_text": h.get("body") or "",
+                               "_budget_preview": h.get("preview", ""),
+                               "_budget_summary": h.get("summary", "")})
+                meta.append((h, tk, "preview"))
+            elif "text" in h:
+                tk = "text"
+                cloned.append({"_budget_text": h.get("text") or "",
+                               "_budget_preview": h.get("preview", "")})
+                meta.append((h, tk, "preview"))
+            else:
+                cloned.append({"_budget_text": h.get("abstract") or "",
+                               "_budget_preview": h.get("abstract", "")})
+                meta.append((h, "abstract", "abstract"))
+        truncated = MemoryStore._truncate_to_budget(
+            cloned,
+            max_chars=max_chars,
+            text_keys=("_budget_text",),
+            preview_key="_budget_preview",
+            summary_key="_budget_summary",
+        )
+        out: list[dict] = []
+        for (orig, tk, _), clone in zip(meta, truncated, strict=False):
+            new_val = clone.get("_budget_text") or ""
+            new_preview = clone.get("_budget_preview", orig.get("preview", ""))
+            new_summary = clone.get("_budget_summary", orig.get("summary", ""))
+            orig[tk] = new_val
+            if "preview" in orig:
+                orig["preview"] = new_preview
+            if "summary" in orig:
+                orig["summary"] = new_summary
+            out.append(orig)
+        return out
+
+    @staticmethod
+    def _truncate_to_budget(hits: list[dict], *, max_chars: int,
+                            text_keys: tuple[str, ...] = ("text", "body"),
+                            preview_key: str = "preview",
+                            summary_key: str = "summary") -> list[dict]:
+        """Trim the *total* payload of ``hits`` so ``len(text) +
+        len(body)`` summed across all hits is <= ``max_chars``.
+
+        Truncation is **last-first**: the list is assumed to be
+        pre-sorted by descending score (which every ``recall*()``
+        method guarantees), so the highest-ranked hits are
+        preserved in full and the lowest-ranked tail gets clipped
+        proportionally. The ``preview`` (and optionally ``summary``)
+        field of a clipped hit is regenerated from the truncated
+        text so a downstream renderer never shows a preview longer
+        than the body it previews.
+
+        Returns the list (mutated in place + returned). When the
+        total is already under the budget this is a no-op.
+
+        Audit 2026-10-05: token / char budget cap pattern adopted
+        from vectorize-io/hindsight v0.10.2 "concise extraction by
+        default" (Apache-2.0, 2026-09-29) +
+        aiming-lab/SimpleMem ICML'26 semantic-lossless-compression
+        (Apache-2.0, 2026-10-04) + mem0ai/mem0 v2.2.0 User-Profiles
+        "concise extraction default flag" (Apache-2.0, 2026-09-23).
+        """
+        if max_chars is None or max_chars <= 0 or not hits:
+            return hits
+        def _body_len(h: dict) -> int:
+            return sum(len(h.get(k) or "") for k in text_keys)
+        # Adaptive MIN_KEEP: when the budget is so tight that even
+        # the floor-per-hit sum is over-budget, drop the floor to
+        # ``cap / n`` (with a 20-char safety margin) so the cap is
+        # still reachable. Otherwise keep the legacy 80-char floor
+        # so a UI never shows an empty body chip.
+        n = len(hits)
+        legacy_floor = 80
+        if legacy_floor * n > max_chars:
+            per_hit_floor = max(20, max_chars // max(1, n))
+        else:
+            per_hit_floor = legacy_floor
+        MIN_KEEP = per_hit_floor
+        equal_share = max(MIN_KEEP, max_chars // max(1, n))
+        # Per-rank floor: bottom-ranked hits may fall all the way
+        # to ``MIN_KEEP``; top-ranked hits keep at least 2x the
+        # equal-share so the agent loop sees the most-relevant
+        # bodies intact. When the sum of those floors exceeds the
+        # total budget we degrade to a flat equal-share floor so
+        # the cap is still reachable for tight callers.
+        n_top = max(1, n // 2 + (n % 2))
+        flat_floor_sum = n_top * equal_share * 2 + max(0, n - n_top) * MIN_KEEP
+        if flat_floor_sum > max_chars:
+            floors = [equal_share] * n
+        else:
+            floors = []
+            for rank in range(n):
+                if rank < n // 2:
+                    floors.append(equal_share * 2)
+                else:
+                    floors.append(MIN_KEEP)
+        def _per_rank_floor(rank: int) -> int:
+            return floors[rank]
+        # Walk the list until the total is in budget OR every hit
+        # is at its floor. Each pass shrinks *one* hit (the
+        # lowest-ranked one with shrink-room) by the full excess,
+        # so the loop terminates in O(n).
+        for _ in range(n + 4):
+            total = sum(_body_len(h) for h in hits)
+            if total <= max_chars:
+                break
+            candidate = None
+            candidate_idx = -1
+            for idx, h in enumerate(hits):
+                if _body_len(h) <= _per_rank_floor(idx):
+                    continue
+                if candidate is None or idx > candidate_idx:
+                    candidate = h
+                    candidate_idx = idx
+            if candidate is None:
+                break
+            excess = total - max_chars
+            floor = _per_rank_floor(candidate_idx)
+            room = _body_len(candidate) - floor
+            shrink = min(room, excess)
+            if shrink <= 0:
+                break
+            new_len = _body_len(candidate) - shrink
+            for k in text_keys:
+                v = candidate.get(k)
+                if not v:
+                    continue
+                if len(v) > new_len:
+                    # Reserve one char for the trailing "\u2026" so
+                    # the final string length is exactly ``new_len``.
+                    visible_max = max(MIN_KEEP, new_len - 1)
+                    truncated = v[:visible_max].rstrip()
+                    if not truncated.endswith("\u2026"):
+                        truncated += "\u2026"
+                    if len(truncated) > new_len:
+                        truncated = truncated[:new_len]
+                    candidate[k] = truncated
+                    new_len = len(candidate[k])
+                    break
+            src_text = next((candidate.get(k) or "" for k in text_keys if candidate.get(k)), "")
+            if src_text and preview_key in candidate:
+                candidate[preview_key] = src_text[:240]
+            if summary_key in candidate and summary_key not in text_keys:
+                body_text = candidate.get("body") or ""
+                if body_text and len(candidate.get(summary_key) or "") > len(body_text):
+                    candidate[summary_key] = body_text[:240]
+        return hits
+
+
+    @staticmethod
     def _like_clause(col: str, tokens: list[str]) -> tuple[str, list[str]]:
         """Build a SQL ``(col LIKE ? OR col LIKE ? ...)`` clause and
         the matching parameter list for the given tokens."""
@@ -1844,7 +2020,9 @@ class MemoryStore:
     def recall(self, query: str, limit: int = 12,
                include: tuple[str, ...] = ("memories", "wiki", "entities"),
                bump_signals: bool = True,
-               source: str | None = None) -> dict[str, list[dict]]:
+               source: str | None = None,
+               max_chars: int | None = None,
+               level: int = 1) -> dict[str, list[dict]]:
         """Unified recall — returns a dict with three ranked lists.
 
         Each result is tagged with its ``kind`` ("memory" | "wiki" |
@@ -1855,6 +2033,22 @@ class MemoryStore:
 
         ``include`` lets the MCP server / CLI pick which sources to
         surface; default is all three for the broadest recall.
+
+        ``max_chars`` (audit 2026-10-05) caps the total ``text`` /
+        ``body`` payload across all returned hits. ``None`` (default)
+        preserves the byte-identical legacy payload. The cap is
+        applied *after* ranking, lowest-ranked hits first, so the top
+        hits are always preserved in full. See
+        ``_truncate_to_budget()`` for the exact algorithm.
+
+        ``level`` (audit 2026-10-05) unifies the OpenViking-style
+        tiered-loader knob across every recall method:
+
+        * 0 → L0 outline ladder rung (titles + tags + abstract only,
+          never the full ``text`` / ``body``). Equivalent to calling
+          ``recall_paths()``.
+        * 1 → L1 default (full ``text``, ``body`` capped at 800).
+        * 2 → L2 (full body, full text — every char).
         """
         import time as _time
         tokens = self._tokenize(query)
@@ -2044,6 +2238,42 @@ class MemoryStore:
                         "updated_at = excluded.updated_at",
                         (mid, now, now),
                     )
+        # Tiered-loader knob: level<=0 demotes the full text/body
+        # payload to an abstract ladder rung, matching
+        # ``recall_paths()`` without routing through a second method.
+        if level <= 0:
+            for m in out["memories"]:
+                full = m.get("text") or ""
+                m["text"] = ""
+                m["preview"] = self._abstract(full)
+            for w in out["wiki"]:
+                full_body = w.get("body") or ""
+                full_summary = w.get("summary") or ""
+                w["body"] = ""
+                w["summary"] = ""
+                w["preview"] = (full_summary or full_body)[:240]
+        # Token / char budget cap (audit 2026-10-05). The cap is the
+        # **total** payload across memories + wiki combined so an
+        # MCP-loop caller can ask for a single bounded retrieval.
+        # Per-list caps would multiply it by 2 (memories + wiki),
+        # which is the wrong semantic. The two lists are joined,
+        # truncated as one ranked stream, then split back. Rank is
+        # preserved per-list (memory hits rank against other memory
+        # hits; wiki hits rank against other wiki hits), so a
+        # ``score``-tie-break doesn't get confused.
+        if max_chars is not None and max_chars > 0:
+            joined: list[tuple[dict, str]] = []  # (hit, list_key)
+            for m in out["memories"]:
+                joined.append((m, "memories"))
+            for w in out["wiki"]:
+                joined.append((w, "wiki"))
+            joined_hits = [h for h, _ in joined]
+            truncated = self._truncate_to_budget_joined(
+                joined_hits, max_chars=max_chars,
+            )
+            for (orig, key), new in zip(joined, truncated, strict=False):
+                out[key].remove(orig)
+                out[key].append(new)
         return out
 
     # ----------------------------------------------------------------
@@ -2063,6 +2293,18 @@ class MemoryStore:
     # ----------------------------------------------------------------
     _ABSTRACT_MAX = 80
 
+    @staticmethod
+    def _abstract(text: str | None) -> str:
+        """Collapse ``text`` into a single-line ``<= _ABSTRACT_MAX``
+        chip with a trailing ``…`` when the body is longer. Audit
+        2026-10-05: promoted from a ``recall_paths()`` local so
+        ``recall()`` with ``level<=0`` can use the same shape."""
+        t = (text or "").strip().replace("\n", " ").replace("\r", " ")
+        t = " ".join(t.split())
+        if len(t) <= MemoryStore._ABSTRACT_MAX:
+            return t
+        return t[: MemoryStore._ABSTRACT_MAX - 1].rstrip() + "…"
+
     def recall_paths(
         self,
         query: str,
@@ -2070,7 +2312,16 @@ class MemoryStore:
         include: tuple[str, ...] = ("memories", "wiki", "entities"),
         bump_signals: bool = False,
         source: str | None = None,
+        max_chars: int | None = None,
     ) -> dict[str, list[dict]]:
+        """L0 outline recall + optional ``max_chars`` budget.
+
+        ``max_chars`` (audit 2026-10-05) caps the total payload of
+        the *abstracts* across all returned hits so a downstream
+        UI never has to hand-trim a giant chip stream. ``None``
+        (default) keeps the existing byte-identical abstract
+        ladder rung.
+        """
         import time as _time
         tokens = self._tokenize(query)
         if not tokens:
@@ -2239,6 +2490,19 @@ class MemoryStore:
                         "updated_at = excluded.updated_at",
                         (mid, now, now),
                     )
+        # Abstract ladder budget cap (audit 2026-10-05). Only the
+        # ``abstract`` field is in scope — these hits never carry
+        # full text/body so the budget knob here is just a chip-stream
+        # size guard, but it's the same algorithm as ``recall()``.
+        if max_chars is not None and max_chars > 0:
+            self._truncate_to_budget(out["memories"], max_chars=max_chars,
+                                     text_keys=("abstract",),
+                                     preview_key="abstract",
+                                     summary_key="abstract")
+            self._truncate_to_budget(out["wiki"], max_chars=max_chars,
+                                     text_keys=("abstract",),
+                                     preview_key="abstract",
+                                     summary_key="abstract")
         return out
 
     # ----------------------------------------------------------------
@@ -2742,8 +3006,18 @@ class MemoryStore:
         include: tuple[str, ...] = ("memories", "wiki", "entities"),
         bump_signals: bool = True,
         source: str | None = None,
+        max_chars: int | None = None,
+        level: int = 1,
     ) -> dict[str, list[dict]]:
         """Bi-temporal recall (audit 2026-09-20, loomcycle v1.33+).
+
+        ``max_chars`` + ``level`` (audit 2026-10-05) match the
+        ``recall()`` signature so a CLI / HTTP caller can pass the
+        same budget + tier to both paths without branching. The cap
+        is applied *after* the bi-temporal supersession-walk so a
+        recall that asks "what did we know at time T?" still returns
+        the historically-correct winner, even when the body is
+        truncated.
 
         ``as_of_ts`` answers: *"what did we know about this query at
         that moment?"* — a memory that was created after
@@ -2766,9 +3040,29 @@ class MemoryStore:
         as_of = _coerce_as_of(as_of_ts)
         tokens = self._tokenize(query)
         with self._conn() as c:
-            return _apply_as_of_filters(
+            out = _apply_as_of_filters(
                 c, tokens, include, source, as_of, limit,
             )
+        if level <= 0:
+            for m in out["memories"]:
+                full = m.get("text") or ""
+                m["text"] = ""
+                m["preview"] = (full[:240] + "…") if len(full) > 240 else full
+            for w in out["wiki"]:
+                full_body = w.get("body") or ""
+                full_summary = w.get("summary") or ""
+                w["body"] = ""
+                w["summary"] = ""
+                w["preview"] = (full_summary or full_body)[:240]
+        if max_chars is not None and max_chars > 0:
+            joined = list(out["memories"]) + list(out["wiki"])
+            truncated = self._truncate_to_budget_joined(
+                joined, max_chars=max_chars,
+            )
+            n_mem = len(out["memories"])
+            out["memories"] = truncated[:n_mem]
+            out["wiki"] = truncated[n_mem:]
+        return out
 
     # ----------------------------------------------------------------
     # Per-agent identity registry (audit 2026-09-13, Mem0 CLI
@@ -2888,7 +3182,14 @@ class MemoryStore:
         bump_signals: bool = True,
         level: int = 1,
         adaptive: bool = False,
+        max_chars: int | None = None,
     ) -> dict[str, list[dict]]:
+        """RRF-fused recall with token / char budget cap.
+
+        ``max_chars`` (audit 2026-10-05) caps the total payload
+        after ranking; ``None`` (default) keeps the legacy
+        byte-identical payload.
+        """
         """RRF-fused recall across BM25 + semantic + entity channels.
 
         ``adaptive=True`` blends the 4D AdaptiveScore (importance +
@@ -3027,6 +3328,17 @@ class MemoryStore:
         # Surface intent in the result so the UI can show it.
         out["temporal_intent"] = t_intent
         out["temporal_confidence"] = round(t_conf, 2)
+        # Token / char budget cap (audit 2026-10-05). Joined across
+        # memories + wiki so the total payload is bounded by a
+        # single budget -- mirrors ``recall()``.
+        if max_chars is not None and max_chars > 0:
+            joined = list(out["memories"]) + list(out["wiki"])
+            truncated = self._truncate_to_budget_joined(
+                joined, max_chars=max_chars,
+            )
+            n_mem = len(out["memories"])
+            out["memories"] = truncated[:n_mem]
+            out["wiki"] = truncated[n_mem:]
 
         # --- 3D adaptive scoring + graph boost ----------------------
         # ``adaptive=True`` blends the 4D AdaptiveScore (importance +

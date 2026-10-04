@@ -51,7 +51,7 @@ def run_stats(_args) -> int:
 
 
 def run_recall(args) -> int:
-    """Run ``loop-memory recall <query> [--verbose] [--outline] [--as-of T] [--limit N]``.
+    """Run ``loop-memory recall <query> [--verbose] [--outline] [--as-of T] [--limit N] [--max-chars N] [--level 0|1|2]``.
 
     With ``--verbose`` each memory hit is annotated with the
     ``why: [...]`` provenance labels produced by ``MemoryStore.recall``
@@ -73,6 +73,8 @@ def run_recall(args) -> int:
     outline = False
     limit = 10
     as_of: float | None = None
+    max_chars: int | None = None
+    level = 1
     qargs: list[str] = []
     i = 0
     while i < len(args):
@@ -104,6 +106,29 @@ def run_recall(args) -> int:
                         f"--as-of must be float epoch or ISO-8601; got {raw!r}"
                     )
             i += 2
+        elif a == "--max-chars" and i + 1 < len(args):
+            # Audit 2026-10-05 (vectorize-io/hindsight v0.10.2 +
+            # aiming-lab/SimpleMem ICML'26) — cap the total payload
+            # across all hits so an agent loop never has to hand-trim
+            # a giant response. ``0`` / negative = no cap.
+            try:
+                max_chars = int(args[i + 1])
+                if max_chars <= 0:
+                    max_chars = None
+            except ValueError:
+                return die(f"--max-chars must be an integer, got {args[i + 1]!r}")
+            i += 2
+        elif a == "--level" and i + 1 < len(args):
+            # Audit 2026-10-05 (volcengine/OpenViking tiered-loader
+            # pattern) — 0 = L0 abstract ladder rung, 1 = L1 default,
+            # 2 = L2 full body.
+            try:
+                level = int(args[i + 1])
+                if level not in (0, 1, 2):
+                    return die("--level must be 0, 1, or 2")
+            except ValueError:
+                return die(f"--level must be 0, 1, or 2, got {args[i + 1]!r}")
+            i += 2
         elif a == "--limit" and i + 1 < len(args):
             try:
                 limit = int(args[i + 1])
@@ -116,18 +141,20 @@ def run_recall(args) -> int:
             qargs.append(a)
             i += 1
     if not qargs:
-        return die("usage: loop-memory recall <query> [--verbose] [--outline] [--as-of <ISO|epoch>] [--limit N]")
+        return die("usage: loop-memory recall <query> [--verbose] [--outline] [--as-of <ISO|epoch>] [--limit N] [--max-chars N] [--level 0|1|2]")
     store = MemoryStore(default_db_path())
     query = " ".join(qargs)
     if as_of is not None:
         try:
-            r = store.recall_as_of(query, as_of, limit=limit)
+            r = store.recall_as_of(query, as_of, limit=limit,
+                                    max_chars=max_chars, level=level)
         except ValueError as e:
             return die(str(e))
     elif outline:
-        r = store.recall_paths(query, limit=limit)
+        r = store.recall_paths(query, limit=limit, max_chars=max_chars)
     else:
-        r = store.recall(query, limit=limit)
+        r = store.recall(query, limit=limit,
+                          max_chars=max_chars, level=level)
     has = False
     if r["wiki"]:
         has = True
@@ -458,6 +485,7 @@ def run_recall_paths(args) -> int:
     if not args:
         return die("usage: loop-memory recall-paths <query> [--limit N]")
     limit = 12
+    max_chars: int | None = None
     qargs: list[str] = []
     i = 0
     while i < len(args):
@@ -468,16 +496,25 @@ def run_recall_paths(args) -> int:
             except ValueError:
                 return die(f"--limit must be an integer, got {args[i + 1]!r}")
             i += 2
+        elif a == "--max-chars" and i + 1 < len(args):
+            # Audit 2026-10-05 — cap the abstract chip-stream size.
+            try:
+                max_chars = int(args[i + 1])
+                if max_chars <= 0:
+                    max_chars = None
+            except ValueError:
+                return die(f"--max-chars must be an integer, got {args[i + 1]!r}")
+            i += 2
         elif a.startswith("--"):
             return die(f"unknown flag: {a}")
         else:
             qargs.append(a)
             i += 1
     if not qargs:
-        return die("usage: loop-memory recall-paths <query> [--limit N]")
+        return die("usage: loop-memory recall-paths <query> [--limit N] [--max-chars N]")
     store = MemoryStore(default_db_path())
     query = " ".join(qargs)
-    r = store.recall_paths(query, limit=limit)
+    r = store.recall_paths(query, limit=limit, max_chars=max_chars)
     has = False
     if r["memories"]:
         has = True
