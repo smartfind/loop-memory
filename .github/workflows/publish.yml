@@ -106,3 +106,22 @@ jobs:
           generate_release_notes: true
           draft: true
           fail_on_unmatched_files: true
+
+      # Audit 2026-10-05 — publish the draft and explicitly mark it
+      # make_latest=true so GitHub's /releases/latest endpoint
+      # and the "Latest" badge both point at the freshly-shipped
+      # version. softprops/action-gh-release@v2 creates the release
+      # as a draft but does NOT auto-promote it; if a previous release
+      # is already marked "latest", the new draft would shadow that
+      # badge until a human unmarks the draft. Marking
+      # make_latest=true while unmarking the draft fixes that in
+      # one round trip.
+      - name: Publish release + mark as latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          release_id=$(gh api "repos/${{ github.repository }}/releases/tags/$RELEASE_TAG" --jq '.id')
+          gh api -X PATCH "repos/${{ github.repository }}/releases/${release_id}"             -f draft=false -f make_latest=true >/dev/null
+          echo "published $RELEASE_TAG (id=${release_id}) and marked it as latest"
