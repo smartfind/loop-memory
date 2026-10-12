@@ -122,6 +122,16 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          release_id=$(gh api "repos/${{ github.repository }}/releases/tags/$RELEASE_TAG" --jq '.id')
-          gh api -X PATCH "repos/${{ github.repository }}/releases/${release_id}"             -f draft=false -f make_latest=true >/dev/null
+          # Audit 2026-10-12 -- ``releases/tags/$RELEASE_TAG`` returns
+          # 404 for draft releases (GitHub quirk: the /tags lookup
+          # only returns published releases, but ``softprops/action-gh-release@v2``
+          # creates the release as a draft).  Use ``releases`` (lists
+          # every release, drafts included) and filter by tag_name in jq.
+          release_id=$(gh api "repos/${{ github.repository }}/releases" --jq ".[] | select(.tag_name == \"$RELEASE_TAG\") | .id")
+          if [ -z "$release_id" ]; then
+            echo "no release found with tag_name=$RELEASE_TAG in the releases list"
+            gh api "repos/${{ github.repository }}/releases" --jq '.[] | {id, tag_name, draft, html_url}'
+            exit 1
+          fi
+          gh api -X PATCH "repos/${{ github.repository }}/releases/${release_id}" -f draft=false -f make_latest=true >/dev/null
           echo "published $RELEASE_TAG (id=${release_id}) and marked it as latest"
