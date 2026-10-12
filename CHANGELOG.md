@@ -1,3 +1,37 @@
+## [0.4.14] - 2026-10-12
+
+### feature
+
+- **New ``loop-memory doctor`` deep store-health check**
+  (audit 2026-10-12).  Ten diagnostic checks — ``db_exists``,
+  ``db_integrity``, ``schema_version``, ``audit_triggers``,
+  ``audit_log_writable``, ``audit_log_size``, ``hooks_installed``,
+  ``version_consistent``, ``wiki_no_orphans``,
+  ``recall_paths_works`` — report ``ok``/``info``/``warn``/``error``
+  for the live ``MemoryStore``.  ``--fix`` auto-repairs the
+  ``audit_triggers`` check (the only one where a missing trigger
+  has a safe known fix).  ``--json`` emits a stable shape for
+  CI.  ``--list`` prints the check function names without touching
+  the store.  ``--verbose`` shows ``info``-level checks.  Exit
+  code ``1`` on any ``error`` status, ``0`` otherwise.  Source
+  attribution: ``cortexkit/magic-context doctor`` auto-diagnostic
+  pattern (MIT, 2026-10-12, stdlib-only — we re-implement from
+  scratch against our own ``MemoryStore``) + ``dsh-memento``
+  write-approval-gate pattern (Apache-2.0, 2026-10-12).
+
+### fix
+
+- **Python 3.14 chained ``store._conn().__enter__()`` no longer
+  closes the connection mid-query** (audit 2026-10-12).  Under
+  Python 3.14, a chained ``_GeneratorContextManager.__enter__()``
+  on a temporary object is garbage-collected immediately,
+  triggering the ``finally`` block and closing the underlying
+  ``sqlite3.Connection`` before ``.execute(...)`` runs.  Both
+  call sites (``_check_db_integrity`` and ``apply_fix`` for
+  ``audit_triggers``) now use the explicit ``with`` form.  This
+  was uncovered while dogfooding the new ``doctor`` command
+  against the live store.
+
 ## [0.4.13] - 2026-10-05
 
 ### feature

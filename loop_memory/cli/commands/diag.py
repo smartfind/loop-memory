@@ -133,95 +133,18 @@ def _detect_watcher() -> bool:
 
 
 def run_doctor(_args) -> int:
-    """``loop-memory doctor`` — green/red diagnostic screen.
+    """`loop-memory doctor` — deep store-health check.
 
-    Tells the user what's installed, what's wired, what's broken, and
-    gives copy-pasteable fix commands for anything red.
+    Audit 2026-10-12.  Delegates to :mod:`loop_memory.doctor` which runs
+    a small library of health checks against the live
+    `MemoryStore` and renders a human-readable report.  Exits
+    non-zero if any check is in 'error' state.  Source:
+    cortexkit/magic-context doctor (MIT, 2026-10-12) +
+    PerryLink/dsh-memento dsh-plugin-doctor (Apache-2.0,
+    2026-10-12) — pattern only.
     """
-    print("loop-memory doctor\n")
-    # 1) Installation
-    cli_path = shutil.which("loop-memory")
-    print(_dot(cli_path is not None,
-               f"CLI on PATH: {'yes (' + cli_path + ')' if cli_path else 'no'}"))
-    # 2) Database
-    db_path = Path(DEFAULT_DB)
-    print(_dot(db_path.exists(),
-               f"database: {db_path}" + ("" if db_path.exists() else "  (will be created on first run)")))
-    # 3) Server
-    server_running = False
-    try:
-        import urllib.request
-        with urllib.request.urlopen("http://127.0.0.1:7767/api/stats", timeout=1) as r:
-            server_running = r.status == 200
-    except Exception:
-        server_running = False
-    print(_dot(server_running,
-               "web UI server: http://127.0.0.1:7767" + (" (running)" if server_running else " (not running — start with `loop-memory serve &`)")))
-
-    # 4) Clients
-    print()
-    print("clients:")
-    clients = _detect_clients()
-    for name in ("codex", "claude", "hermes", "openclaw"):
-        info = clients[name]
-        if name == "openclaw":
-            print(_dot(info["installed"],
-                       f"  openclaw: {'installed' if info['installed'] else 'not installed'}"))
-            if info["installed"]:
-                paths = ", ".join(Path(p).name for p in info["watch_paths"]) or "no transcript paths found"
-                print(f"      {paths}")
-                print(_dot(_detect_watcher(),
-                           "      watcher running" if _detect_watcher() else "      watcher not running — start with `loop-memory openclaw-setup`"))
-        else:
-            cfg = info["config"]
-            installed = info["installed"]
-            cfg_str = f"@ {cfg}" if installed else ""
-            print(_dot(installed,
-                       f"  {name}: {'installed' if installed else 'not installed'} {cfg_str}"))
-            if installed:
-                print(_dot(info["mcp_configured"],
-                           f"      MCP server wired: {'yes' if info['mcp_configured'] else 'no — run `loop-memory install-hooks`'}"))
-
-    # 5) LLM provider
-    print()
-    print("LLM provider:")
-    try:
-        from ...storage.sqlite_store import MemoryStore
-        from ...llm.providers import default_config
-        from ...security import backend_display_name, has_secret
-        store = MemoryStore(DEFAULT_DB)
-        cfg = store.get_setting("llm_consolidator", default_config())
-        provider = cfg.get("provider") or "echo"
-        print(f"  provider: {provider}")
-        print(f"  model: {cfg.get('model', '—')}")
-        print(f"  secret backend: {backend_display_name()}")
-        if provider != "echo":
-            from ...security import account_for
-            account = cfg.get("api_key_account") or account_for(provider)
-            has = has_secret(account)
-            print(_dot(has,
-                       f"  API key: {'configured' if has else 'MISSING — open the web UI → ⚙ Model → paste your key'}"))
-    except Exception as e:
-        print(_dot(False, f"  could not read LLM config: {e}"))
-
-    # 6) Data summary
-    print()
-    print("data:")
-    try:
-        from ...storage.sqlite_store import MemoryStore
-        store = MemoryStore(DEFAULT_DB)
-        n_mem = store.count_memories()
-        n_sess = store.count_sessions()
-        n_wiki = store.count_wiki_pages()
-        n_ent = store.count_entities()
-        print(f"  {n_mem} memories · {n_sess} sessions · {n_wiki} wiki pages · {n_ent} entities")
-    except Exception as e:
-        print(f"  could not read counters: {e}")
-
-    print()
-    print(_DIM + "Tip: run `loop-memory status` for a one-screen summary, "
-          "or `loop-memory install-hooks` to auto-configure your CLIs." + _RESET)
-    return 0
+    from . import doctor as _doctor_cli
+    return _doctor_cli.run_doctor(list(_args))
 
 
 def run_status(_args) -> int:

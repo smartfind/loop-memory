@@ -149,7 +149,7 @@ COMMAND_HELP: dict[str, str] = {
     "consolidate":            "loop-memory consolidate   # rescore + GC + dedupe.",
     "consolidate-now":        "loop-memory consolidate-now   # ask the running server to trigger a pass right now.",
     "digest":                 "loop-memory digest [--out PATH]   # compact knowledge digest for AGENTS.md.",
-    "doctor":                 "loop-memory doctor   # diagnose local install (db, hooks, optional deps).",
+    "doctor":                 "loop-memory doctor [--json] [--verbose] [--fix] [--db PATH]   # deep store-health check (db integrity + audit triggers + hooks + version + wiki orphans). Auto-repair with --fix (audit 2026-10-12; pattern adopted from cortexkit/magic-context + dsh-memento).",
     "export":                 "loop-memory export [--out FILE | <out_dir>]   # markdown dump or v7 bundle export.",
     "export-bundle":          "loop-memory export-bundle <out_dir>   # explicit v7 bundle alias.",
     "flush":                  "loop-memory flush   # drop volatile caches; keep persisted data.",
