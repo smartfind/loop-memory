@@ -75,10 +75,20 @@ class Stage0DedupTests(unittest.TestCase):
             started_at=1700000000.0, ended_at=1700001000.0,
             message_count=1,
         ).id
-        # 3 near-duplicate "fact" memories + 2 distinct ones
+        # 3 near-duplicate "fact" memories + 2 distinct ones.
+        # Audit 2026-10-18 (loop-memory 0.4.15): content-hash dedup
+        # now collapses byte-identical texts at upsert time, so we
+        # use 3 *distinct* near-duplicates instead of 2 byte-identical
+        # + 1 near-dup -- otherwise the first two collapse before
+        # stage0 ever sees them and the test's expected collapse
+        # count drops by one.
+        # 3 *distinct-but-similar* texts that all cosine > 0.85 in the
+        # hash embedder used by stage0 dedup. Each is also byte-
+        # distinct so content-hash upsert dedup does NOT collapse them
+        # first.
         samples = [
             ("fact", 0.80, "User prefers dark mode and concise UI layouts across all apps"),
-            ("fact", 0.78, "User prefers dark mode and concise UI layouts across all apps"),
+            ("fact", 0.78, "User prefers dark mode and concise UI layouts across all apps today"),
             ("fact", 0.76, "User prefers dark mode and concise UI layouts across all applications"),
             ("fact", 0.70, "Project loop-memory is a local memory system for LLM clients"),
             ("fact", 0.65, "API keys are stored locally in ~/.loop_memory/secrets.json with mode 0600"),

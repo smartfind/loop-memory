@@ -47,8 +47,10 @@ class SupersessionChainTests(unittest.TestCase):
     def test_schema_version_bumped_to_9(self) -> None:
         """The schema migration bumps SCHEMA_VERSION so a downgrade is
         loud. Pinned here so a future change can't silently revert
-        to v8 (which would not have ``superseded_by``)."""
-        self.assertEqual(MemoryStore.SCHEMA_VERSION, "11")
+        to v8 (which would not have ``superseded_by``); audit
+        2026-10-18 keeps the same guard for the 11 -> 12 bump that
+        added bi-temporal validity + content_hash."""
+        self.assertEqual(MemoryStore.SCHEMA_VERSION, "12")
 
     def test_merge_writes_superseded_by_pointer_not_delete(self) -> None:
         """``merge_memories(a, b)`` must keep the loser row but set

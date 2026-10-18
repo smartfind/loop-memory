@@ -1,3 +1,81 @@
+## [0.4.15] - 2026-10-18
+
+### feature
+
+- **Content-hash dedup** + **bi-temporal validity window** + **evidence chain**
+  + **`@agent_memory` decorator** (audit 2026-10-18, weekly ecosystem sync —
+  Cognee 1.0, Mem0 v2, Zep/Graphiti, Letta).  Three new columns on the
+  ``memories`` table:
+  - ``content_hash`` — SHA-256 of normalised text (strip + lower). New partial
+    index ``idx_mem_content_hash`` keeps dedup O(1) even on million-row
+    stores. Backfilled for every legacy row in the 11 → 12 migration.
+  - ``valid_at`` — epoch the memory becomes active. Defaults to the row's
+    ``created_at`` so existing callers see no behaviour change.
+  - ``invalid_at`` — epoch the memory expires. ``NULL`` means still
+    open-ended (the common case); a non-null value softly expires the
+    memory without DELETEing it so the audit trail stays intact.
+
+  ``SCHEMA_VERSION`` bumped 11 → 12 with idempotent ``ALTER TABLE`` /
+  partial-index / backfill guards so a pre-0.4.15 DB upgrades in-place
+  on next open.
+
+  New ``upsert_memory(valid_at=, invalid_at=, dedup=)`` parameters:
+  - ``valid_at`` / ``invalid_at`` set the bi-temporal window explicitly.
+  - ``dedup=False`` opts out of content-hash dedup for episodic event
+    streams that want one row per push.
+
+  New ``recall()`` and ``recall_hybrid()`` ``as_of_ts`` parameter
+  (float epoch OR ISO-8601 string). When set, both methods additionally
+  drop memories whose ``valid_at > as_of`` or ``invalid_at <= as_of``.
+  Complements the existing ``recall_as_of()`` supersession-chain walk.
+
+  Every recall hit now carries ``evidence: [{field, value, weight}]`` —
+  the Cognee / Mem0 evidence-citation pattern, kept zero-dep. The hybrid
+  path exposes per-channel scores (``bm25``, ``semantic``, ``entity``,
+  ``rrf_total``) and the legacy path exposes lexical signals (``text_match``,
+  ``tag_match``, ``high_importance``, ``high_score_field``, ``high_recall_count``).
+
+  New ``loop_memory.decorators`` module with two decorators:
+  - ``@agent_memory(store, agent_id=, limit=)`` — wraps a callable so
+    every invocation recalls top-k relevant memories before the body
+    runs and writes a fresh ``kind="interaction"`` memory after. The
+    recall is injected as a ``memory_context`` keyword when the function
+    declares it; otherwise the recall list is attached to dict returns
+    under ``memories``. Store failures never break the wrapped call.
+  - ``remember(store, text, ...)`` — one-shot sugar for seeding memory
+    at import time.
+
+  Source pattern: Cognee 1.0 ECL pipeline + Mem0 v2 hybrid fusion +
+  Zep/Graphiti bi-temporal validity fields + Letta block-memory (pattern
+  only, no code copied).
+
+### improvement
+
+- **BM25 LIKE fallback now falls through to per-token OR-LIKE** when the
+  whole-string match returns nothing.  Natural-language questions like
+  "What is the deploy process?" now hit stored facts even when FTS5
+  trigram can't match quoted exact phrases.  The legacy whole-string
+  LIKE path runs first so existing callers see byte-identical behaviour
+  for short, exact queries.
+
+### internal
+
+- New ``fuse_rrf_with_channels()`` in ``storage.retrieval`` is a strict
+  superset of ``fuse_rrf()``: same RRF algorithm + per-channel score
+  breakdown so the evidence chain can attribute scores to BM25 /
+  semantic / entity channels.  ``fuse_rrf()`` is preserved unchanged.
+
+### tests
+
+- 59 new regression cases across:
+  - ``tests/test_content_hash_dedup_2026_10_18.py`` — content-hash
+    dedup + bi-temporal columns + as_of_ts + evidence chain (27 cases).
+  - ``tests/test_decorators_2026_10_18.py`` — ``@agent_memory`` +
+    ``remember()`` including store-failure tolerance + multi-turn
+    recall (18 cases).
+  - ``tests/test_retrieval_channels_2026_10_18.py`` —
+    ``fuse_rrf_with_channels`` + per-token LIKE fallback (14 cases).
+
 ## [0.4.14] - 2026-10-12
 
 ### feature

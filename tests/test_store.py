@@ -238,8 +238,17 @@ class TieredLoadingTests(unittest.TestCase):
             self.assertEqual(out["memories"][0]["text"], "")
         for r in out["wiki"]:
             self.assertEqual(r["_level"], 0)
-            # L0 has only preview and metadata.
-            self.assertIn("A long", r["preview"])
+            # L0 has only preview and metadata. Audit 2026-10-18:
+            # preview is ``(summary or body)[:240]``; the title is
+            # always returned separately on the ``title`` field, so a
+            # UI renders title + preview side-by-side. Test the actual
+            # contract rather than depending on what the FTS5 trigram
+            # tokenizer can or cannot match (the per-token LIKE
+            # fallback added in 0.4.15 surfaces more rows than
+            # pre-0.4.15 callers expected).
+            self.assertEqual(r["summary"], "", "L0 drops the summary")
+            self.assertEqual(r["body"], "", "L0 drops the body")
+            self.assertTrue(len(r["preview"]) > 0, "L0 keeps the preview")
 
     def test_recall_hybrid_l1_caps_wiki_body(self) -> None:
         out = self.store.recall_hybrid("distillation", limit=5, level=1)

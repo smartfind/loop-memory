@@ -115,6 +115,80 @@ short-circuits with `aborted=True` + `abort_reason` naming the slow
 stage. The HTTP body, the in-process SDK and the CLI all share the
 same view — no second JSON shape to maintain.
 
+
+
+## Bi-temporal validity + content-hash dedup (audit 2026-10-18, loop-memory 0.4.15)
+
+The `memories` table carries three new columns that turn the store
+from a flat log into a time-aware knowledge base:
+
+- `content_hash TEXT` — SHA-256 of normalised text. The
+  `idx_mem_content_hash` partial index keeps dedup O(1). New
+  `upsert_memory(dedup=True)` collapses byte-identical pushes to a
+  single row even when `external_id` is None.
+- `valid_at REAL` — epoch the memory becomes active. Defaults to
+  `created_at` so existing callers see no behaviour change.
+- `invalid_at REAL` — epoch the memory expires. `NULL` means still
+  open-ended (the common case); a non-null value softly expires the
+  memory without DELETEing it so the audit trail stays intact.
+
+The `validity_clause(as_of_ts)` helper builds the SQL guard:
+
+```sql
+AND (m.valid_at IS NOT NULL AND m.valid_at <= ?  -- as_of
+     AND (m.invalid_at IS NULL OR m.invalid_at > ?))  -- as_of
+```
+
+This is wired into `recall()` (WHERE clause) and `recall_hybrid()`
+(post-fusion filter in `_hydrate_memories()`), gated on an optional
+`as_of_ts` parameter — when `None`, the legacy "everything" behaviour
+is preserved so every existing caller is unchanged. `recall_as_of()`
+still walks the supersession chain for the explicit bi-temporal
+question "what did we know at time T?"; the new `as_of_ts` is the
+cheap "is this memory still in its validity window at time T?"
+companion.
+
+### Hybrid recall + evidence chain
+
+```mermaid
+flowchart LR
+    Q[Query] --> BM25[bm25_search<br/>FTS5 + LIKE fallback]
+    Q --> SEM[search_by_embedding<br/>optional]
+    Q --> ENT[search_memories_by_entity_names<br/>optional]
+    BM25 --> RRF[fuse_rrf_with_channels<br/>k=60]
+    SEM --> RRF
+    ENT --> RRF
+    RRF --> HYDR[_hydrate_memories<br/>+ as_of_ts validity filter]
+    HYDR --> EV[evidence:<br/>{field, value, weight}]
+    EV --> OUT[RecallHit]
+```
+
+`fuse_rrf_with_channels` (audit 2026-10-18) is a strict superset of
+the original `fuse_rrf`: same RRF math + per-channel score
+breakdown so each hydrated hit carries `evidence: [{field, value,
+weight}]` describing which channels contributed. The pre-existing
+`fuse_rrf` is unchanged — callers that want the minimal payload
+keep using it.
+
+### `@agent_memory` decorator
+
+```mermaid
+flowchart LR
+    CALL[Wrapped callable invoked] --> REC[recall_hybrid<br/>as_of_ts=None]
+    REC --> KW{memory_context kwarg<br/>declared?}
+    KW -- yes --> INJ[inject memory_context]
+    KW -- no --> SKIP[drop recall]
+    INJ --> BODY[body runs]
+    SKIP --> BODY
+    BODY --> STORE[upsert_memory kind=interaction]
+    STORE --> RET[return value<br/>dict gets memories attached]
+```
+
+`loop_memory.decorators.agent_memory(store, agent_id=, limit=)` is
+the one-line adoption shortcut. The decorator survives both store
+read failures and store write failures — neither can break the
+wrapped call.
+
 ## Request lifecycle
 
 ```mermaid

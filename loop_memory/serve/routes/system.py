@@ -387,6 +387,15 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None,
               bump: int = 1, source: str | None = None,
               mode: str = "hybrid", level: int = 1,
               as_of: str | None = None,
+              # Audit 2026-10-18: bi-temporal *validity-window* filter
+              # -- distinct from ``as_of`` (which routes through the
+              # supersession-chain ``recall_as_of()``). When set, the
+              # standard ``recall()`` / ``recall_hybrid()`` path drops
+              # memories whose ``valid_at > validity_at`` or
+              # ``invalid_at <= validity_at``. Complements ``as_of`` for
+              # callers that want "show me what's currently in its
+              # validity window" without walking the supersession chain.
+              validity_at: str | None = None,
               max_chars: int | None = None):
         """Unified recall — wiki + memories + entities in one ranked stream.
 
@@ -450,24 +459,38 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None,
             except ValueError as e:
                 raise HTTPException(400, str(e))
         elif mode == "legacy" or not hasattr(store, "recall_hybrid"):
-            r = store.recall(
-                query,
-                limit=limit,
-                include=wanted,
-                bump_signals=bool(bump),
-                source=source,
-                max_chars=max_chars,
-                level=level,
-            )
+            try:
+                r = store.recall(
+                    query,
+                    limit=limit,
+                    include=wanted,
+                    bump_signals=bool(bump),
+                    source=source,
+                    max_chars=max_chars,
+                    level=level,
+                    # Audit 2026-10-18: only pass when caller
+                    # supplied something so the default-None legacy
+                    # contract holds.
+                    as_of_ts=(validity_at if (validity_at and str(validity_at).strip()) else None),
+                )
+            except ValueError as e:
+                # Invalid ``validity_at`` -> 400 (audit 2026-10-18)
+                # so the HTTP surface mirrors ``as_of``'s contract.
+                raise HTTPException(400, str(e))
             recall_mode = mode
         else:
-            r = store.recall_hybrid(
-                query, limit=limit, include=wanted,
-                bump_signals=bool(bump), source=source, level=level,
-                max_chars=max_chars,
-            )
+            try:
+                r = store.recall_hybrid(
+                    query, limit=limit, include=wanted,
+                    bump_signals=bool(bump), source=source, level=level,
+                    max_chars=max_chars,
+                    as_of_ts=(validity_at if (validity_at and str(validity_at).strip()) else None),
+                )
+            except ValueError as e:
+                raise HTTPException(400, str(e))
             recall_mode = mode
         return {
+            "validity_at": validity_at,
             "query": query,
             "tokens": r.get("tokens", []),
             "memories": r.get("memories", []),

@@ -169,12 +169,25 @@ def _like_fallback(
     source_filter: str | None = None,
 ) -> list:
     """Brute-force LIKE fallback used when FTS5 trigram can't index
-    short CJK queries. Searches <substr> against the source table
-    directly. Returns rows in the same shape as bm25_search.
+    a query -- short strings, all-CJK with <3 chars, or the FTS5
+    ``MATCH`` returned 0 rows because quoted exact-phrase tokens
+    don't exist in the trigram index.
+
+    Audit 2026-10-18: now tokenises the query and OR-LIKEs every
+    token. The legacy whole-string LIKE is still tried first so
+    existing callers that depend on ``"%deploy process%"`` semantics
+    (e.g. ``recall_paths`` callers) get byte-identical results. When
+    the whole-string LIKE returns nothing we fall through to the
+    per-token OR pass which is strictly more lenient -- a multi-word
+    question like "What is the deploy process?" now matches the
+    stored fact "Deploy process uses blue/green" because "deploy"
+    appears, even though the exact substring "What is the deploy
+    process" does not.
     """
-    pat = f"%{(query or '').strip()}%"
-    if not query.strip():
+    q = (query or "").strip()
+    if not q:
         return []
+    pat = f"%{q}%"
     with store._conn() as c:
         if kind == "memories":
             sql = (
@@ -182,7 +195,22 @@ def _like_fallback(
                 "FROM memories m WHERE LOWER(text) LIKE LOWER(?) "
                 "ORDER BY m.importance DESC, m.created_at DESC LIMIT ?"
             )
-            return [dict(r) for r in c.execute(sql, (pat, limit)).fetchall()]
+            whole = [dict(r) for r in c.execute(sql, (pat, limit)).fetchall()]
+            if whole:
+                return whole
+            # Per-token OR pass -- at least one query word must hit.
+            import re as _re
+            tokens = [t for t in _re.findall(r"[A-Za-z0-9]+", q.lower()) if len(t) >= 2]
+            if not tokens:
+                return whole
+            placeholders = " OR ".join("LOWER(text) LIKE LOWER(?)" for _ in tokens)
+            params = [f"%{t}%" for t in tokens]
+            sql_t = (
+                "SELECT m.id AS id, m.importance AS importance "
+                f"FROM memories m WHERE {placeholders} "
+                "ORDER BY m.importance DESC, m.created_at DESC LIMIT ?"
+            )
+            return [dict(r) for r in c.execute(sql_t, (*params, limit)).fetchall()]
         sql = (
             "SELECT w.id AS id, w.importance AS importance, w.scope AS scope "
             "FROM wiki_pages w "
@@ -190,7 +218,24 @@ def _like_fallback(
             "ORDER BY w.importance DESC, w.updated_at DESC LIMIT ?"
         )
         rows = list(c.execute(sql, (pat, pat, limit * 3)).fetchall())
-        return _filter_wiki_scope(rows, source_filter)[:limit]
+        rows = _filter_wiki_scope(rows, source_filter)[:limit]
+        if rows:
+            return rows
+        import re as _re
+        tokens = [t for t in _re.findall(r"[A-Za-z0-9]+", q.lower()) if len(t) >= 2]
+        if not tokens:
+            return rows
+        title_parts = " OR ".join("LOWER(w.title) LIKE LOWER(?)" for _ in tokens)
+        body_parts = " OR ".join("LOWER(w.body) LIKE LOWER(?)" for _ in tokens)
+        params = [f"%{t}%" for t in tokens] * 2
+        sql_t = (
+            "SELECT w.id AS id, w.importance AS importance, w.scope AS scope "
+            "FROM wiki_pages w "
+            f"WHERE ({title_parts}) OR ({body_parts}) "
+            "ORDER BY w.importance DESC, w.updated_at DESC LIMIT ?"
+        )
+        rows_t = [dict(r) for r in c.execute(sql_t, (*params, limit * 3)).fetchall()]
+        return _filter_wiki_scope(rows_t, source_filter)[:limit]
 
 
 def _filter_wiki_scope(rows: Iterable, source: str | None) -> list:
@@ -236,6 +281,50 @@ def fuse_rrf(
         for rank, item in enumerate(lst, start=1):
             fused[item["id"]] = fused.get(item["id"], 0.0) + 1.0 / (k + rank)
     return [{"id": i, "_rrf": s} for i, s in sorted(fused.items(), key=lambda kv: -kv[1])]
+
+
+def fuse_rrf_with_channels(
+    ranked_lists_with_labels: list[tuple[str, list[dict]]],
+    k: int = DEFAULT_RRF_K,
+) -> list[dict]:
+    """Reciprocal Rank Fusion that also returns a per-channel score
+    breakdown (audit 2026-10-18).
+
+    ``ranked_lists_with_labels`` is a list of ``(channel, list)``
+    pairs -- e.g. ``[("bm25", bm25_mem), ("semantic", sem_mem),
+    ("entity", ent_mem)]``. Each ``list`` is a ranked list of
+    ``{"id": ..., "_score": ...}`` already sorted by descending
+    score.
+
+    The returned list carries one dict per distinct document::
+
+        {"id": id, "_rrf": float, "_channel_scores": {channel: float}}
+
+    ``_channel_scores`` is the raw score each channel assigned to the
+    document (None when the channel did not surface it). It powers the
+    evidence chain that the rest of loop-memory attaches to each
+    recall hit -- so a UI can render "this hit because BM25 (1.0)
+    + entity (0.7)" instead of a black-box RRF total.
+
+    RRF semantics are identical to ``fuse_rrf``: this is the same
+    algorithm with extra metadata. The 0-dep property is preserved
+    (pure Python).
+    """
+    fused: dict[str, float] = {}
+    raw_scores: dict[str, dict[str, float]] = {}
+    for channel, lst in ranked_lists_with_labels:
+        for rank, item in enumerate(lst, start=1):
+            doc_id = item["id"]
+            fused[doc_id] = fused.get(doc_id, 0.0) + 1.0 / (k + rank)
+            raw_scores.setdefault(doc_id, {})[channel] = float(item.get("_score") or 0.0)
+    out = []
+    for doc_id, total in sorted(fused.items(), key=lambda kv: -kv[1]):
+        out.append({
+            "id": doc_id,
+            "_rrf": total,
+            "_channel_scores": raw_scores.get(doc_id, {}),
+        })
+    return out
 
 
 # ----------------------------------------------------------------------

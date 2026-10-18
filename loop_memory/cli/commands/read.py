@@ -73,6 +73,9 @@ def run_recall(args) -> int:
     outline = False
     limit = 10
     as_of: float | None = None
+    # Audit 2026-10-18: bi-temporal *validity* window (distinct
+    # from ``as_of`` which routes through the supersession chain).
+    validity_at: float | None = None
     max_chars: int | None = None
     level = 1
     qargs: list[str] = []
@@ -104,6 +107,24 @@ def run_recall(args) -> int:
                 except Exception:
                     return die(
                         f"--as-of must be float epoch or ISO-8601; got {raw!r}"
+                    )
+            i += 2
+        elif a == "--validity-at" and i + 1 < len(args):
+            # Audit 2026-10-18 (loop-memory 0.4.15) -- cheaper
+            # validity-window filter (vs --as-of which walks the
+            # supersession chain). Accepts the same float-or-ISO.
+            raw = args[i + 1].strip()
+            try:
+                validity_at = float(raw)
+            except ValueError:
+                try:
+                    from datetime import datetime
+                    validity_at = datetime.fromisoformat(
+                        raw.replace("Z", "+00:00")
+                    ).timestamp()
+                except Exception:
+                    return die(
+                        f"--validity-at must be float epoch or ISO-8601; got {raw!r}"
                     )
             i += 2
         elif a == "--max-chars" and i + 1 < len(args):
@@ -154,7 +175,12 @@ def run_recall(args) -> int:
         r = store.recall_paths(query, limit=limit, max_chars=max_chars)
     else:
         r = store.recall(query, limit=limit,
-                          max_chars=max_chars, level=level)
+                          max_chars=max_chars, level=level,
+                          # Audit 2026-10-18: pass validity_at through
+                          # to recall() so the new bi-temporal window
+                          # filter applies. ``None`` keeps the legacy
+                          # "everything" semantics.
+                          as_of_ts=validity_at)
     has = False
     if r["wiki"]:
         has = True

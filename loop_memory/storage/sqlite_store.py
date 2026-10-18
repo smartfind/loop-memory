@@ -436,6 +436,17 @@ class StoredMemory:
     agent_id: str | None = None
     user_id: str | None = None
     external_id: str | None = None
+    # Audit 2026-10-18 (loop-memory 0.4.15) — bi-temporal validity
+    # window + content-hash for fast same-content collapse on upsert.
+    # valid_at is the epoch the memory becomes active (NULL only
+    # during a brief window between INSERT and the migration's
+    # backfill); invalid_at is the epoch it stops being active
+    # (NULL = still open-ended). content_hash is the SHA-256 of
+    # the normalised text — set on every write so dedup is a single
+    # indexed lookup, not a scan.
+    content_hash: str | None = None
+    valid_at: float | None = None
+    invalid_at: float | None = None
 
 
 @dataclass
@@ -515,7 +526,13 @@ def _coerce_as_of(value):
       * ``None``     → ``time.time()`` (now)
       * ``float``    → unchanged
       * ``int``      → unchanged
-      * ``str``      → ISO-8601 parsed via ``datetime.fromisoformat``
+      * ``str``      → float epoch OR ISO-8601
+
+    Audit 2026-10-18: for string inputs we now try ``float()`` FIRST
+    so callers that pass ``str(1700000000.123)`` (e.g. an HTTP query
+    parameter that started as a JSON float) get the obvious float
+    parse instead of an obscure ISO-fromisoformat error. Only when
+    the float parse fails do we fall through to ISO-8601.
     """
     if value is None:
         return time.time()
@@ -524,6 +541,12 @@ def _coerce_as_of(value):
     text = (value or "").strip()
     if not text:
         return time.time()
+    # Float epoch first (audit 2026-10-18).
+    try:
+        return float(text)
+    except ValueError:
+        pass
+    # Then ISO-8601.
     from datetime import datetime
     try:
         dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
@@ -940,13 +963,108 @@ def _parse_okf_scalar(value: str):
 
 
 
+def _validity_clause(as_of_ts):
+    """Return (sql_fragment, params) implementing the bi-temporal
+    validity guard for the ``memories`` table.
+
+    ``as_of_ts`` semantics (audit 2026-10-18):
+
+    * ``None`` -> ``"(1=1)"`` (no filter; legacy behaviour).
+    * epoch / ISO-8601 string -> the memory is included iff
+      ``valid_at <= as_of`` AND
+      (``invalid_at`` is NULL OR ``invalid_at`` > ``as_of``).
+
+    The partial index ``idx_mem_validity`` covers the
+    ``(valid_at, invalid_at)`` predicate so the guard stays cheap
+    even on million-row stores.
+    """
+    if as_of_ts is None:
+        return "(1=1)", []
+    as_of = _coerce_as_of(as_of_ts)
+    return (
+        "(m.valid_at IS NOT NULL AND m.valid_at <= ? "
+        " AND (m.invalid_at IS NULL OR m.invalid_at > ?))"
+    ), [as_of, as_of]
+
+
+def _evidence_chain(*, body_hits, tag_hits, importance, score_field,
+                    recall_count, tokens, text, tags):
+    """Build a structured ``[{field, value, weight}]`` evidence list
+    for a single recall hit (audit 2026-10-18, Cognee/Mem0 evidence
+    citation pattern).
+
+    Each entry names the scoring channel, the value that triggered it
+    (token + snippet, importance level, recall-count bucket, etc.),
+    and a relative weight so a UI can render the evidence with a
+    proper sort + colour gradient instead of a black-box float.
+
+    Weights are normalised to sum to ``1.0`` over the entries that
+    actually fired, so a hit driven mostly by ``text_match`` has that
+    channel at ~1.0 and everything else at 0.0.
+
+    The implementation is intentionally zero-dep and CPU-only -- a
+    single linear pass over the token list. For O(few-hundred) hits
+    per call this is well under 1 ms.
+    """
+    entries = []
+    if body_hits > 0:
+        # Show up to three sample tokens that fired, with the
+        # shortest first so the snippet stays compact.
+        matched = sorted(
+            {t for t in tokens if t and t in (text or "").lower()},
+            key=len,
+        )[:3]
+        entries.append({
+            "field": "text_match",
+            "value": ", ".join(matched) if matched else f"{body_hits} hits",
+            "weight": 1.0,  # will be normalised below
+        })
+    if tag_hits > 0:
+        matched = sorted(
+            {t for t in tokens if t and any(t in (tag or "").lower() for tag in tags)},
+            key=len,
+        )[:3]
+        entries.append({
+            "field": "tag_match",
+            "value": ", ".join(matched) if matched else f"{tag_hits} hits",
+            "weight": 0.6,
+        })
+    if importance >= 0.7:
+        entries.append({
+            "field": "high_importance",
+            "value": round(importance, 2),
+            "weight": 0.4,
+        })
+    if score_field >= 0.7:
+        entries.append({
+            "field": "high_score_field",
+            "value": round(score_field, 2),
+            "weight": 0.3,
+        })
+    if recall_count >= 3:
+        entries.append({
+            "field": "high_recall_count",
+            "value": recall_count,
+            "weight": 0.25,
+        })
+    # Normalise so the heaviest contribution is 1.0 and the rest
+    # are scaled proportionally. When nothing fired we return an
+    # empty list -- callers must handle that gracefully.
+    if not entries:
+        return []
+    peak = max(e["weight"] for e in entries) or 1.0
+    for e in entries:
+        e["weight"] = round(e["weight"] / peak, 3)
+    return entries
+
+
 class MemoryStore:
     """Persistent, transactional store backed by SQLite.
 
     The zero-dep claim holds — Python ships with sqlite3 and struct.
     """
 
-    SCHEMA_VERSION = "11"  # audit 2026-09-27: audit_log + triggers
+    SCHEMA_VERSION = "12"  # audit 2026-10-18: bi-temporal validity + content-hash dedup
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path).expanduser()
@@ -1039,6 +1157,68 @@ class MemoryStore:
             c.execute(
                 "CREATE INDEX IF NOT EXISTS idx_mem_superseded_by "
                 "ON memories(superseded_by) WHERE superseded_by IS NOT NULL"
+            )
+
+            # Audit 2026-10-18 (loop-memory 0.4.15) — bi-temporal
+            # validity + content-hash dedup. Three new columns on
+            # memories:
+            #
+            #   content_hash TEXT  -- SHA-256 of the normalised text;
+            #                        same agent/user with the same hash
+            #                        collapses to one row on upsert so
+            #                        duplicate remember() calls no
+            #                        longer leak (existing external_id
+            #                        dedup still wins when supplied).
+            #   valid_at REAL     -- epoch the memory becomes active.
+            #                        NULL = open-ended past (legacy
+            #                        rows get backfilled to created_at).
+            #   invalid_at REAL   -- epoch the memory stops being
+            #                        active. NULL = still open-ended
+            #                        (the common case). Soft-expire
+            #                        rather than DELETE so the audit
+            #                        trail stays intact.
+            #
+            # The partial index on content_hash keeps the dedup
+            # lookup O(1) without ballooning the index on rows that
+            # never had a hash (legacy rows are skipped).
+            mem_cols = {row["name"] for row in c.execute("PRAGMA table_info(memories)").fetchall()}
+            if "content_hash" not in mem_cols:
+                c.execute("ALTER TABLE memories ADD COLUMN content_hash TEXT")
+            if "valid_at" not in mem_cols:
+                c.execute("ALTER TABLE memories ADD COLUMN valid_at REAL")
+            if "invalid_at" not in mem_cols:
+                c.execute("ALTER TABLE memories ADD COLUMN invalid_at REAL")
+            # Backfill content_hash for legacy rows so dedup starts
+            # working the moment the migration runs.
+            n_null_hash = c.execute(
+                "SELECT COUNT(*) c FROM memories WHERE content_hash IS NULL"
+            ).fetchone()["c"]
+            if n_null_hash:
+                import hashlib as _hl
+                for r in c.execute(
+                    "SELECT id, text FROM memories WHERE content_hash IS NULL"
+                ).fetchall():
+                    norm = (r["text"] or "").strip().lower()
+                    h = _hl.sha256(norm.encode("utf-8")).hexdigest()
+                    c.execute(
+                        "UPDATE memories SET content_hash=? WHERE id=? AND content_hash IS NULL",
+                        (h, r["id"]),
+                    )
+            # Backfill valid_at for legacy rows = created_at.
+            n_null_valid = c.execute(
+                "SELECT COUNT(*) c FROM memories WHERE valid_at IS NULL"
+            ).fetchone()["c"]
+            if n_null_valid:
+                c.execute(
+                    "UPDATE memories SET valid_at = created_at WHERE valid_at IS NULL"
+                )
+            c.execute(
+                "CREATE INDEX IF NOT EXISTS idx_mem_content_hash "
+                "ON memories(content_hash) WHERE content_hash IS NOT NULL"
+            )
+            c.execute(
+                "CREATE INDEX IF NOT EXISTS idx_mem_validity "
+                "ON memories(valid_at, invalid_at)"
             )
 
             # One-shot FTS5 tokenizer migration. ``CREATE VIRTUAL TABLE
@@ -1532,6 +1712,21 @@ class MemoryStore:
         agent_id: str | None = None,
         user_id: str | None = None,
         external_id: str | None = None,
+        # Audit 2026-10-18 (loop-memory 0.4.15) — bi-temporal
+        # validity window on the memory. valid_at defaults to the
+        # row's created_at (i.e. immediately active) so existing
+        # callers see no behaviour change. invalid_at is the
+        # soft-expire epoch; NULL means still open-ended. Both are
+        # exposed via recall / list / admin endpoints so callers can
+        # schedule a future-dated or expiring memory.
+        valid_at: float | None = None,
+        invalid_at: float | None = None,
+        # dedup=True (default) collapses calls that push the same
+        # text twice for the same (agent_id, user_id) pair to a
+        # single row (returns the existing row). External-id dedup
+        # still wins when supplied; this is a backstop for SDK calls
+        # that omit external_id.
+        dedup: bool = True,
     ) -> StoredMemory:
         """Create or update a memory.
 
@@ -1566,13 +1761,53 @@ class MemoryStore:
                 ).fetchone()
                 if row is not None:
                     id = row["id"]
+            # Content-hash dedup (audit 2026-10-18). Falls back to a
+            # hash lookup when the caller did not pin an id and
+            # there is no external_id to dedupe on. Two pushes with
+            # byte-identical text collapse to a single row even when
+            # external_id is None. dedup=False opts out for
+            # callers that explicitly want a new row per call
+            # (e.g. episodic event streams where every push is a new
+            # sample of the same text).
+            content_hash: str | None = None
+            # Audit 2026-10-18: always compute the content hash so
+            # callers using ``dedup=False`` (episodic event streams
+            # that want one row per push) still get a hash they can
+            # use for out-of-band deduplication. The dedup lookup is
+            # gated on ``dedup=True`` only.
+            if text:
+                import hashlib as _hl
+                norm = text.strip().lower()
+                content_hash = _hl.sha256(norm.encode("utf-8")).hexdigest()
+            if dedup and id is None and content_hash:
+                row = c.execute(
+                    "SELECT id FROM memories "
+                    "WHERE content_hash = ? AND "
+                    "      ((agent_id IS ? AND user_id IS ?) "
+                    "       OR (agent_id IS NULL AND user_id IS NULL AND ? IS NULL)) ",
+                    (content_hash, agent_id, user_id, user_id),
+                ).fetchone()
+                if row is not None:
+                    id = row["id"]
             mid = id or uuid.uuid4().hex
+            # Audit 2026-10-18: when this INSERT will land on an
+            # existing row (id matched via ``id``, dedup-by-hash, or
+            # dedup-by-external_id) the COALESCE in the ON CONFLICT
+            # clause is what preserves the stored window. We pass
+            # raw ``None`` for an UPDATE so COALESCE picks
+            # ``memories.valid_at``. On a fresh INSERT we default
+            # ``valid_at`` to ``ts`` (now) so the memory is
+            # immediately active without the caller having to think
+            # about it.
+            is_update = id is not None
+            effective_valid_at = valid_at if is_update else (valid_at if valid_at is not None else ts)
             c.execute(
                 """INSERT INTO memories
                    (id, session_id, kind, text, importance, source,
                     created_at, updated_at, score, ttl, tags, embedding,
-                    agent_id, user_id, external_id)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    agent_id, user_id, external_id,
+                    valid_at, invalid_at, content_hash)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(id) DO UPDATE SET
                      text=excluded.text,
                      importance=excluded.importance,
@@ -1584,7 +1819,15 @@ class MemoryStore:
                      user_id=COALESCE(excluded.user_id, memories.user_id),
                      external_id=COALESCE(excluded.external_id, memories.external_id),
                      session_id=COALESCE(excluded.session_id, memories.session_id),
-                     source=COALESCE(excluded.source, memories.source)""",
+                     source=COALESCE(excluded.source, memories.source),
+                     -- Audit 2026-10-18: refresh validity window on
+                     -- update only when caller explicitly passes one
+                     -- (NULL means "keep what was already on the
+                     -- row" — preserves backward-compat callers who
+                     -- never think about validity).
+                     valid_at=COALESCE(excluded.valid_at, memories.valid_at),
+                     invalid_at=COALESCE(excluded.invalid_at, memories.invalid_at),
+                     content_hash=COALESCE(excluded.content_hash, memories.content_hash)""",
                 (
                     mid,
                     session_id,
@@ -1601,6 +1844,9 @@ class MemoryStore:
                     agent_id,
                     user_id,
                     ext,
+                    effective_valid_at,
+                    invalid_at,
+                    content_hash,
                 ),
             )
         item = self.get_memory(mid)
@@ -2022,8 +2268,16 @@ class MemoryStore:
                bump_signals: bool = True,
                source: str | None = None,
                max_chars: int | None = None,
-               level: int = 1) -> dict[str, list[dict]]:
-        """Unified recall — returns a dict with three ranked lists.
+               level: int = 1,
+               # Audit 2026-10-18: optional bi-temporal filter. When
+               # None (default) the recall is "what is true now" --
+               # the legacy behaviour. When set, additionally filters
+               # out memories whose ``valid_at > as_of_ts`` (not yet
+               # active) or whose ``invalid_at <= as_of_ts`` (already
+               # expired). Accepts a float epoch OR an ISO-8601
+               # string (the same coercion ``recall_as_of`` uses).
+               as_of_ts: float | str | None = None) -> dict[str, list[dict]]:
+        """Unified recall -- returns a dict with three ranked lists.
 
         Each result is tagged with its ``kind`` ("memory" | "wiki" |
         "entity") and a numeric ``score`` so callers can render a
@@ -2044,11 +2298,22 @@ class MemoryStore:
         ``level`` (audit 2026-10-05) unifies the OpenViking-style
         tiered-loader knob across every recall method:
 
-        * 0 → L0 outline ladder rung (titles + tags + abstract only,
+        * 0 -> L0 outline ladder rung (titles + tags + abstract only,
           never the full ``text`` / ``body``). Equivalent to calling
           ``recall_paths()``.
-        * 1 → L1 default (full ``text``, ``body`` capped at 800).
-        * 2 → L2 (full body, full text — every char).
+        * 1 -> L1 default (full ``text``, ``body`` capped at 800).
+        * 2 -> L2 (full body, full text -- every char).
+
+        ``as_of_ts`` (audit 2026-10-18) is the optional bi-temporal
+        validity-window filter -- memories outside
+        ``[valid_at, invalid_at)`` are dropped. ``None`` keeps the
+        legacy "now" semantics so every existing caller is
+        backward-compatible.
+
+        Each returned memory row carries an ``evidence`` list
+        ``[{field, value, weight}]`` (audit 2026-10-18) describing
+        which scoring channels contributed and their relative weight
+        -- the Cognee/Mem0 evidence-citation pattern, kept zero-dep.
         """
         import time as _time
         tokens = self._tokenize(query)
@@ -2059,23 +2324,32 @@ class MemoryStore:
             if "memories" in include:
                 clause, params = self._like_clause("text", tokens)
                 tag_clause, tag_params = self._like_clause("tags", tokens)
+                # Audit 2026-10-18: optional validity-window guard.
+                # The full WHERE has three predicates ANDed together:
+                #   1. not superseded (``m.superseded_by IS NULL``)
+                #   2. lexical match on ``text`` or ``tags``
+                #   3. active at ``as_of_ts`` when supplied
+                # ``valid_at <= as_of`` AND (``invalid_at`` NULL OR
+                # ``invalid_at`` > ``as_of``). The partial index on
+                # ``(valid_at, invalid_at)`` keeps the predicate cheap.
+                validity_sql, validity_params = _validity_clause(as_of_ts)
                 sql = (
                     "SELECT m.id, m.kind, m.text, m.importance, m.score, m.source, "
                     "m.tags, m.created_at, m.updated_at, "
+                    "m.valid_at, m.invalid_at, "
                     "COALESCE(s.recall_count, 0) AS recall_count, "
                     "m.superseded_by "
                     "FROM memories m "
                     "LEFT JOIN memory_signals s ON s.memory_id = m.id "
-                    # Filter superseded memories out of the recall stream
-                    # (audit 2026-08-30, Mem0 v2.0.19 Dream pattern). The
-                    # partial index on ``superseded_by`` makes this an
-                    # O(1) skip; the chain itself stays queryable via
-                    # ``list_superseded()`` / ``trace_supersession()``.
-                    f"WHERE m.superseded_by IS NULL AND ({clause} OR {tag_clause}) "
+                    f"WHERE m.superseded_by IS NULL "
+                    f"  AND ({clause} OR {tag_clause}) "
+                    f"  AND {validity_sql} "
                     "ORDER BY m.score DESC, m.importance DESC, m.created_at DESC "
                     "LIMIT ?"
                 )
-                rows = c.execute(sql, (*params, *tag_params, limit * 3)).fetchall()
+                rows = c.execute(
+                    sql, (*params, *tag_params, *validity_params, limit * 3)
+                ).fetchall()
                 # Short-query mode: when a query has only 1-2 tokens the
                 # lexical overlap is too narrow to rank by itself, so we
                 # also weight ``recall_count`` -- a memory the user has
@@ -2123,6 +2397,17 @@ class MemoryStore:
                             why.append("short_query_boost")
                     if recall_count >= 3:
                         why.append("high_recall_count")
+                    # Audit 2026-10-18: structured evidence chain
+                    # (Cognee/Mem0 citation pattern). Each entry is
+                    # ``{field, value, weight}`` so a UI can render
+                    # "this hit because ... [text 0.62] [tag 0.20]"
+                    # instead of a black-box score.
+                    evidence = _evidence_chain(
+                        body_hits=body_hits, tag_hits=tag_hits,
+                        importance=importance, score_field=score_field,
+                        recall_count=recall_count, tokens=tokens,
+                        text=(r["text"] or ""), tags=tags,
+                    )
                     out["memories"].append({
                         "id": r["id"],
                         "kind": "memory",
@@ -2131,11 +2416,14 @@ class MemoryStore:
                         "score_field": score_field,
                         "source": r["source"],
                         "tags": tags,
-                        "created_at": float(r["created_at"] or 0),
+                        "created_at": float(r["valid_at"] or r["created_at"] or 0),
                         "recall_count": recall_count,
                         "score": round(score, 3),
                         "preview": (r["text"] or "")[:240],
                         "why": why,
+                        "evidence": evidence,
+                        "valid_at": float(r["valid_at"] or 0) or None,
+                        "invalid_at": float(r["invalid_at"] or 0) or None,
                     })
                 out["memories"].sort(key=lambda m: -m["score"])
                 out["memories"] = out["memories"][:limit]
@@ -3183,12 +3471,26 @@ class MemoryStore:
         level: int = 1,
         adaptive: bool = False,
         max_chars: int | None = None,
+        # Audit 2026-10-18: optional bi-temporal validity filter.
+        # When None (default) keeps the legacy "everything" semantics
+        # so every existing caller is unchanged. When set, drops any
+        # memory whose ``valid_at > as_of`` or
+        # ``invalid_at <= as_of``. Accepts epoch OR ISO-8601 string.
+        as_of_ts: float | str | None = None,
     ) -> dict[str, list[dict]]:
         """RRF-fused recall with token / char budget cap.
 
         ``max_chars`` (audit 2026-10-05) caps the total payload
         after ranking; ``None`` (default) keeps the legacy
         byte-identical payload.
+
+        ``as_of_ts`` (audit 2026-10-18) is the optional bi-temporal
+        validity filter -- applied AFTER fusion as a hard pre-hydrate
+        filter so a memory that scored well on BM25/semantic but is
+        outside its validity window is silently dropped before it
+        reaches the caller. Returns the same shape as ``recall()``;
+        each memory row carries the ``evidence`` list and
+        ``valid_at`` / ``invalid_at`` fields.
         """
         """RRF-fused recall across BM25 + semantic + entity channels.
 
@@ -3216,6 +3518,7 @@ class MemoryStore:
         import time as _time
         from .retrieval import (
             fuse_rrf,
+            fuse_rrf_with_channels,
             bm25_search,
             detect_temporal_intent,
             temporal_score,
@@ -3269,8 +3572,19 @@ class MemoryStore:
                 pass
 
         # --- fuse ---------------------------------------------------
-        fused_mem = fuse_rrf([bm25_mem, sem_mem, ent_mem], k=rrf_k)
-        fused_wiki = fuse_rrf([bm25_wiki, sem_wiki], k=rrf_k)
+        # Audit 2026-10-18: per-channel breakdown so the evidence
+        # chain can attribute scores to BM25 / semantic / entity.
+        # Plain ``fuse_rrf`` is kept for callers that want the
+        # minimal payload (and is still used for entities, where
+        # there is only one channel).
+        fused_mem = fuse_rrf_with_channels(
+            [("bm25", bm25_mem), ("semantic", sem_mem), ("entity", ent_mem)],
+            k=rrf_k,
+        )
+        fused_wiki = fuse_rrf_with_channels(
+            [("bm25", bm25_wiki), ("semantic", sem_wiki)],
+            k=rrf_k,
+        )
         fused_ent = fuse_rrf([ent_entities], k=rrf_k)
 
         # --- temporal reasoning -------------------------------------
@@ -3310,6 +3624,10 @@ class MemoryStore:
                 mem_ids, fused_mem, source=source,
                 t_intent=t_intent, t_conf=t_conf, now=_now_ts,
                 level=level,
+                # Audit 2026-10-18: thread ``as_of_ts`` through the
+                # hydrate so the bi-temporal guard runs after fusion
+                # (BM25 + semantic channels are validity-blind).
+                as_of_ts=as_of_ts,
             )
         if wiki_ids:
             out["wiki"] = self._hydrate_wiki(
@@ -3464,15 +3782,27 @@ class MemoryStore:
 
     def _hydrate_memories(self, ids: list[str], scored: list[dict], source: str | None = None,
                            t_intent: str = "any", t_conf: float = 0.0, now: float = 0.0,
-                           level: int = 1) -> list[dict]:
+                           level: int = 1,
+                           as_of_ts: float | str | None = None) -> list[dict]:
         if not ids:
             return []
+        # Audit 2026-10-18: when the caller supplied ``as_of_ts`` we
+        # need valid_at / invalid_at to apply the bi-temporal guard,
+        # so we project those columns too. The hydrated rows always
+        # carry them regardless of whether a filter was requested
+        # -- callers (CLI, dashboard) want to show the window.
         score_map = {r["id"]: r.get("_rrf", 0) for r in scored}
+        # Audit 2026-10-18: per-channel breakdown so the evidence
+        # chain can show "this hit because bm25 + entity fired".
+        # ``scored`` already carries the per-channel scores via the
+        # ``_channel_scores`` field set by ``recall_hybrid``.
+        scored_lookup = {r["id"]: r for r in scored}
         placeholders = ",".join("?" * len(ids))
         with self._conn() as c:
             rows = c.execute(
                 f"""SELECT m.id, m.kind, m.text, m.importance, m.score, m.source,
                           m.tags, m.created_at, m.updated_at,
+                          m.valid_at, m.invalid_at,
                           m.agent_id, m.user_id, m.external_id,
                           COALESCE(s.recall_count, 0) AS recall_count
                    FROM memories m
@@ -3506,6 +3836,36 @@ class MemoryStore:
                 payload_text = ""
             else:
                 payload_text = full_text
+            # Audit 2026-10-18: per-channel evidence chain for the
+            # hybrid RRF path. The scored-row dict carries
+            # ``_channel_scores`` (nested dict from
+            # ``fuse_rrf_with_channels``) listing the raw score each
+            # channel assigned to this document. We surface one entry
+            # per channel that fired, plus the rrf_total as the
+            # overall weight anchor.
+            row_score = scored_lookup.get(r["id"], {})
+            channels = row_score.get("_channel_scores", {}) or {}
+            evidence = []
+            for channel, weight in (
+                ("bm25", 1.0), ("semantic", 0.85), ("entity", 0.7),
+            ):
+                v = channels.get(channel)
+                if v is not None and v != 0:
+                    evidence.append({
+                        "field": channel,
+                        "value": round(float(v), 4),
+                        "weight": weight,
+                    })
+            rrf_total = row_score.get("_rrf")
+            if rrf_total:
+                evidence.append({"field": "rrf_total", "value": round(float(rrf_total), 4), "weight": 0.95})
+            importance_val = float(r["importance"] or 0)
+            if importance_val >= 0.7:
+                evidence.append({"field": "high_importance", "value": round(importance_val, 2), "weight": 0.4})
+            if evidence:
+                peak = max(e["weight"] for e in evidence) or 1.0
+                for e in evidence:
+                    e["weight"] = round(e["weight"] / peak, 3)
             out.append({
                 "id": r["id"],
                 "kind": "memory",
@@ -3519,11 +3879,27 @@ class MemoryStore:
                 "agent_id": r["agent_id"] if "agent_id" in r.keys() else None,
                 "user_id": r["user_id"] if "user_id" in r.keys() else None,
                 "external_id": r["external_id"] if "external_id" in r.keys() else None,
+                "valid_at": float(r["valid_at"]) if r["valid_at"] is not None else None,
+                "invalid_at": float(r["invalid_at"]) if r["invalid_at"] is not None else None,
                 "score": round(base_score * t_mult, 4),
                 "_temporal_multiplier": round(t_mult, 3),
                 "preview": full_text[:240],
                 "_level": level,
+                "evidence": evidence,
             })
+        # Audit 2026-10-18: bi-temporal validity filter (post
+        # fusion). We compare ``valid_at`` to ``as_of`` and drop the
+        # row when outside the window. ``invalid_at`` is also checked
+        # -- NULL is treated as open-ended. The windowed column read
+        # above keeps this an O(k) loop over the hydrated candidate
+        # set, not a fresh SQL round-trip.
+        if as_of_ts is not None:
+            as_of = _coerce_as_of(as_of_ts)
+            out = [
+                m for m in out
+                if (m.get("valid_at") is None or m["valid_at"] <= as_of)
+                and (m.get("invalid_at") is None or m["invalid_at"] > as_of)
+            ]
         # Filter by source if a scope applies. Memories are not
         # scoped (only wiki pages are), but we still respect the
         # source filter for memories that came from a different
@@ -3898,6 +4274,9 @@ class MemoryStore:
             agent_id=row["agent_id"] if "agent_id" in row.keys() else None,
             user_id=row["user_id"] if "user_id" in row.keys() else None,
             external_id=row["external_id"] if "external_id" in row.keys() else None,
+            content_hash=row["content_hash"] if "content_hash" in row.keys() else None,
+            valid_at=row["valid_at"] if "valid_at" in row.keys() else None,
+            invalid_at=row["invalid_at"] if "invalid_at" in row.keys() else None,
         )
 
     # --- wiki pages -------------------------------------------------------
