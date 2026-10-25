@@ -133,5 +133,20 @@ jobs:
             gh api "repos/${{ github.repository }}/releases" --jq '.[] | {id, tag_name, draft, html_url}'
             exit 1
           fi
-          gh api -X PATCH "repos/${{ github.repository }}/releases/${release_id}" -f draft=false -f make_latest=true >/dev/null
+          # Audit 2026-10-25 -- use ``-F`` (typed) and not ``-f``
+          # (raw string). ``gh api -f`` sends every value as a JSON
+          # string, and GitHub's release API only honours
+          # ``make_latest`` when it arrives as a real JSON boolean.
+          # With ``-f make_latest=true`` the PATCH still returned 200
+          # and reported success, but ``/releases/latest`` kept
+          # pointing at the previous release -- v0.4.16 and v0.4.15
+          # were both left un-marked until it was patched by hand.
+          gh api -X PATCH "repos/${{ github.repository }}/releases/${release_id}" -F draft=false -F make_latest=true >/dev/null
+          # Verify the promotion actually landed instead of trusting
+          # the exit code; the old string form silently did nothing.
+          latest_tag=$(gh api "repos/${{ github.repository }}/releases/latest" --jq '.tag_name')
+          if [ "$latest_tag" != "$RELEASE_TAG" ]; then
+            echo "release $RELEASE_TAG is published but /releases/latest still points at $latest_tag"
+            exit 1
+          fi
           echo "published $RELEASE_TAG (id=${release_id}) and marked it as latest"
