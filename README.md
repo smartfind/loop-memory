@@ -426,7 +426,10 @@ never-used stale row is expired. Age alone never decides — that is the
 whole point of "In Defense of Forgotten" (arXiv 2605.27366).
 
 The pass is a **dry run by default**: `--apply` (CLI) or `"apply": true`
-(HTTP) is what actually writes.
+(HTTP) is what actually writes. A dry run changes **no memory data** --
+no expiry, no supersession, no rescore -- it only appends a
+`cognitive_audit` row per proposed action (`action="suggest"`), which
+is the reviewable plan the dashboard shows before you commit.
 
 ```bash
 loop-memory dream --json                     # machine-readable dry run

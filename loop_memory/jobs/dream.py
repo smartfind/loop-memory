@@ -30,7 +30,9 @@ What this job does
 pass:
 
 1. **Decay.** Rescore every row with the existing exponential
-   half-life model so recency-sensitive ordering stays honest.
+   half-life model so recency-sensitive ordering stays honest. A dry
+   run computes the new scores and reports how many rows *would*
+   change, but writes nothing (audit 2026-10-25, fix).
 
 2. **Utility-aware selective forgetting.** A row is a *forgetting
    candidate* once it is past its own TTL (or past the sweep's
@@ -48,7 +50,12 @@ pass:
    ``recall(latest_only=True)`` can collapse to one answer.
 
 Everything is opt-in: ``apply=False`` (the default) produces a dry-run
-report and touches nothing.
+report and **changes no memory data** -- no expiry, no supersession,
+no rescore. The only write a dry run performs is one
+``cognitive_audit`` row per proposed action (with ``action="suggest"``
+instead of ``"applied"``), because that row *is* the reviewable plan:
+it is what lets the dashboard show what a real run would do before
+you commit to it. Use ``record_audit=False`` to suppress even that.
 """
 
 from __future__ import annotations
@@ -282,7 +289,17 @@ class Dreamer:
     def _stage_decay(self, report: DreamReport) -> None:
         t = time.time()
         try:
-            report.rescored = self.store.rescore_all(self.half_life_days)
+            # Audit 2026-10-25 (fix) -- the decay stage used to write
+            # unconditionally, so a *dry run* still rewrote the
+            # ``score`` column of every memory. That broke this
+            # module's own contract ("nothing is written unless
+            # apply=True") and the README / CHANGELOG wording. The
+            # store call now runs in dry-run mode, which computes the
+            # new scores and reports how many rows *would* change
+            # without touching the database.
+            report.rescored = self.store.rescore_all(
+                self.half_life_days, dry_run=not self.apply
+            )
         except Exception:  # pragma: no cover - decay must never abort the pass
             log.warning("dream: rescore_all failed; continuing", exc_info=True)
         report.stages["decay"] = round((time.time() - t) * 1000, 1)

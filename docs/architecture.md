@@ -321,12 +321,15 @@ sequenceDiagram
 
 ## Testing
 
-- **955 tests across 75 files** (955 passed / 4 skipped; all run via
+- **958 tests across 75 files** (958 passed / 4 skipped; all run via
   `pytest -q`), pinned by:
   - 77 new in 0.4.16 — `tests/test_subject_key_2026_10_25.py` (16),
     `tests/test_latest_only_2026_10_25.py` (14),
     `tests/test_dream_2026_10_25.py` (26),
     `tests/test_dream_cli_http_2026_10_25.py` (21).
+  - 3 new in 0.4.17 — the dream pass's dry-run contract
+    (`tests/test_dream_2026_10_25.py`): a dry run must not rewrite the
+    `memories.score` column.
   - 21 new in 0.4.4 (`tests/test_cli_rules.py` + `tests/test_short_query.py`)
   - cognitive-sleep stages / abort + bulk `get_signals` covered in
     `tests/test_universal_memory.py` (e.g. `test_get_signals_*`,

@@ -8,7 +8,9 @@ contract:
   "what did we believe back then?";
 * **utility-aware, not age-only** -- a row that is past its deadline
   but is recalled often is *protected*;
-* **dry run by default** -- nothing is written unless ``apply=True``;
+* **dry run by default** -- no memory *data* is changed unless
+  ``apply=True`` (the only write a dry run performs is the
+  ``cognitive_audit`` ``suggest`` row that records the plan);
 * **audited** -- every decision lands in ``cognitive_audit``.
 """
 from __future__ import annotations
@@ -83,6 +85,41 @@ class DreamPassTests(unittest.TestCase):
         self.assertEqual(report.expired, 1)
         self.assertFalse(report.applied)
         self.assertIsNone(self.store.get_memory(m.id).invalid_at)
+
+    def test_dry_run_does_not_touch_the_score_column(self) -> None:
+        """Regression (audit 2026-10-25, fix): the decay stage used to
+        call ``rescore_all`` unconditionally, so a dry run still
+        rewrote ``memories.score`` for every row -- breaking the
+        "nothing is written unless apply=True" contract."""
+        m = self.store.upsert_memory(kind="fact", text="a fact worth scoring")
+        with self.store._conn() as c:
+            c.execute("UPDATE memories SET score=0.01 WHERE id=?", (m.id,))
+        before = self.store.get_memory(m.id).score
+        self.assertEqual(before, 0.01)
+
+        report = dream(self.store, apply=False)
+        self.assertEqual(
+            self.store.get_memory(m.id).score, before,
+            "a dry run must not rewrite the score column",
+        )
+        # ...but it still reports the size of the decay job.
+        self.assertGreaterEqual(report.rescored, 1)
+
+    def test_apply_does_rescore(self) -> None:
+        m = self.store.upsert_memory(kind="fact", text="a fact worth scoring")
+        with self.store._conn() as c:
+            c.execute("UPDATE memories SET score=0.01 WHERE id=?", (m.id,))
+        report = dream(self.store, apply=True)
+        self.assertGreaterEqual(report.rescored, 1)
+        self.assertNotEqual(self.store.get_memory(m.id).score, 0.01)
+
+    def test_rescore_all_dry_run_writes_nothing(self) -> None:
+        m = self.store.upsert_memory(kind="fact", text="a fact worth scoring")
+        with self.store._conn() as c:
+            c.execute("UPDATE memories SET score=0.01 WHERE id=?", (m.id,))
+        n = self.store.rescore_all(dry_run=True)
+        self.assertGreaterEqual(n, 1)
+        self.assertEqual(self.store.get_memory(m.id).score, 0.01)
 
     def test_dry_run_reports_the_action(self) -> None:
         self.store.upsert_memory(

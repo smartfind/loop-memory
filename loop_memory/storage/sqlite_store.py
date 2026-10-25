@@ -5110,10 +5110,18 @@ class MemoryStore:
         blended = 0.35 * importance + 0.65 * recency
         return max(0.0, min(1.0, blended))
 
-    def rescore_all(self, half_life_days: float = 30.0) -> int:
+    def rescore_all(self, half_life_days: float = 30.0,
+                    dry_run: bool = False) -> int:
         """Recompute score for every memory using v2 (importance × recency
         × usage × feedback). One row at a time keeps WAL writes small
-        and lets us skip rows whose components didn't change."""
+        and lets us skip rows whose components didn't change.
+
+        ``dry_run=True`` computes every new score but writes nothing,
+        and returns how many rows *would* change. The dream pass uses
+        it to honour its own "nothing is written unless apply=True"
+        contract while still reporting the size of the decay job
+        (audit 2026-10-25).
+        """
         updated = 0
         now = time.time()
         with self._conn() as c:
@@ -5143,10 +5151,11 @@ class MemoryStore:
                     "SELECT score FROM memories WHERE id=?", (r["id"],)
                 ).fetchone()
                 if cur is None or abs((cur["score"] or 0) - new) > 1e-3:
-                    c.execute(
-                        "UPDATE memories SET score=? WHERE id=?",
-                        (new, r["id"]),
-                    )
+                    if not dry_run:
+                        c.execute(
+                            "UPDATE memories SET score=? WHERE id=?",
+                            (new, r["id"]),
+                        )
                     updated += 1
         return updated
 

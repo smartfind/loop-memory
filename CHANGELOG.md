@@ -1,3 +1,55 @@
+## [0.4.17] - 2026-10-25
+
+### fix
+
+- **A dry-run dream pass no longer writes to the database.**
+  `loop-memory dream` (and `POST /api/v1/dream`) without `"apply":
+  true` documented itself as "nothing is written unless
+  `apply=True`" — but the pass's first stage called
+  `MemoryStore.rescore_all()` unconditionally, which rewrote the
+  `memories.score` column of **every** row. The dry run therefore
+  mutated the store it was supposed to only inspect. The expiry and
+  merge decisions were correctly left unapplied; the score decay was
+  not.
+
+  `rescore_all()` now takes a `dry_run` flag: it computes every new
+  score and reports how many rows *would* change, but issues no
+  `UPDATE`. The dream pass runs it with `dry_run=not apply`, so a dry
+  run still reports the size of the decay job (`rescored`) while
+  touching nothing. Existing callers (`cognitive_sleep`, `evolution`,
+  `consolidate`, the `rescore` CLI, the admin routes) are unaffected —
+  the default is still `dry_run=False`.
+
+  The contract wording is now exact rather than aspirational: a dry
+  run changes **no memory data** (no expiry, no supersession, no
+  rescore). The single write it still performs is one
+  `cognitive_audit` row per proposed action, with `action="suggest"`
+  instead of `"applied"` — that row *is* the reviewable plan the
+  dashboard shows before you commit, and `record_audit=False`
+  suppresses even it.
+
+### test
+
+- **3 new regression cases** in `tests/test_dream_2026_10_25.py`:
+  `test_dry_run_does_not_touch_the_score_column`,
+  `test_apply_does_rescore`, and
+  `test_rescore_all_dry_run_writes_nothing`. The pre-existing
+  `test_dry_run_writes_nothing` only asserted that `invalid_at` was
+  untouched, which is why the score write slipped through it.
+- Suite: **958 passed / 4 skipped** (was 955 / 4), ruff clean.
+
+### internal
+
+- `publish.yml` now sends `make_latest` as a JSON **boolean**
+  (`gh api -F`) instead of a JSON **string** (`gh api -f`). GitHub's
+  release API ignores the string form, so the "Publish release + mark
+  as latest" step returned 200 and reported success while promoting
+  nothing — `/releases/latest` kept pointing at v0.4.14 through the
+  0.4.16 ship. The step now also re-reads `/releases/latest` and
+  fails the job when the tag does not match, instead of trusting the
+  exit code. Landed on `main` after the `v0.4.16` tag, so it does not
+  alter the published 0.4.16 artefact.
+
 ## [0.4.16] - 2026-10-25
 
 ### feature
