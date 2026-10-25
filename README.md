@@ -22,6 +22,7 @@
 
 ---
 
+> **What's new in 0.4.16** — **subject-key logical fact slots + `latest_only` recall + the "dream" sleep-time consolidation pass** (audit 2026-10-25, weekly ecosystem sync — Mem0 v2.2.1 "Dream", arXiv 2605.27366 "In Defense of Forgotten", Zep/Graphiti temporal edges, Letta memory blocks). New nullable `subject_key` column on `memories` names the *logical slot* a fact occupies (`"editor.preference"`); `upsert_memory(subject_key=...)` makes the new row the live version and soft-supersedes the previous one with a `superseded_by` pointer, so the version history survives and `recall_as_of()` can still answer "what did we believe last week?". The content-hash dedup path is now slot-aware — two different slots holding the same text stay two rows. `SCHEMA_VERSION` bumps 12 → 13 with an idempotent in-place migration. New `latest_only=False` flag on `recall()` / `recall_hybrid()` (Mem0 v2 `SearchMemoryOptions.latest_only` parity) collapses the answer in three layers: rows outside their validity window at *now* are dropped, a subject-key slot resolves to its newest **live** row (looked up in the store, so a stale version never comes back just because it matched the query better), and near-duplicate texts cluster by token Jaccard (default 0.85) with the newest row winning. Wired through `GET /api/recall?latest_only=1`, `GET /api/v1/recall?latest_only=1`, `loop-memory recall --latest-only` and `MemoryClient.recall(latest_only=True)`. New `loop_memory/jobs/dream.py` implements the sleep-time consolidation Mem0 v2 calls the "Dream" — deterministic, zero-dep and **non-destructive**: it decays scores, then judges every row past its deadline on **utility** (`0.45 × importance + 0.30 × usage + 0.25 × recency`) so a frequently-recalled old fact is *protected* while a never-used stale row is **soft-expired** (`invalid_at` stamped, row kept, history kept) instead of deleted, and finally merges near-duplicates into a supersession chain. Run it with `loop-memory dream [--apply] [--json]` or `POST /api/v1/dream` — it is a **dry run by default** and every decision lands in `cognitive_audit` so the dashboard can show and revert it. New store primitives `expire_memory()` / `revive_memory()`, and `memory_stats()` now reports `subject_key`, `ttl`, `valid_at`, `invalid_at` and a derived `ttl_state`. **Also fixed a real defect**: the hybrid recall path (BM25 / LIKE / semantic channels) did not filter `superseded_by`, so `recall_hybrid()` — the production path behind the CLI, MCP server and dashboard — returned both versions of a superseded fact. Source: Mem0 v2.2.1 Dream + ADD-only architecture + arXiv 2605.27366 utility-aware eviction + Zep/Graphiti bi-temporal edges (pattern only, no code copied). 77 new regression cases. [Full CHANGELOG →](./CHANGELOG.md#0416---2026-10-25)
 > **What's new in 0.4.15** — **content-hash dedup + bi-temporal validity window + evidence chain + `@agent_memory` decorator** (audit 2026-10-18, weekly ecosystem sync). Three new columns on `memories`: `content_hash` (SHA-256 of normalised text, indexed), `valid_at` (epoch the memory becomes active), `invalid_at` (epoch it expires — NULL means still open-ended). The schema migration bumps `SCHEMA_VERSION` 11 → 12 with an idempotent backfill so legacy DBs upgrade in-place. New `upsert_memory(valid_at=, invalid_at=, dedup=)` parameters let callers schedule future-dated or expiring memories and opt out of content-hash dedup for episodic event streams. `recall()` and `recall_hybrid()` now accept an optional `as_of_ts` (float epoch or ISO-8601) — when set, both methods drop memories whose `valid_at > as_of` or `invalid_at <= as_of`, complementing the existing `recall_as_of()` supersession-chain walk. Every recall hit now carries an `evidence: [{field, value, weight}]` array — BM25 / semantic / entity / rrf_total / high_importance channels are exposed individually so a UI can render "this hit because ... [bm25 1.0] [entity 0.7]" instead of a black-box score (Cognee 1.0 / Mem0 v2 evidence-citation pattern, zero-dep). New `loop_memory.decorators` exposes `@agent_memory(store, agent_id=, limit=)` — a one-line wrapper that recalls the top-k relevant memories before the body runs and writes a fresh `kind="interaction"` memory after. Strings returned from the wrapped function are stored verbatim; dict/list returns are JSON-serialised; the recall list is injected as a `memory_context` keyword when the function declares it, otherwise attached to dict results under `memories`. Sister `remember(store, text, ...)` helper for seeding. The BM25 `_like_fallback` now falls through to per-token OR-LIKE when the whole-string match returns nothing — natural-language questions like "What is the deploy process?" now hit stored facts even when FTS5 trigram can't match quoted exact phrases. Source: Cognee 1.0 ECL pipeline + Mem0 v2 hybrid fusion + Zep/Graphiti bi-temporal validity fields + Letta block-memory (pattern only, no code copied). 59 new regression cases. [Full CHANGELOG →](./CHANGELOG.md#0415---2026-10-18)
 > **What's new in 0.4.14** — **`loop-memory doctor` deep store-health check** (audit 2026-10-12). Ten diagnostic checks — `db_exists`, `db_integrity`, `schema_version`, `audit_triggers`, `audit_log_writable`, `audit_log_size`, `hooks_installed`, `version_consistent`, `wiki_no_orphans`, `recall_paths_works` — report `ok`/`info`/`warn`/`error` for the live `MemoryStore`. `--fix` auto-repairs the `audit_triggers` check. `--json` emits a stable shape for CI. `--list` prints the check function names without touching the store. `--verbose` shows `info`-level checks. Exit code `1` on any `error` status, `0` otherwise. Source: `cortexkit/magic-context doctor` auto-diagnostic pattern (MIT, 2026-10-12) + `dsh-memento` write-approval-gate pattern (Apache-2.0, 2026-10-12). Stdlib-only — we re-implement from scratch against our own `MemoryStore`. Also fixed a Python 3.14 bug: chained `store._conn().__enter__()` immediately triggers the contextmanager's `finally` and closes the connection mid-query — both call sites in `doctor.py` now use explicit `with` form. 27 new regression cases. [Full CHANGELOG →](./CHANGELOG.md#0414---2026-10-12)
 
@@ -202,6 +203,10 @@ loop-memory serve --port 7767     # open http://127.0.0.1:7767
 # 3. Make it run on a timer
 #    (see docs/auto-capture.md for launchd / systemd / cron snippets)
 loop-memory consolidate          # rescore + GC + dedupe
+
+# 4. Optional: sleep-time consolidation (soft expiry, never deletes)
+loop-memory dream                # dry run -- what would expire / merge
+loop-memory dream --apply        # write it (soft-expire + supersede)
 ```
 
 ---
@@ -403,6 +408,43 @@ User signals close the loop:
 - Every `recall()` / search bumps `recall_count` on the returned
   rows so the next Stage-1 ranks them higher.
 
+### Dream: sleep-time consolidation (0.4.16)
+
+`loop-memory dream [--apply]` is the **non-destructive** counterpart to
+`loop-memory cognitive-sleep --apply`:
+
+| | `cognitive-sleep --apply` | `dream --apply` |
+|---|---|---|
+| forgets a stale row | `DELETE` — the row is gone | **soft expiry** — `invalid_at` is stamped, the row and its history stay |
+| decides by age alone | yes | no — **utility** decides |
+| near-duplicates | merged | merged into a **supersession chain** |
+| reversible | no | yes (`revive_memory()` / `recall --as-of`) |
+
+The utility blend is `0.45 × importance + 0.30 × usage + 0.25 × recency`,
+so a rarely-stated-but-constantly-recalled fact is *protected* while a
+never-used stale row is expired. Age alone never decides — that is the
+whole point of "In Defense of Forgotten" (arXiv 2605.27366).
+
+The pass is a **dry run by default**: `--apply` (CLI) or `"apply": true`
+(HTTP) is what actually writes.
+
+```bash
+loop-memory dream --json                     # machine-readable dry run
+loop-memory dream --apply --ttl-days 60      # tighter horizon
+loop-memory dream --apply --utility 0.2      # expire more aggressively
+curl -X POST http://127.0.0.1:7767/api/v1/dream -d '{"apply": true}'
+```
+
+After a dream pass, ask for the *current* truth explicitly:
+
+```bash
+loop-memory recall "editor preference" --latest-only
+```
+
+`--latest-only` (Mem0 v2 `latest_only` parity) drops rows outside their
+validity window at *now*, collapses a subject-key slot to its newest live
+row, and collapses near-duplicate paraphrases to the newest one.
+
 ### Cognitive sleep (v7)
 
 `loop-memory cognitive-sleep [--apply]` runs an **auditable cleanup
@@ -559,7 +601,7 @@ loop_memory/
     ingest/                    # Codex / Claude / Hermes / OpenClaw / generic loaders
     wiki/                      # distillation, classifier, scope auto-promotion
     graph/                     # entity extraction + knowledge-graph build
-    jobs/                      # consolidate / evolve / cognitive-sleep / scheduler / contradiction / graph
+    jobs/                      # consolidate / evolve / cognitive-sleep / dream / scheduler / contradiction / graph
     llm/                       # provider protocol + OpenAI / Anthropic / Ollama / rule-based
     backends/                  # embedding (hashing / sentence-transformers) + vector store (memory / chroma)
     storage/                   # SQLite-backed MemoryStore + migrations

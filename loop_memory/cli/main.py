@@ -15,6 +15,7 @@ Usage:
     loop-memory inject [query]     # dump long-term context block (for SessionStart hooks)
     loop-memory install-hooks      # auto-write MCP + SessionStart hooks for known clients
     loop-memory consolidate-now    # ask the running server to trigger a pass right now
+    loop-memory dream [--apply]    # sleep-time consolidation: utility-aware soft expiry + dedupe
     loop-memory export             # legacy markdown export (no positional path)
     loop-memory digest [--out PATH] # compact knowledge digest for AGENTS.md (≤ max-chars bytes)
     loop-memory rules [--agent codex|claude|hermes|openclaw] [--write] [--force]
@@ -94,6 +95,9 @@ COMMANDS = {
     "ingest": write_cmd.run_ingest,
     "consolidate": write_cmd.run_consolidate,
     "consolidate-now": write_cmd.run_consolidate_now,
+    # Audit 2026-10-25 (loop-memory 0.4.16) -- sleep-time "dream"
+    # consolidation: utility-aware soft expiry + near-duplicate merge.
+    "dream": write_cmd.run_dream,
     "export": _run_export,
     "digest": read_cmd.run_digest,
     "ask": read_cmd.run_ask,
@@ -147,6 +151,7 @@ COMMAND_HELP: dict[str, str] = {
     "chat":                   "loop-memory chat   # REPL with echo LLM.",
     "cognitive-sleep":        "loop-memory cognitive-sleep [--apply]   # dry-run / apply cognitive sweep.",
     "consolidate":            "loop-memory consolidate   # rescore + GC + dedupe.",
+    "dream":                  "loop-memory dream [--apply] [--json] [--ttl-days D] [--utility T]   # sleep-time consolidation: utility-aware soft expiry + near-duplicate merge (audit 2026-10-25). Dry run unless --apply.",
     "consolidate-now":        "loop-memory consolidate-now   # ask the running server to trigger a pass right now.",
     "digest":                 "loop-memory digest [--out PATH]   # compact knowledge digest for AGENTS.md.",
     "doctor":                 "loop-memory doctor [--json] [--verbose] [--fix] [--db PATH]   # deep store-health check (db integrity + audit triggers + hooks + version + wiki orphans). Auto-repair with --fix (audit 2026-10-12; pattern adopted from cortexkit/magic-context + dsh-memento).",
@@ -164,7 +169,7 @@ COMMAND_HELP: dict[str, str] = {
     "install-hooks":          "loop-memory install-hooks   # auto-write MCP + SessionStart hooks for known clients.",
     "mcp":                    "loop-memory mcp   # stdio MCP server (for codex/claude/hermes). Requires ``[serve]`` for HTTP transport.",
     "openclaw-setup":         "loop-memory openclaw-setup   # install the openclaw/clawx auto-ingest watcher (launchd on macOS).",
-    "recall":                 "loop-memory recall <text> [--as-of <ISO|epoch>] [--max-chars N] [--level 0|1|2]   # show top memories (--as-of = bi-temporal recall; --max-chars = total payload cap; --level 0 = L0 abstract ladder rung; audit 2026-10-05).",
+    "recall":                 "loop-memory recall <text> [--as-of <ISO|epoch>] [--latest-only] [--max-chars N] [--level 0|1|2]   # show top memories (--as-of = bi-temporal recall; --latest-only = one answer per fact; --max-chars = total payload cap; --level 0 = L0 abstract ladder rung; audit 2026-10-05).",
     "rescore":                "loop-memory rescore [--half-life 30]   # recompute memory scores.",
     "serve":                  "loop-memory serve [--port 7767] [--no-browser]   # start the local web UI. Requires the ``[serve]`` extra (fastapi + uvicorn).",
     "stats":                  "loop-memory stats   # counters.",

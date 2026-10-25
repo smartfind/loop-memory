@@ -289,6 +289,11 @@ def memory_to_dict(m) -> dict:
         "agent_id": getattr(m, "agent_id", None),
         "user_id": getattr(m, "user_id", None),
         "external_id": getattr(m, "external_id", None),
+        # Audit 2026-10-25 (loop-memory 0.4.16): the logical slot this
+        # memory occupies (NULL = standalone fact) plus the
+        # supersession pointer so a caller can walk the version chain.
+        "subject_key": getattr(m, "subject_key", None),
+        "superseded_by": getattr(m, "superseded_by", None),
     }
 
 

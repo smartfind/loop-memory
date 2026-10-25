@@ -396,7 +396,14 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None,
               # callers that want "show me what's currently in its
               # validity window" without walking the supersession chain.
               validity_at: str | None = None,
-              max_chars: int | None = None):
+              max_chars: int | None = None,
+              # Audit 2026-10-25 (loop-memory 0.4.16): latest-only
+              # mode. ``latest_only=1`` collapses the answer to one
+              # row per logical fact (Mem0 v2 parity) -- rows outside
+              # their validity window are dropped, subject-key slots
+              # collapse to their newest live row, and near-duplicate
+              # texts collapse to the newest one.
+              latest_only: int = 0):
         """Unified recall — wiki + memories + entities in one ranked stream.
 
         ``mode`` is 'hybrid' (default) for BM25+semantic+entity RRF,
@@ -472,6 +479,8 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None,
                     # supplied something so the default-None legacy
                     # contract holds.
                     as_of_ts=(validity_at if (validity_at and str(validity_at).strip()) else None),
+                    # Audit 2026-10-25: one answer per fact.
+                    latest_only=bool(latest_only),
                 )
             except ValueError as e:
                 # Invalid ``validity_at`` -> 400 (audit 2026-10-18)
@@ -485,6 +494,8 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None,
                     bump_signals=bool(bump), source=source, level=level,
                     max_chars=max_chars,
                     as_of_ts=(validity_at if (validity_at and str(validity_at).strip()) else None),
+                    # Audit 2026-10-25: one answer per fact.
+                    latest_only=bool(latest_only),
                 )
             except ValueError as e:
                 raise HTTPException(400, str(e))
@@ -501,6 +512,7 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None,
             "level": level,
             "as_of": as_of,
             "max_chars": max_chars,
+            "latest_only": bool(latest_only),
         }
 
 

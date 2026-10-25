@@ -68,7 +68,15 @@ CREATE TABLE IF NOT EXISTS memories (
     embedding   BLOB,
     agent_id    TEXT,
     user_id     TEXT,
-    external_id TEXT
+    external_id TEXT,
+    -- Audit 2026-10-25 (loop-memory 0.4.16) -- logical "subject key".
+    -- A subject key names the *slot* a fact occupies (e.g.
+    -- "editor.preference", "user.timezone"). Two memories with the
+    -- same (subject_key, agent_id, user_id) are two *versions* of
+    -- the same fact, not two independent facts. Writing a new one
+    -- soft-supersedes the previous one so ``latest_only`` recall can
+    -- collapse the chain to the newest live row.
+    subject_key TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_mem_session  ON memories(session_id);
@@ -447,6 +455,15 @@ class StoredMemory:
     content_hash: str | None = None
     valid_at: float | None = None
     invalid_at: float | None = None
+    # Audit 2026-10-25 (loop-memory 0.4.16) -- the logical slot this
+    # memory occupies. NULL means "no logical identity" (the default
+    # for episodic noise); a non-NULL value makes two memories with
+    # the same (subject_key, agent_id, user_id) versions of one fact.
+    subject_key: str | None = None
+    # The row that superseded this one (None = still the live
+    # version). Exposed on the dataclass so background jobs can tell
+    # a live row from a historical one without a second query.
+    superseded_by: str | None = None
 
 
 @dataclass
@@ -987,6 +1004,53 @@ def _validity_clause(as_of_ts):
     ), [as_of, as_of]
 
 
+# Audit 2026-10-25 (loop-memory 0.4.16) -- default similarity used by
+# ``latest_only`` when two memories carry no subject key and have to be
+# judged as near-duplicates of each other. 0.85 is deliberately
+# conservative: "deploy failed on staging" vs "deploy failed on
+# production" scores ~0.6 and therefore survives as two separate
+# facts, while "the API returns 500" vs "the API returns 500 again"
+# (~0.9) collapses into one.
+DEFAULT_LATEST_ONLY_SIMILARITY = 0.85
+
+
+def _ttl_state(
+    *,
+    ttl: float | None,
+    created_at: float,
+    invalid_at: float | None,
+    now: float,
+    grace_seconds: float = 86400.0,
+) -> str:
+    """Classify how fresh a memory is (audit 2026-10-25, 0.4.16).
+
+    Returns one of:
+
+    * ``"expired"``   -- the row was soft-expired (``invalid_at`` is set
+      and in the past). The dream pass writes this.
+    * ``"ttl"``       -- the row's own TTL window has elapsed but the
+      row was never soft-expired.
+    * ``"expiring"``  -- inside the TTL window but within one day of
+      the deadline.
+    * ``"active"``    -- comfortably inside the TTL window.
+    * ``"persistent"`` -- no TTL was ever set.
+
+    The distinction matters because ``gc()`` deletes on the TTL
+    deadline while the dream pass needs a *utility-aware* decision, and
+    an operator reading ``memory-stats`` needs to tell the two apart.
+    """
+    if invalid_at is not None and float(invalid_at) <= now:
+        return "expired"
+    if ttl is None:
+        return "persistent"
+    deadline = float(created_at or now) + float(ttl)
+    if now >= deadline:
+        return "ttl"
+    if now >= deadline - grace_seconds:
+        return "expiring"
+    return "active"
+
+
 def _evidence_chain(*, body_hits, tag_hits, importance, score_field,
                     recall_count, tokens, text, tags):
     """Build a structured ``[{field, value, weight}]`` evidence list
@@ -1064,7 +1128,7 @@ class MemoryStore:
     The zero-dep claim holds — Python ships with sqlite3 and struct.
     """
 
-    SCHEMA_VERSION = "12"  # audit 2026-10-18: bi-temporal validity + content-hash dedup
+    SCHEMA_VERSION = "13"  # audit 2026-10-25: subject_key (logical fact slot) + latest-only recall
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path).expanduser()
@@ -1219,6 +1283,26 @@ class MemoryStore:
             c.execute(
                 "CREATE INDEX IF NOT EXISTS idx_mem_validity "
                 "ON memories(valid_at, invalid_at)"
+            )
+
+            # Audit 2026-10-25 (loop-memory 0.4.16) -- ``subject_key``.
+            # A nullable TEXT column naming the logical slot a fact
+            # occupies. Two rows sharing a subject key (within the
+            # same agent/user namespace) are *versions* of one fact;
+            # the write path soft-supersedes the older one so the
+            # supersession chain records the history while
+            # ``recall(latest_only=True)`` collapses it to the newest
+            # live row. NULL keeps the legacy "every row is its own
+            # fact" behaviour, so existing databases are unaffected.
+            mem_cols = {row["name"] for row in c.execute("PRAGMA table_info(memories)").fetchall()}
+            if "subject_key" not in mem_cols:
+                c.execute("ALTER TABLE memories ADD COLUMN subject_key TEXT")
+            # Partial index: only rows that actually carry a subject
+            # key are indexed, so the index stays tiny on stores that
+            # never use logical identity.
+            c.execute(
+                "CREATE INDEX IF NOT EXISTS idx_mem_subject_key "
+                "ON memories(subject_key) WHERE subject_key IS NOT NULL"
             )
 
             # One-shot FTS5 tokenizer migration. ``CREATE VIRTUAL TABLE
@@ -1616,6 +1700,7 @@ class MemoryStore:
                 """SELECT m.id, m.kind, m.text, m.importance, m.score,
                           m.source, m.tags, m.created_at, m.updated_at,
                           m.superseded_by, m.session_id,
+                          m.subject_key, m.ttl, m.valid_at, m.invalid_at,
                           COALESCE(s.recall_count, 0)   AS recall_count,
                           COALESCE(s.positive, 0)       AS positive,
                           COALESCE(s.negative, 0)       AS negative,
@@ -1645,6 +1730,20 @@ class MemoryStore:
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
             "superseded_by": row["superseded_by"],
+            # Audit 2026-10-25 (loop-memory 0.4.16): the logical slot
+            # this memory occupies + its bi-temporal validity window,
+            # so a caller can tell "current fact" from "expired
+            # fact" without a second query.
+            "subject_key": row["subject_key"],
+            "ttl": row["ttl"],
+            "valid_at": row["valid_at"],
+            "invalid_at": row["invalid_at"],
+            "ttl_state": _ttl_state(
+                ttl=row["ttl"],
+                created_at=float(row["created_at"] or 0),
+                invalid_at=row["invalid_at"],
+                now=now,
+            ),
             "recall_count": row["recall_count"],
             "positive": row["positive"],
             "negative": row["negative"],
@@ -1727,6 +1826,14 @@ class MemoryStore:
         # still wins when supplied; this is a backstop for SDK calls
         # that omit external_id.
         dedup: bool = True,
+        # Audit 2026-10-25 (loop-memory 0.4.16) -- logical fact slot.
+        # When set, the new memory becomes the *live* version of that
+        # slot: any previously-live row sharing the same
+        # (subject_key, agent_id, user_id) is soft-superseded
+        # (``superseded_by`` pointer) instead of being deleted, so the
+        # full version history stays queryable while
+        # ``recall(latest_only=True)`` collapses it to one answer.
+        subject_key: str | None = None,
     ) -> StoredMemory:
         """Create or update a memory.
 
@@ -1738,6 +1845,9 @@ class MemoryStore:
           place instead of duplicating it. This is the path used by
           the universal ``MemoryClient.remember()`` SDK and the
           ``/api/v1/memories`` endpoint.
+        * by ``subject_key`` — the logical slot a fact occupies. The
+          new row supersedes the previous live row for that slot
+          (Mem0 v2 ``latest_only`` semantics, audit 2026-10-25).
 
         Either input may be ``None`` (the unique index excludes
         NULL/empty external_ids, so a memory with no external_id
@@ -1747,6 +1857,7 @@ class MemoryStore:
 
         now = time.time()
         ext = (external_id or "").strip() or None
+        subj = (subject_key or "").strip() or None
         ts = created_at or now
         uts = updated_at or ts
         tags_json = json.dumps(tags or [])
@@ -1784,8 +1895,15 @@ class MemoryStore:
                     "SELECT id FROM memories "
                     "WHERE content_hash = ? AND "
                     "      ((agent_id IS ? AND user_id IS ?) "
-                    "       OR (agent_id IS NULL AND user_id IS NULL AND ? IS NULL)) ",
-                    (content_hash, agent_id, user_id, user_id),
+                    "       OR (agent_id IS NULL AND user_id IS NULL AND ? IS NULL)) "
+                    # Audit 2026-10-25: when the caller pins a
+                    # subject key, only a row already sitting in the
+                    # *same* logical slot may be collapsed. Two
+                    # different slots can legitimately hold the
+                    # same text ("the answer is 42" as q1.answer and
+                    # as q2.answer) and must stay separate rows.
+                    "  AND (subject_key = ? OR ? IS NULL) ",
+                    (content_hash, agent_id, user_id, user_id, subj, subj),
                 ).fetchone()
                 if row is not None:
                     id = row["id"]
@@ -1806,8 +1924,8 @@ class MemoryStore:
                    (id, session_id, kind, text, importance, source,
                     created_at, updated_at, score, ttl, tags, embedding,
                     agent_id, user_id, external_id,
-                    valid_at, invalid_at, content_hash)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    valid_at, invalid_at, content_hash, subject_key)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(id) DO UPDATE SET
                      text=excluded.text,
                      importance=excluded.importance,
@@ -1827,7 +1945,13 @@ class MemoryStore:
                      -- never think about validity).
                      valid_at=COALESCE(excluded.valid_at, memories.valid_at),
                      invalid_at=COALESCE(excluded.invalid_at, memories.invalid_at),
-                     content_hash=COALESCE(excluded.content_hash, memories.content_hash)""",
+                     content_hash=COALESCE(excluded.content_hash, memories.content_hash),
+                     -- Audit 2026-10-25: a subject key is part of the
+                     -- row's logical identity, so it is written even
+                     -- on UPDATE (COALESCE keeps the old key when
+                     -- the caller passes None, which is the desired
+                     -- "don't touch it" behaviour).
+                     subject_key=COALESCE(excluded.subject_key, memories.subject_key)""",
                 (
                     mid,
                     session_id,
@@ -1847,8 +1971,43 @@ class MemoryStore:
                     effective_valid_at,
                     invalid_at,
                     content_hash,
+                    subj,
                 ),
             )
+
+            # Audit 2026-10-25 (loop-memory 0.4.16) -- subject-key
+            # supersession. The row we just wrote is the live
+            # version of the slot; every *previously* live row for
+            # the same (subject_key, agent_id, user_id) becomes its
+            # predecessor. We write a pointer instead of deleting so
+            # the version history survives and ``recall_as_of()``
+            # can still answer "what did we believe last week?".
+            #
+            # The loser keeps its own ``invalid_at`` untouched: the
+            # supersession pointer already hides it from recall, and
+            # keeping the validity window intact means a historical
+            # query still sees the row as it was.
+            if subj:
+                c.execute(
+                    "UPDATE memories SET superseded_by=? "
+                    "WHERE id != ? AND superseded_by IS NULL "
+                    "  AND subject_key = ? "
+                    "  AND ((agent_id IS ? AND user_id IS ?) "
+                    "       OR (agent_id IS NULL AND user_id IS NULL AND ? IS NULL))",
+                    (mid, mid, subj, agent_id, user_id, user_id),
+                )
+                # The winner is live again even if a previous write
+                # had expired it -- a fresh statement of the fact
+                # re-opens its validity window. Only when the caller
+                # did NOT pass an explicit ``invalid_at``: an explicit
+                # expiry (e.g. "this is true until March") must be
+                # honoured as written.
+                if invalid_at is None:
+                    c.execute(
+                        "UPDATE memories SET invalid_at=NULL "
+                        "WHERE id=? AND invalid_at IS NOT NULL",
+                        (mid,),
+                    )
         item = self.get_memory(mid)
         if item is None:
             raise RuntimeError(f"memory {mid} disappeared after upsert")
@@ -1873,6 +2032,11 @@ class MemoryStore:
         agent_id: str | None = None,
         user_id: str | None = None,
         external_id: str | None = None,
+        # Audit 2026-10-25 (loop-memory 0.4.16): "desc" (default) is
+        # the historical newest-first order. "asc" returns the oldest
+        # rows first, which is what the dream sweep wants -- the rows
+        # it needs to judge are the ones closest to their deadline.
+        order: str = "desc",
     ) -> list[StoredMemory]:
         clauses: list[str] = []
         params: list = []
@@ -1911,9 +2075,10 @@ class MemoryStore:
             clauses.append("external_id = ?")
             params.append(external_id)
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        direction = "ASC" if str(order).lower().startswith("asc") else "DESC"
         with self._conn() as c:
             rows = c.execute(
-                f"SELECT * FROM memories {where} ORDER BY created_at DESC LIMIT ?",
+                f"SELECT * FROM memories {where} ORDER BY created_at {direction} LIMIT ?",
                 (*params, limit),
             ).fetchall()
             return [self._row_to_memory(r) for r in rows]
@@ -2263,6 +2428,139 @@ class MemoryStore:
             params.append(f"%{t}%")
         return "(" + " OR ".join(parts) + ")", params
 
+    # ----------------------------------------------------------------
+    # Latest-only collapse (audit 2026-10-25, loop-memory 0.4.16).
+    # Mem0 v2 ``SearchMemoryOptions.latest_only`` parity.
+    # ----------------------------------------------------------------
+
+    def _filter_latest_only(
+        self,
+        hits: list[dict],
+        *,
+        similarity: float = DEFAULT_LATEST_ONLY_SIMILARITY,
+        now: float | None = None,
+    ) -> list[dict]:
+        """Collapse a ranked memory list down to "one answer per fact".
+
+        Three rules, applied in order:
+
+        1. **Current truth only.** A row whose validity window does not
+           contain *now* (``valid_at > now`` = scheduled for the future,
+           ``invalid_at <= now`` = expired) is dropped. This is what
+           makes the dream pass's soft-expiry observable without
+           changing the 0.4.15 default-recall contract (plain
+           ``recall()`` still returns everything unless the caller
+           asks for a validity window).
+        2. **Subject-key collapse.** When a row carries a
+           ``subject_key`` it names a logical slot; only the newest
+           *live* row of that slot survives. The winner is looked up
+           in the store (not just in the candidate list) so a stale
+           version is never returned just because it happened to match
+           the query better than the current one.
+        3. **Near-duplicate collapse.** Rows without a subject key are
+           clustered by token Jaccard similarity; within a cluster the
+           newest row wins.
+
+        The relative order of the survivors is preserved, so the
+        caller's ranking still reflects the original scores.
+        """
+        if not hits:
+            return hits
+        if now is None:
+            now = time.time()
+        ids = [h["id"] for h in hits]
+        placeholders = ",".join("?" * len(ids))
+        with self._conn() as c:
+            rows = c.execute(
+                f"SELECT id, subject_key, agent_id, user_id, "
+                f"       created_at, updated_at, text, valid_at, invalid_at "
+                f"FROM memories WHERE id IN ({placeholders})",
+                ids,
+            ).fetchall()
+            info = {r["id"]: r for r in rows}
+            subject_keys = sorted({r["subject_key"] for r in rows if r["subject_key"]})
+            live_best: dict[tuple, tuple] = {}
+            if subject_keys:
+                qmarks = ",".join("?" * len(subject_keys))
+                live_rows = c.execute(
+                    f"SELECT id, subject_key, agent_id, user_id, created_at, updated_at "
+                    f"FROM memories "
+                    f"WHERE subject_key IN ({qmarks}) "
+                    f"  AND superseded_by IS NULL "
+                    f"  AND invalid_at IS NULL "
+                    f"  AND (valid_at IS NULL OR valid_at <= ?)",
+                    (*subject_keys, now),
+                ).fetchall()
+                for r in live_rows:
+                    key = (r["subject_key"], r["agent_id"], r["user_id"])
+                    stamp = (
+                        float(r["updated_at"] or 0),
+                        float(r["created_at"] or 0),
+                        str(r["id"]),
+                    )
+                    cur = live_best.get(key)
+                    if cur is None or stamp > cur[0]:
+                        live_best[key] = (stamp, r["id"])
+
+        def _stamp(row) -> tuple:
+            return (
+                float(row["updated_at"] or 0),
+                float(row["created_at"] or 0),
+                str(row["id"]),
+            )
+
+        # --- rule 1 + rule 2 ------------------------------------------
+        keep: set[str] = set()
+        pending: list[dict] = []
+        for h in hits:
+            row = info.get(h["id"])
+            if row is None:
+                keep.add(h["id"])
+                continue
+            valid_at = row["valid_at"]
+            invalid_at = row["invalid_at"]
+            if valid_at is not None and float(valid_at) > now:
+                continue
+            if invalid_at is not None and float(invalid_at) <= now:
+                continue
+            subject_key = row["subject_key"]
+            if not subject_key:
+                pending.append(h)
+                continue
+            key = (subject_key, row["agent_id"], row["user_id"])
+            winner = live_best.get(key)
+            if winner is not None and winner[1] == h["id"]:
+                keep.add(h["id"])
+
+        # --- rule 3 ----------------------------------------------------
+        clusters: list[tuple[set[str], dict]] = []
+        for h in pending:
+            tokens = set(self._tokenize(h.get("text") or ""))
+            if not tokens:
+                keep.add(h["id"])
+                continue
+            row_h = info.get(h["id"])
+            merged = False
+            for idx, (cluster_tokens, winner) in enumerate(clusters):
+                union = len(tokens | cluster_tokens)
+                if not union:
+                    continue
+                inter = len(tokens & cluster_tokens)
+                if inter / union < similarity:
+                    continue
+                row_w = info.get(winner["id"])
+                if row_h is not None and row_w is not None and _stamp(row_h) > _stamp(row_w):
+                    clusters[idx] = (cluster_tokens, h)
+                    keep.discard(winner["id"])
+                    keep.add(h["id"])
+                merged = True
+                break
+            if not merged:
+                clusters.append((tokens, h))
+                keep.add(h["id"])
+
+        return [h for h in hits if h["id"] in keep]
+
     def recall(self, query: str, limit: int = 12,
                include: tuple[str, ...] = ("memories", "wiki", "entities"),
                bump_signals: bool = True,
@@ -2276,7 +2574,15 @@ class MemoryStore:
                # active) or whose ``invalid_at <= as_of_ts`` (already
                # expired). Accepts a float epoch OR an ISO-8601
                # string (the same coercion ``recall_as_of`` uses).
-               as_of_ts: float | str | None = None) -> dict[str, list[dict]]:
+               as_of_ts: float | str | None = None,
+               # Audit 2026-10-25 (loop-memory 0.4.16): latest-only
+               # mode. Collapses the result to "one answer per fact":
+               # rows outside their validity window at *now* are
+               # dropped, subject-key slots collapse to their newest
+               # live row, and near-duplicate texts collapse to the
+               # newest one. Off by default so existing callers keep
+               # the legacy "everything" payload.
+               latest_only: bool = False) -> dict[str, list[dict]]:
         """Unified recall -- returns a dict with three ranked lists.
 
         Each result is tagged with its ``kind`` ("memory" | "wiki" |
@@ -2314,6 +2620,11 @@ class MemoryStore:
         ``[{field, value, weight}]`` (audit 2026-10-18) describing
         which scoring channels contributed and their relative weight
         -- the Cognee/Mem0 evidence-citation pattern, kept zero-dep.
+
+        ``latest_only`` (audit 2026-10-25) is the Mem0 v2
+        ``SearchMemoryOptions.latest_only`` parity flag: the reply
+        contains at most one row per logical fact. See
+        ``_filter_latest_only`` for the exact rules.
         """
         import time as _time
         tokens = self._tokenize(query)
@@ -2336,7 +2647,7 @@ class MemoryStore:
                 sql = (
                     "SELECT m.id, m.kind, m.text, m.importance, m.score, m.source, "
                     "m.tags, m.created_at, m.updated_at, "
-                    "m.valid_at, m.invalid_at, "
+                    "m.valid_at, m.invalid_at, m.subject_key, "
                     "COALESCE(s.recall_count, 0) AS recall_count, "
                     "m.superseded_by "
                     "FROM memories m "
@@ -2424,9 +2735,11 @@ class MemoryStore:
                         "evidence": evidence,
                         "valid_at": float(r["valid_at"] or 0) or None,
                         "invalid_at": float(r["invalid_at"] or 0) or None,
+                        # Audit 2026-10-25: the logical slot this row
+                        # occupies (NULL = standalone fact).
+                        "subject_key": r["subject_key"],
                     })
                 out["memories"].sort(key=lambda m: -m["score"])
-                out["memories"] = out["memories"][:limit]
 
             if "wiki" in include:
                 clause, params = self._like_clause("title", tokens)
@@ -2510,6 +2823,15 @@ class MemoryStore:
                     })
                 out["entities"].sort(key=lambda m: -m["score"])
                 out["entities"] = out["entities"][:limit]
+
+        # Audit 2026-10-25 (loop-memory 0.4.16): latest-only collapse
+        # runs *before* the payload budget so a stale version cannot
+        # eat the caller's character budget. The truncation to
+        # ``limit`` happens after the collapse so the surviving rows
+        # backfill the slots the collapse freed up.
+        if latest_only and out["memories"]:
+            out["memories"] = self._filter_latest_only(out["memories"])
+        out["memories"] = out["memories"][:limit]
 
         # Bump recall_count on surfaced memories (so dashboard tracks usage)
         if bump_signals and out["memories"]:
@@ -3477,6 +3799,10 @@ class MemoryStore:
         # memory whose ``valid_at > as_of`` or
         # ``invalid_at <= as_of``. Accepts epoch OR ISO-8601 string.
         as_of_ts: float | str | None = None,
+        # Audit 2026-10-25 (loop-memory 0.4.16): latest-only mode --
+        # see ``recall()`` / ``_filter_latest_only``. Collapses the
+        # fused result to one answer per logical fact.
+        latest_only: bool = False,
     ) -> dict[str, list[dict]]:
         """RRF-fused recall with token / char budget cap.
 
@@ -3491,6 +3817,9 @@ class MemoryStore:
         reaches the caller. Returns the same shape as ``recall()``;
         each memory row carries the ``evidence`` list and
         ``valid_at`` / ``invalid_at`` fields.
+
+        ``latest_only`` (audit 2026-10-25) collapses the fused result
+        to one answer per logical fact (Mem0 v2 parity).
         """
         """RRF-fused recall across BM25 + semantic + entity channels.
 
@@ -3637,6 +3966,11 @@ class MemoryStore:
             )
         if ent_ids:
             out["entities"] = self._hydrate_entities(ent_ids, fused_ent)
+
+        # Audit 2026-10-25 (loop-memory 0.4.16): latest-only collapse
+        # runs before the trim so the freed slots are backfilled.
+        if latest_only and out["memories"]:
+            out["memories"] = self._filter_latest_only(out["memories"], now=_now_ts)
 
         # Trim
         out["memories"] = out["memories"][:limit]
@@ -3802,7 +4136,7 @@ class MemoryStore:
             rows = c.execute(
                 f"""SELECT m.id, m.kind, m.text, m.importance, m.score, m.source,
                           m.tags, m.created_at, m.updated_at,
-                          m.valid_at, m.invalid_at,
+                          m.valid_at, m.invalid_at, m.subject_key,
                           m.agent_id, m.user_id, m.external_id,
                           COALESCE(s.recall_count, 0) AS recall_count
                    FROM memories m
@@ -3881,6 +4215,7 @@ class MemoryStore:
                 "external_id": r["external_id"] if "external_id" in r.keys() else None,
                 "valid_at": float(r["valid_at"]) if r["valid_at"] is not None else None,
                 "invalid_at": float(r["invalid_at"]) if r["invalid_at"] is not None else None,
+                "subject_key": r["subject_key"] if "subject_key" in r.keys() else None,
                 "score": round(base_score * t_mult, 4),
                 "_temporal_multiplier": round(t_mult, 3),
                 "preview": full_text[:240],
@@ -4236,8 +4571,12 @@ class MemoryStore:
         if not query_embedding:
             return []
         with self._conn() as c:
+            # Audit 2026-10-25 (loop-memory 0.4.16): skip superseded
+            # rows so the semantic channel agrees with the BM25
+            # channel and with ``recall()``.
             rows = c.execute(
-                "SELECT * FROM memories WHERE embedding IS NOT NULL"
+                "SELECT * FROM memories "
+                "WHERE embedding IS NOT NULL AND superseded_by IS NULL"
             ).fetchall()
         scored: list[tuple[float, StoredMemory]] = []
         for r in rows:
@@ -4277,6 +4616,8 @@ class MemoryStore:
             content_hash=row["content_hash"] if "content_hash" in row.keys() else None,
             valid_at=row["valid_at"] if "valid_at" in row.keys() else None,
             invalid_at=row["invalid_at"] if "invalid_at" in row.keys() else None,
+            subject_key=row["subject_key"] if "subject_key" in row.keys() else None,
+            superseded_by=row["superseded_by"] if "superseded_by" in row.keys() else None,
         )
 
     # --- wiki pages -------------------------------------------------------
@@ -5298,6 +5639,54 @@ class MemoryStore:
         ]
 
     # --- maintenance ------------------------------------------------------
+
+    # ----------------------------------------------------------------
+    # Soft expiry (audit 2026-10-25, loop-memory 0.4.16)
+    # ----------------------------------------------------------------
+
+    def expire_memory(self, mid: str, at: float | None = None) -> int:
+        """Soft-expire a memory by stamping ``invalid_at``.
+
+        Non-destructive by design: the row survives, the supersession
+        chain survives, and ``recall_as_of()`` can still answer "what
+        did we believe back then?". Only the *current* view drops the
+        row -- via ``recall(latest_only=True)`` or an explicit
+        validity window.
+
+        This is the write side of the bi-temporal window that 0.4.15
+        introduced but nothing wrote to; the dream pass is the first
+        producer.
+
+        Returns the number of rows updated (0 when the id is unknown
+        or the row was already expired).
+        """
+        mid = str(mid or "")
+        if not mid:
+            return 0
+        stamp = time.time() if at is None else float(at)
+        with self._conn() as c:
+            cur = c.execute(
+                "UPDATE memories SET invalid_at=? "
+                "WHERE id=? AND (invalid_at IS NULL OR invalid_at > ?)",
+                (stamp, mid, stamp),
+            )
+            return cur.rowcount
+
+    def revive_memory(self, mid: str) -> int:
+        """Undo a soft expiry: clear ``invalid_at`` on the row.
+
+        The inverse of ``expire_memory``. Used by ``loop-memory dream
+        --revert`` and by any caller that wants to re-open a fact.
+        """
+        mid = str(mid or "")
+        if not mid:
+            return 0
+        with self._conn() as c:
+            cur = c.execute(
+                "UPDATE memories SET invalid_at=NULL WHERE id=? AND invalid_at IS NOT NULL",
+                (mid,),
+            )
+            return cur.rowcount
 
     def delete_memory(self, mid: str) -> int:
         with self._conn() as c:

@@ -121,11 +121,19 @@ def bm25_search(
                 # Join back to memories so we can return the actual
                 # UUID `id` column (the FTS5 rowid is just a sqlite
                 # rowid, not the memory's primary key).
+                # Audit 2026-10-25 (loop-memory 0.4.16): the hybrid
+                # path must honour the supersession contract that
+                # ``recall()`` has always had -- a row somebody
+                # already superseded is history, not the current
+                # answer. Without this filter the BM25 channel
+                # happily returned both versions of a fact, which
+                # broke the new ``latest_only`` semantics.
                 sql = (
                     f"SELECT m.id AS id, {score_col} AS s "
                     f"FROM {table} t "
                     f"JOIN memories m ON m.rowid = t.rowid "
                     f"WHERE {table} MATCH ? "
+                    f"  AND m.superseded_by IS NULL "
                     f"ORDER BY s LIMIT ?"
                 )
                 rows = c.execute(sql, (fts_q, limit)).fetchall()
@@ -193,6 +201,7 @@ def _like_fallback(
             sql = (
                 "SELECT m.id AS id, m.importance AS importance "
                 "FROM memories m WHERE LOWER(text) LIKE LOWER(?) "
+                "  AND m.superseded_by IS NULL "
                 "ORDER BY m.importance DESC, m.created_at DESC LIMIT ?"
             )
             whole = [dict(r) for r in c.execute(sql, (pat, limit)).fetchall()]
@@ -207,7 +216,8 @@ def _like_fallback(
             params = [f"%{t}%" for t in tokens]
             sql_t = (
                 "SELECT m.id AS id, m.importance AS importance "
-                f"FROM memories m WHERE {placeholders} "
+                f"FROM memories m WHERE ({placeholders}) "
+                "  AND m.superseded_by IS NULL "
                 "ORDER BY m.importance DESC, m.created_at DESC LIMIT ?"
             )
             return [dict(r) for r in c.execute(sql_t, (*params, limit)).fetchall()]

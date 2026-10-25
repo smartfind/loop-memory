@@ -76,6 +76,9 @@ class Memory:
     tags: list[str] = field(default_factory=list)
     created_at: float = 0.0
     updated_at: float = 0.0
+    # Audit 2026-10-25 (loop-memory 0.4.16): the logical slot this
+    # memory occupies (None = standalone fact).
+    subject_key: str | None = None
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Memory:
@@ -93,6 +96,7 @@ class Memory:
             tags=list(d.get("tags") or []),
             created_at=float(d.get("created_at") or 0.0),
             updated_at=float(d.get("updated_at") or 0.0),
+            subject_key=d.get("subject_key"),
         )
 
 
@@ -220,6 +224,7 @@ class MemoryClient(MemoryClientExt, AbstractContextManager):
         user_id: str | None = None,
         ttl: float | None = None,
         created_at: float | None = None,
+        subject_key: str | None = None,
     ) -> Memory:
         """Push one memory into long-term storage.
 
@@ -227,6 +232,13 @@ class MemoryClient(MemoryClientExt, AbstractContextManager):
         same ``(agent_id, user_id, external_id)`` tuple updates the
         row in place. Use a stable per-agent id (e.g. the tool name
         + call args hash) so retries from your Agent don't duplicate.
+
+        ``subject_key`` (audit 2026-10-25, loop-memory 0.4.16) names
+        the logical slot the fact occupies ("editor.preference",
+        "user.timezone"). Pushing a new value for the same slot
+        supersedes the previous version instead of adding a parallel
+        row, so ``recall(latest_only=True)`` answers with exactly one
+        current value per slot.
         """
         raise NotImplementedError
 
@@ -245,12 +257,19 @@ class MemoryClient(MemoryClientExt, AbstractContextManager):
         include: str = "memories,wiki,entities",
         max_chars: int | None = None,
         level: int = 1,
+        latest_only: bool = False,
     ) -> RecallResult:
         """Unified search across the user's memory store.
 
         ``max_chars`` (audit 2026-10-05) caps the total payload so an
         MCP-loop caller never has to hand-trim a giant response.
         ``level`` (0..2) is the tiered-loader knob.
+
+        ``latest_only`` (audit 2026-10-25) collapses the answer to one
+        row per logical fact (Mem0 v2 parity): rows outside their
+        validity window are dropped, subject-key slots collapse to
+        their newest live row, and near-duplicate texts collapse to
+        the newest one.
         """
         raise NotImplementedError
 
@@ -328,6 +347,7 @@ class _InProcessClient(MemoryClient):
         user_id: str | None = None,
         ttl: float | None = None,
         created_at: float | None = None,
+        subject_key: str | None = None,
     ) -> Memory:
         if not text or not text.strip():
             raise ValueError("text is required")
@@ -343,6 +363,8 @@ class _InProcessClient(MemoryClient):
             external_id=external_id,
             ttl=ttl,
             created_at=created_at,
+            # Audit 2026-10-25: logical fact slot.
+            subject_key=subject_key,
         )
         return _memory_from_stored(row)
 
@@ -360,6 +382,7 @@ class _InProcessClient(MemoryClient):
         include: str = "memories,wiki,entities",
         max_chars: int | None = None,
         level: int = 1,
+        latest_only: bool = False,
     ) -> RecallResult:
         # ``recall_hybrid`` is the production code path; fall back to
         # the legacy LIKE-based ``recall`` if a stale DB doesn't have
@@ -370,6 +393,7 @@ class _InProcessClient(MemoryClient):
                 query, limit=limit, include=wanted,
                 bump_signals=True, source=source, level=level,
                 max_chars=max_chars,
+                latest_only=latest_only,
             )
         else:
             r = self._store.recall(
@@ -379,6 +403,7 @@ class _InProcessClient(MemoryClient):
                 source=source,
                 max_chars=max_chars,
                 level=level,
+                latest_only=latest_only,
             )
         # Optional post-filter: even if the store returned hits, the
         # caller may want only their agent's namespace.
@@ -586,6 +611,8 @@ def _memory_from_stored(row) -> Memory:
         tags=list(row.tags or []),
         created_at=float(row.created_at or 0.0),
         updated_at=float(getattr(row, "updated_at", 0.0) or 0.0),
+        # Audit 2026-10-25: logical fact slot.
+        subject_key=getattr(row, "subject_key", None),
     )
 
 
@@ -639,6 +666,7 @@ class _HttpClient(MemoryClient):
         user_id: str | None = None,
         ttl: float | None = None,
         created_at: float | None = None,
+        subject_key: str | None = None,
     ) -> Memory:
         if not text or not text.strip():
             raise ValueError("text is required")
@@ -657,6 +685,8 @@ class _HttpClient(MemoryClient):
             body["ttl"] = float(ttl)
         if created_at is not None:
             body["created_at"] = float(created_at)
+        if subject_key:
+            body["subject_key"] = str(subject_key)
         resp = self._request("POST", "/api/v1/memories", body)
         return Memory.from_dict(resp)
 
@@ -675,6 +705,7 @@ class _HttpClient(MemoryClient):
         include: str = "memories,wiki,entities",
         max_chars: int | None = None,
         level: int = 1,
+        latest_only: bool = False,
     ) -> RecallResult:
         params = {
             "q": query,
@@ -683,6 +714,8 @@ class _HttpClient(MemoryClient):
             "source": source or "",
             "level": int(level),
         }
+        if latest_only:
+            params["latest_only"] = "1"
         if max_chars is not None:
             params["max_chars"] = int(max_chars)
         if agent_id is not None:

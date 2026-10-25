@@ -263,11 +263,12 @@ class BiTemporalColumnsTests(unittest.TestCase):
         self.assertEqual(m2.invalid_at, 4000.0)
 
     def test_schema_version_bumped_to_12(self) -> None:
+        """The 12 -> 13 bump (audit 2026-10-25) added ``subject_key``."""
         with self.store._conn() as c:
             v = c.execute(
                 "SELECT v FROM schema_meta WHERE k='version'"
             ).fetchone()["v"]
-        self.assertEqual(v, "12")
+        self.assertEqual(v, "13")
 
     def test_partial_indexes_present(self) -> None:
         """The content_hash and (valid_at, invalid_at) indexes must

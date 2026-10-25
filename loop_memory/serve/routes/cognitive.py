@@ -49,6 +49,45 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None) 
         return rpt.to_dict()
 
 
+    @app.post("/api/v1/dream")
+    def v1_dream(body: dict):
+        """Run the sleep-time consolidation pass (audit 2026-10-25).
+
+        Body shape (all keys optional)::
+
+            {
+              "apply": false,          # dry run by default
+              "half_life_days": 30.0,
+              "ttl_days": 90.0,
+              "utility_threshold": 0.30,
+              "similarity": 0.92,
+              "limit": 2000
+            }
+
+        The pass never deletes a row: stale, low-utility memories are
+        **soft-expired** (``invalid_at`` stamped) so the fact leaves
+        the current view while its history stays queryable through
+        ``recall?as_of=``. Near-duplicates are merged into a
+        supersession chain instead of being removed.
+        """
+        from ...jobs.dream import dream as dream_job
+        body = body or {}
+        try:
+            rpt = dream_job(
+                store,
+                apply=bool(body.get("apply", False)),
+                half_life_days=float(body.get("half_life_days", 30.0)),
+                ttl_days=float(body.get("ttl_days", 90.0)),
+                utility_threshold=float(body.get("utility_threshold", 0.30)),
+                similarity=float(body.get("similarity", 0.92)),
+                limit=int(body.get("limit", 2000)),
+                record_audit=bool(body.get("record_audit", True)),
+            )
+        except (TypeError, ValueError) as e:
+            raise HTTPException(400, f"invalid dream parameter: {e}")
+        return rpt.to_dict()
+
+
     @app.get("/api/v1/cognitive/audit")
     def v1_cognitive_audit(kind: str | None = None, action: str | None = None,
                             limit: int = 200):

@@ -117,6 +117,104 @@ same view — no second JSON shape to maintain.
 
 
 
+## Subject keys, latest-only recall + the dream pass (audit 2026-10-25, loop-memory 0.4.16)
+
+### Subject keys — a fact has a slot
+
+A flat memory log cannot answer "what is the current value of X?"
+without a second ranking pass over every version. 0.4.16 gives a memory
+an optional **subject key**: the logical slot it occupies.
+
+```
+memories.subject_key TEXT        -- NULL = standalone fact
+idx_mem_subject_key               -- partial index, only keyed rows
+```
+
+Two rows sharing `(subject_key, agent_id, user_id)` are two *versions*
+of one fact. The write path makes the new row live and supersedes the
+previous one:
+
+```sql
+UPDATE memories SET superseded_by = :new_id
+WHERE id != :new_id AND superseded_by IS NULL
+  AND subject_key = :key
+  AND ((agent_id IS :agent AND user_id IS :user)
+       OR (agent_id IS NULL AND user_id IS NULL AND :user IS NULL))
+```
+
+No row is deleted, so `recall_as_of()` still answers "what did we
+believe last week?". The content-hash dedup path is slot-aware too —
+two *different* slots holding the same text stay two rows, otherwise a
+slot would silently swallow another one.
+
+### Latest-only recall
+
+`recall()` / `recall_hybrid()` accept `latest_only=False`. When set,
+`_filter_latest_only()` collapses the result in three layers:
+
+```mermaid
+flowchart TD
+    HITS[ranked memory hits] --> R1{Rule 1: validity window<br/>contains now?}
+    R1 -- no --> DROP1[drop]
+    R1 -- yes --> R2{Rule 2: subject_key set?}
+    R2 -- no --> R3[Rule 3: near-duplicate<br/>clustering]
+    R2 -- yes --> LOOKUP[newest LIVE row<br/>for the slot, in the store]
+    LOOKUP -- is this hit the winner? --> R3
+    LOOKUP -- no --> DROP2[drop: a stale version<br/>never wins on score alone]
+    R3 --> OUT[one answer per fact]
+```
+
+Rule 2 looks the winner up **in the store**, not in the candidate list.
+That is the important detail: a superseded version must not come back
+just because it happened to match the query better than the current one.
+
+The default (`latest_only=False`) is unchanged — the 0.4.15 contract is
+"plain recall returns everything unless the caller asks for a validity
+window". `latest_only` is the *opt-in* "current truth" view.
+
+### The dream pass
+
+`loop_memory/jobs/dream.py` is the sleep-time consolidation pass. It
+is deterministic, zero-dependency and **non-destructive**:
+
+```mermaid
+flowchart LR
+    CAND[live candidate rows<br/>oldest first] --> DECAY[rescore_all<br/>half-life decay]
+    DECAY --> FORGET{stage: forget}
+    FORGET --> UTIL[utility = 0.45*importance<br/>+ 0.30*usage + 0.25*recency]
+    UTIL --> PAST{past deadline?}
+    PAST -- no --> CONSOL
+    PAST -- yes --> HIGH{utility >= threshold?}
+    HIGH -- yes --> KEEP[protect: report, keep]
+    HIGH -- no --> EXPIRE[soft expiry:<br/>invalid_at = now]
+    EXPIRE --> CONSOL[stage: consolidate]
+    CONSOL --> MERGE[near-duplicate merge<br/>via merge_memories]
+    MERGE --> AUDIT[record_audit]
+    AUDIT --> REPORT[DreamReport]
+```
+
+Why utility and not age: "In Defense of Forgotten: TTL-aware Memory
+for Long-Horizon Agents" (arXiv 2605.27366) argues that eviction should
+be utility-aware. A fact that is old but surfaced every session is worth
+more than a fact that is recent but never used. The blend keeps
+*importance* dominant, gives *usage* real weight, and uses *recency*
+only as a tie-breaker.
+
+Why soft expiry and not DELETE: `cognitive_sleep --apply` deletes stale
+rows outright, which destroys the history the audit trail and
+`recall_as_of()` depend on. `expire_memory()` stamps `invalid_at`
+instead — the row leaves the current view (via `latest_only` or an
+explicit validity window) but stays queryable forever.
+
+### Supersession hygiene in the hybrid path
+
+Until 0.4.16 the hybrid recall path did not filter `superseded_by`:
+the BM25 channel, the LIKE fallback and the semantic channel all
+returned both versions of a superseded fact, contradicting the contract
+`recall()` has always had. All three channels now exclude superseded
+rows — which is also what makes `latest_only` correct on the path the
+CLI, the MCP server and the dashboard actually use.
+
 ## Bi-temporal validity + content-hash dedup (audit 2026-10-18, loop-memory 0.4.15)
 
 The `memories` table carries three new columns that turn the store
@@ -223,7 +321,12 @@ sequenceDiagram
 
 ## Testing
 
-- **526 tests across 39 files** (all run via `pytest -q`), pinned by:
+- **955 tests across 75 files** (955 passed / 4 skipped; all run via
+  `pytest -q`), pinned by:
+  - 77 new in 0.4.16 — `tests/test_subject_key_2026_10_25.py` (16),
+    `tests/test_latest_only_2026_10_25.py` (14),
+    `tests/test_dream_2026_10_25.py` (26),
+    `tests/test_dream_cli_http_2026_10_25.py` (21).
   - 21 new in 0.4.4 (`tests/test_cli_rules.py` + `tests/test_short_query.py`)
   - cognitive-sleep stages / abort + bulk `get_signals` covered in
     `tests/test_universal_memory.py` (e.g. `test_get_signals_*`,

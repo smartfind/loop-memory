@@ -145,6 +145,9 @@ class MemoryStatsStoreTests(unittest.TestCase):
             "tags", "session_id", "created_at", "updated_at",
             "superseded_by", "recall_count", "positive", "negative",
             "last_recalled_at", "last_feedback_at", "age_seconds",
+            # Audit 2026-10-25 (loop-memory 0.4.16): logical fact slot
+            # + the bi-temporal validity window + the TTL state.
+            "subject_key", "ttl", "valid_at", "invalid_at", "ttl_state",
         }
         self.assertEqual(set(res.keys()), expected)
 

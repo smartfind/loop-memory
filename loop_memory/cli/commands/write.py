@@ -7,7 +7,7 @@ import os
 import urllib.error
 import urllib.request
 
-from .._common import DEFAULT_DB, die, parse_int_flag
+from .._common import DEFAULT_DB, default_db_path, die, parse_int_flag
 
 
 def run_ingest(args) -> int:
@@ -112,6 +112,99 @@ def run_rescore(args) -> int:
     store = MemoryStore(DEFAULT_DB)
     n = store.rescore_all(half_life)
     print(f"rescored {n} memories with half_life_days={half_life}")
+    return 0
+
+
+def run_dream(args) -> int:
+    """loop-memory dream [--apply] [--json] [tuning flags]
+
+    The sleep-time consolidation pass (audit 2026-10-25, loop-memory
+    0.4.16). Runs a **dry sweep** by default and prints what it
+    *would* do; pass ``--apply`` to actually soft-expire stale rows and
+    merge near-duplicates.
+
+    Unlike ``loop-memory consolidate`` (which hard-deletes rows past
+    their TTL), the dream pass never deletes: it stamps ``invalid_at``
+    so the fact leaves the current view while its history stays
+    queryable through ``loop-memory recall --as-of``.
+    """
+    import sys
+
+    from ...jobs.dream import dream as dream_job
+    from ...storage.sqlite_store import MemoryStore
+
+    args = list(args)
+    apply_changes = False
+    as_json = False
+    half_life_days = 30.0
+    ttl_days = 90.0
+    utility_threshold = 0.30
+    similarity = 0.92
+    limit = 2000
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--apply":
+            apply_changes = True
+            i += 1
+        elif a == "--json":
+            as_json = True
+            i += 1
+        elif a in ("--half-life", "--ttl-days", "--utility", "--similarity", "--limit"):
+            if i + 1 >= len(args):
+                return die(f"{a} needs a value")
+            raw = args[i + 1]
+            try:
+                if a == "--limit":
+                    limit = int(raw)
+                else:
+                    value = float(raw)
+            except ValueError:
+                return die(f"{a} must be a number, got {raw!r}")
+            if a == "--half-life":
+                half_life_days = value
+            elif a == "--ttl-days":
+                ttl_days = value
+            elif a == "--utility":
+                utility_threshold = value
+            else:
+                similarity = value
+            i += 2
+        elif a.startswith("--"):
+            return die(f"unknown flag: {a}")
+        else:
+            return die(f"unexpected argument: {a!r}")
+
+    # ``default_db_path()`` (not the import-time constant) so a host
+    # that changes $LOOP_MEMORY_DB after import is honoured.
+    store = MemoryStore(default_db_path())
+    report = dream_job(
+        store,
+        apply=apply_changes,
+        half_life_days=half_life_days,
+        ttl_days=ttl_days,
+        utility_threshold=utility_threshold,
+        similarity=similarity,
+        limit=limit,
+    )
+    if as_json:
+        print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
+        return 0
+
+    mode = "applied" if apply_changes else "dry-run"
+    print(
+        f"dream ({mode}) — considered {report.considered}, "
+        f"expired {report.expired}, kept {report.kept}, "
+        f"superseded {report.superseded} in {report.elapsed_ms:.0f} ms"
+    )
+    if not apply_changes and (report.expired or report.superseded):
+        print("  (dry run — re-run with --apply to write these changes)")
+    for action in report.actions:
+        if action.kind == "keep":
+            continue
+        marker = "✔" if action.action == "applied" else "•"
+        print(f"  {marker} {action.kind}: {action.target_text[:72]}")
+        print(f"      {action.reason}")
     return 0
 
 

@@ -78,12 +78,20 @@ def run_recall(args) -> int:
     validity_at: float | None = None
     max_chars: int | None = None
     level = 1
+    # Audit 2026-10-25 (loop-memory 0.4.16) -- latest-only mode.
+    latest_only = False
     qargs: list[str] = []
     i = 0
     while i < len(args):
         a = args[i]
         if a == "--verbose":
             verbose = True
+            i += 1
+        elif a == "--latest-only":
+            # Audit 2026-10-25: Mem0 v2 parity -- show one answer per
+            # logical fact (drops rows outside their validity window
+            # and collapses subject-key / near-duplicate versions).
+            latest_only = True
             i += 1
         elif a == "--outline":
             # Audit 2026-09-13 (tigerless-labs/agent-memory v0.3.0) —
@@ -162,7 +170,7 @@ def run_recall(args) -> int:
             qargs.append(a)
             i += 1
     if not qargs:
-        return die("usage: loop-memory recall <query> [--verbose] [--outline] [--as-of <ISO|epoch>] [--limit N] [--max-chars N] [--level 0|1|2]")
+        return die("usage: loop-memory recall <query> [--verbose] [--outline] [--as-of <ISO|epoch>] [--latest-only] [--limit N] [--max-chars N] [--level 0|1|2]")
     store = MemoryStore(default_db_path())
     query = " ".join(qargs)
     if as_of is not None:
@@ -180,7 +188,9 @@ def run_recall(args) -> int:
                           # to recall() so the new bi-temporal window
                           # filter applies. ``None`` keeps the legacy
                           # "everything" semantics.
-                          as_of_ts=validity_at)
+                          as_of_ts=validity_at,
+                          # Audit 2026-10-25: one answer per fact.
+                          latest_only=latest_only)
     has = False
     if r["wiki"]:
         has = True

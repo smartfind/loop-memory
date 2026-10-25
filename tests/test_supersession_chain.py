@@ -49,8 +49,9 @@ class SupersessionChainTests(unittest.TestCase):
         loud. Pinned here so a future change can't silently revert
         to v8 (which would not have ``superseded_by``); audit
         2026-10-18 keeps the same guard for the 11 -> 12 bump that
-        added bi-temporal validity + content_hash."""
-        self.assertEqual(MemoryStore.SCHEMA_VERSION, "12")
+        added bi-temporal validity + content_hash, and audit
+        2026-10-25 for the 12 -> 13 bump that added ``subject_key``."""
+        self.assertEqual(MemoryStore.SCHEMA_VERSION, "13")
 
     def test_merge_writes_superseded_by_pointer_not_delete(self) -> None:
         """``merge_memories(a, b)`` must keep the loser row but set

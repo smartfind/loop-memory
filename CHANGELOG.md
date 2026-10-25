@@ -1,3 +1,108 @@
+## [0.4.16] - 2026-10-25
+
+### feature
+
+- **Subject-key logical fact slots** + **`latest_only` recall** +
+  **the "dream" sleep-time consolidation pass** (audit 2026-10-25, weekly
+  ecosystem sync — Mem0 v2.2.1 "Dream", arXiv 2605.27366 "In Defense of
+  Forgotten", Zep/Graphiti temporal edges, Letta memory blocks).
+
+  **Subject keys.** A new nullable `subject_key` column on `memories`
+  names the *logical slot* a fact occupies (`"editor.preference"`,
+  `"user.timezone"`). Two memories carrying the same
+  `(subject_key, agent_id, user_id)` are two *versions* of one fact, not
+  two independent facts. `upsert_memory(subject_key=...)` makes the new
+  row the live version and soft-supersedes the previous one with a
+  `superseded_by` pointer — the history survives, so
+  `recall_as_of()` can still answer "what did we believe last week?".
+  The content-hash dedup path is now slot-aware: two *different* slots
+  that happen to hold the same text stay two separate rows.
+  `SCHEMA_VERSION` bumped 12 → 13 with an idempotent `ALTER TABLE` +
+  partial-index guard so a pre-0.4.16 DB upgrades in place.
+
+  **`latest_only` retrieval.** Mem0 v2 ships
+  `SearchMemoryOptions.latest_only` / `GetAllMemoryOptions.latest_only`
+  so a caller can ask for "the current answer" instead of "every version
+  of the answer". `recall()` and `recall_hybrid()` gained a
+  `latest_only=False` flag that collapses the result in three layers:
+  1. *current truth only* — rows whose validity window does not contain
+     `now` are dropped (this is what makes the dream pass's soft expiry
+     observable without changing the 0.4.15 default-recall contract);
+  2. *subject-key collapse* — a slot resolves to its newest **live** row,
+     looked up in the store rather than in the candidate list, so a
+     stale version never comes back just because it matched the query
+     better;
+  3. *near-duplicate collapse* — paraphrases cluster by token Jaccard
+     (default 0.85) and the newest row wins.
+
+  Wired through `GET /api/recall?latest_only=1`,
+  `GET /api/v1/recall?latest_only=1`, `loop-memory recall
+  --latest-only`, and `MemoryClient.recall(latest_only=True)`.
+
+  **The dream pass.** New `loop_memory/jobs/dream.py` implements the
+  sleep-time consolidation Mem0 v2 calls the "Dream" — deterministic,
+  zero-dependency, and **non-destructive**:
+
+  - *decay* — rescore every row with the existing half-life model;
+  - *utility-aware selective forgetting* — a row past its deadline (its
+    own `ttl`, or the sweep's `ttl_days` horizon) is judged on
+    **utility** = `0.45 × importance + 0.30 × usage + 0.25 × recency`.
+    Low-utility rows are **soft-expired** (`invalid_at` stamped, row
+    kept, history kept); high-utility rows are *protected* and reported
+    as such. Age alone never decides;
+  - *near-duplicate consolidation* — near-identical rows are merged
+    through `merge_memories()`, which appends the loser into the winner
+    and writes a supersession pointer instead of deleting.
+
+  Exposed as `loop-memory dream [--apply] [--json] [--ttl-days D]
+  [--utility T] [--half-life D] [--similarity S] [--limit N]` and
+  `POST /api/v1/dream`. The pass is a **dry run by default** — nothing
+  is written without `--apply` / `"apply": true`. Every decision is
+  recorded in `cognitive_audit` so the dashboard can show and revert it.
+
+  Source pattern: Mem0 v2.2.1 Dream + ADD-only architecture
+  (mem0ai/mem0, 2026-09-25) + "In Defense of Forgotten: TTL-aware
+  Memory for Long-Horizon Agents" (arXiv 2605.27366) + Zep/Graphiti
+  bi-temporal edges — *pattern only, no code copied*.
+
+### improvement
+
+- **Fixed a real defect in the hybrid recall path.** The BM25, LIKE
+  fallback and semantic channels did not filter `superseded_by`, so
+  `recall_hybrid()` — the production path used by the CLI, the MCP
+  server and the dashboard — happily returned *both* versions of a
+  superseded fact, contradicting the documented contract that
+  `recall()` has always had. All three channels now exclude superseded
+  rows, which is also what makes the new `latest_only` semantics
+  correct on the hybrid path.
+- **`MemoryStore.expire_memory(mid, at=None)` / `revive_memory(mid)`**
+  — the store-level soft-expiry primitives. `expire_memory()` stamps
+  `invalid_at` without deleting; `revive_memory()` clears it. 0.4.15
+  introduced the `invalid_at` column but nothing wrote to it — the
+  dream pass is its first producer.
+- **`memory_stats()`** now reports `subject_key`, `ttl`, `valid_at`,
+  `invalid_at` and a derived `ttl_state` (`active` / `expiring` /
+  `ttl` / `expired` / `persistent`), so an operator can tell a
+  TTL-expired row apart from a dream-expired one.
+- **`list_memories(order="asc")`** — the dream sweep needs the rows
+  closest to their deadline, not the newest ones.
+- **Every recall hit exposes `subject_key`** so a UI can render
+  "this is version 3 of `editor.preference`".
+
+### test
+
+- **77 new regression cases** across four files:
+  - `tests/test_subject_key_2026_10_25.py` (16) — supersession chain,
+    slot-scoped dedup, history survival, legacy-DB migration.
+  - `tests/test_latest_only_2026_10_25.py` (14) — the three collapse
+    rules, the unchanged default contract, budget interaction.
+  - `tests/test_dream_2026_10_25.py` (26) — utility blend, dry run vs
+    apply, protection of frequently-recalled rows, near-duplicate merge,
+    audit trail, expire/revive primitives.
+  - `tests/test_dream_cli_http_2026_10_25.py` (21) — CLI, HTTP and SDK
+    surfaces.
+- Suite: **955 passed / 4 skipped** (was 878 / 4), ruff clean.
+
 ## [0.4.15] - 2026-10-18
 
 ### feature

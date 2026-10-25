@@ -155,9 +155,15 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None) 
     def v1_create_memory(body: dict):
         """Idempotent remember(). Body: {text, kind?, importance?,
         tags?, source?, session_id?, external_id?, agent_id?, user_id?,
-        ttl?}. When ``external_id`` is set, the (agent_id, user_id,
-        external_id) tuple must be unique; re-pushing updates the
-        row in place.
+        ttl?, subject_key?}. When ``external_id`` is set, the
+        (agent_id, user_id, external_id) tuple must be unique;
+        re-pushing updates the row in place.
+
+        ``subject_key`` (audit 2026-10-25, loop-memory 0.4.16) names
+        the logical slot the fact occupies. Re-pushing the same slot
+        with new text supersedes the previous version instead of
+        creating a second, parallel row -- so ``recall?latest_only=1``
+        returns exactly one answer per slot.
         """
         text = (body.get("text") or "").strip()
         if not text:
@@ -193,6 +199,8 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None) 
             user_id=body.get("user_id"),
             external_id=ext,
             ttl=ttl_f,
+            # Audit 2026-10-25: logical fact slot.
+            subject_key=(body.get("subject_key") or "").strip() or None,
         )
         return _memory_to_dict(stored)
 
@@ -287,6 +295,9 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None) 
         agent_id: str | None = None,
         user_id: str | None = None,
         mode: str = "hybrid",
+        # Audit 2026-10-25 (loop-memory 0.4.16): latest-only mode --
+        # one answer per logical fact (Mem0 v2 parity).
+        latest_only: int = 0,
     ):
         """Unified recall filtered to a single Agent namespace.
 
@@ -295,6 +306,11 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None) 
         pipeline. Memories with no ``agent_id`` set are treated as
         "global" and visible to every caller (matches the SDK
         semantics).
+
+        ``latest_only=1`` collapses the answer to one row per logical
+        fact: rows outside their validity window are dropped, subject
+        key slots collapse to their newest live row, and near-duplicate
+        texts collapse to the newest one (audit 2026-10-25).
         """
         wanted = tuple(s.strip() for s in include.split(",") if s.strip())
         if not wanted:
@@ -306,11 +322,13 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None) 
                 include=wanted,
                 bump_signals=True,
                 source=source,
+                latest_only=bool(latest_only),
             )
         else:
             r = store.recall_hybrid(
                 q, limit=limit, include=wanted,
                 bump_signals=True, source=source, level=1,
+                latest_only=bool(latest_only),
             )
         if agent_id is not None or user_id is not None:
             def _own(m: dict) -> bool:
@@ -335,6 +353,7 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None) 
             "source": source,
             "temporal_intent": r.get("temporal_intent", "any"),
             "temporal_confidence": r.get("temporal_confidence", 0.0),
+            "latest_only": bool(latest_only),
         }
 
 
