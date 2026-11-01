@@ -1,3 +1,74 @@
+## [0.4.19] - 2026-11-01
+
+### fix
+
+- **The wheel now ships the whole dashboard and the benchmark
+  fixture.** The 0.4.18 wheel contained exactly two data files:
+  `loop_memory/py.typed` and `loop_memory/serve/static/index.html`.
+  Every CSS, JavaScript, i18n and image asset — and the benchmark
+  fixture — were **missing from the distribution**, because the
+  package-data declaration was
+
+  ```toml
+  [tool.setuptools.package-data]
+  loop_memory = ["py.typed", "serve/static/*.html"]
+  ```
+
+  `serve/static/*.html` is not recursive: it matches `index.html` and
+  nothing else, and `loop_memory/bench/fixtures` was not declared at
+  all. Two user-visible consequences, both reproduced against the
+  published 0.4.18 wheel:
+
+  - `pip install loop-memory` gave a **blank dashboard**. The server
+    started fine and `GET /` returned `200`, but every asset the page
+    needs 404'd: `GET /static/js/main.js` → `404`,
+    `GET /static/css/app.css` → `404`. The entire Vue application,
+    both stylesheets, the `en.json` / `zh.json` translation payloads
+    and the logo SVGs were absent, so the page rendered as an empty
+    shell. The i18n injection in `GET /` degraded gracefully (it
+    already had a fallback), which is exactly why the breakage was
+    silent.
+  - `loop-memory bench` **crashed** with `FileNotFoundError` on the
+    packaged fixture, so the benchmark that 0.4.18 introduced could
+    only be run from a source checkout.
+
+  The declaration is now per package, with recursive globs, so a new
+  asset is picked up without anyone remembering to extend it:
+
+  ```toml
+  [tool.setuptools.package-data]
+  loop_memory = ["py.typed"]
+  "loop_memory.serve.static" = ["**/*.html", "**/*.css", "**/*.js", "**/*.json", "**/*.svg"]
+  "loop_memory.bench" = ["fixtures/*.json"]
+  ```
+
+  The 0.4.19 wheel contains all 32 non-Python files in the package
+  tree, and the dashboard assets and the fixture are verified to be
+  present by the new packaging tests.
+
+- **`loop-memory bench` no longer dies with a bare traceback** when
+  the fixture cannot be found. It now prints what it looked for and
+  what to do about it, and exits `2`.
+
+### test
+
+- **A packaging regression test that builds the real distribution.**
+  `tests/test_packaging_2026_11_01.py` copies the build inputs into a
+  pristine directory — *not* the working tree, because setuptools
+  caches the file list in `loop_memory.egg-info/SOURCES.txt` and
+  packages a stale copy of `build/lib`, which would make the test
+  pass for the wrong reason — then builds a wheel and an sdist with
+  setuptools' own PEP 517 backend and asserts that **every**
+  non-Python file in the package tree is actually inside them. It
+  also unpacks the wheel and runs the benchmark out of it, which is
+  what a PyPI install does. All 8 cases fail against the 0.4.18
+  `package-data` declaration and pass against the new one.
+
+### Changed
+
+- `build` is now listed in the `dev` extra, so the packaging test can
+  run from a fresh checkout.
+
 ## [0.4.18] - 2026-11-01
 
 ### fix

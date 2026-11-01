@@ -85,7 +85,11 @@ def run_bench(args: list) -> int:
 
     from ...bench.runner import compare_reports, load_fixture, run_benchmark
 
-    fixture, digest = load_fixture(ns.fixture)
+    try:
+        fixture, digest = load_fixture(ns.fixture)
+    except FileNotFoundError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     report = run_benchmark(
         fixture, fixture_sha256=digest, top_k=ns.top_k
     ).to_dict()

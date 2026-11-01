@@ -88,6 +88,32 @@ for cmd in "loop-memory --help" \
 done
 ```
 
+### Verify the artefact, not the repository
+
+The bullets above prove the *version* reached PyPI. They do not prove
+the wheel contains the package's **data files** — the dashboard's
+CSS/JS/i18n and the benchmark fixture all live in
+`loop_memory/serve/static/` and `loop_memory/bench/fixtures/`, and a
+non-recursive `package-data` glob silently drops them. That is how
+0.4.18 shipped a wheel with 2 of its 32 data files: the server started
+and answered `GET /` with `200` while `GET /static/js/main.js`
+returned `404`, so the dashboard was a blank page, and
+`loop-memory bench` raised `FileNotFoundError`.
+
+So check the **installed** wheel, not the checkout:
+
+```bash
+pip install --no-cache-dir --target /tmp/lm-wheel "loop-memory==$TAG"
+ls /tmp/lm-wheel/loop_memory/serve/static/js/main.js   # must exist
+ls /tmp/lm-wheel/loop_memory/serve/static/i18n/en.json  # must exist
+ls /tmp/lm-wheel/loop_memory/bench/fixtures/default.json # must exist
+```
+
+`tests/test_packaging_2026_11_01.py` asserts exactly this, but the
+point of doing it by hand once per release is that it catches the
+case where the *declaration* and the *test* were changed together and
+both agree on something wrong.
+
 The smoke script in `scripts/release.sh --tag v$TAG` automates the
 four bullets above (plus `ruff check .` and a full `pytest -q`) and
 prints a final `0.4.x smoke OK` line — the same one CI runs in

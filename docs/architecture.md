@@ -272,6 +272,49 @@ to the repaired one, and the fixture deliberately keeps one query
 whose every term is clamped, so the degenerate-scale detector keeps
 firing and the defect stays visible.
 
+## Packaging: what actually reaches the user (audit 2026-11-01, loop-memory 0.4.19)
+
+The repository is not the distribution. A file that is not declared as
+**package data** exists on GitHub and in a source checkout, and is
+silently absent from the wheel.
+
+Two directories carry data:
+
+| Package | Pattern | Contents |
+| --- | --- | --- |
+| `loop_memory` | `py.typed` | the PEP 561 marker |
+| `loop_memory.serve.static` | `**/*.html`, `**/*.css`, `**/*.js`, `**/*.json`, `**/*.svg` | the whole dashboard: `index.html`, both stylesheets, the Vue application, the `en`/`zh` translation payloads, the logo SVGs |
+| `loop_memory.bench` | `fixtures/*.json` | the pinned benchmark fixture |
+
+The patterns are **recursive globs matched per package**, so a new
+asset is picked up without editing `pyproject.toml`.
+
+Why this needed a test. The 0.4.18 declaration was a single line —
+
+```toml
+loop_memory = ["py.typed", "serve/static/*.html"]
+```
+
+`serve/static/*.html` is not recursive, so it matched `index.html`
+and nothing else. The published wheel shipped **2** data files out of
+**32**, and a `pip install loop-memory` produced a server that answered
+`GET /` with `200` while every asset the page needs returned `404` —
+a blank dashboard — and a `loop-memory bench` that raised
+`FileNotFoundError`. The i18n injection in `GET /` degraded
+gracefully, which is exactly why the breakage was silent.
+
+Two build-time caches make it easy to write a test that passes for the
+wrong reason:
+
+- `loop_memory.egg-info/SOURCES.txt` caches the file list, and
+- `build/lib` holds the copy that actually gets packaged.
+
+So `tests/test_packaging_2026_11_01.py` copies the build inputs into a
+pristine directory before building. It then asserts that every
+non-Python file in the package tree is inside the wheel and the sdist,
+unpacks the wheel, and runs the benchmark out of it — the way a PyPI
+install does. All 8 cases fail against the 0.4.18 declaration.
+
 ## Bi-temporal validity + content-hash dedup (audit 2026-10-18, loop-memory 0.4.15)
 
 The `memories` table carries three new columns that turn the store
@@ -378,8 +421,16 @@ sequenceDiagram
 
 ## Testing
 
-- **995 tests across 77 files** (995 passed / 4 skipped; all run via
+- **1003 tests across 78 files** (1003 passed / 4 skipped; all run via
   `pytest -q`), pinned by:
+  - 8 new in 0.4.19 — `tests/test_packaging_2026_11_01.py`: the wheel
+    and the sdist are built for real from a *pristine* source copy
+    (setuptools caches its file list in `egg-info/SOURCES.txt` and
+    packages a stale `build/lib`, so building in the working tree
+    would make the assertion pass for the wrong reason) and every
+    non-Python file in the package tree is asserted to be inside them;
+    the wheel is then unpacked and the benchmark is run out of it, the
+    way a PyPI install does.
   - 37 new in 0.4.18 — `tests/test_lexical_ranking_2026_11_01.py` (21),
     `tests/test_bench_2026_11_01.py` (16): the replacement idf, the
     exact-match rule, the degenerate-scale detector, the evidence-chain

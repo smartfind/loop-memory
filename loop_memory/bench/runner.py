@@ -134,8 +134,21 @@ class BenchmarkReport:
 
 
 def default_fixture_path() -> Path:
-    """Absolute path of the fixture shipped with the package."""
-    return Path(__file__).resolve().parent / "fixtures" / "default.json"
+    """Absolute path of the fixture shipped with the package.
+
+    Audit 2026-11-01 (loop-memory 0.4.19): the fixture is *package
+    data*.  It was not declared in ``pyproject.toml``, so the 0.4.18
+    wheel shipped without it and ``loop-memory bench`` died with a
+    ``FileNotFoundError`` on every PyPI install.  ``importlib.resources``
+    is the fallback for installs whose files are not reachable through
+    ``__file__``.
+    """
+    direct = Path(__file__).resolve().parent / "fixtures" / "default.json"
+    if direct.is_file():
+        return direct
+    from importlib.resources import files
+
+    return Path(str(files("loop_memory.bench").joinpath("fixtures").joinpath("default.json")))
 
 
 def load_fixture(path: str | Path | None = None) -> tuple[dict[str, Any], str]:
@@ -146,7 +159,16 @@ def load_fixture(path: str | Path | None = None) -> tuple[dict[str, Any], str]:
     re-serialisation of it.
     """
     p = Path(path).expanduser() if path else default_fixture_path()
-    raw = p.read_bytes()
+    try:
+        raw = p.read_bytes()
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"benchmark fixture not found: {p}\n"
+            "The default fixture ships as package data; if you installed "
+            "loop-memory from PyPI and this is the packaged fixture, the "
+            "distribution is missing it (that was the 0.4.18 bug fixed "
+            "in 0.4.19). Pass --fixture PATH to point at your own."
+        ) from exc
     digest = hashlib.sha256(raw).hexdigest()
     data = json.loads(raw.decode("utf-8"))
     if not isinstance(data, dict):

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "loop-memory"
-version = "0.4.18"
+version = "0.4.19"
 description = "A general-purpose, local memory system for every AI agent you run. Loop Memory auto-captures conversations from Codex / Claude / Hermes / OpenClaw, scores them by importance × recency × usage × feedback, distils them into a curated wiki, and serves everything from a single web UI."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -29,7 +29,7 @@ openai   = ["openai~=1.30"]
 chroma   = ["chromadb~=0.4"]
 sentence = ["sentence-transformers~=2.6"]
 serve    = ["fastapi~=0.110", "uvicorn~=0.27"]
-dev      = ["pytest~=8.0", "coverage~=7.0", "ruff~=0.5"]
+dev      = ["pytest~=8.0", "coverage~=7.0", "ruff~=0.5", "build~=1.2"]
 all      = ["openai~=1.30", "chromadb~=0.4", "sentence-transformers~=2.6", "fastapi~=0.110", "uvicorn~=0.27"]
 
 [project.urls]
@@ -47,7 +47,23 @@ where = ["."]
 include = ["loop_memory*"]
 
 [tool.setuptools.package-data]
-loop_memory = ["py.typed", "serve/static/*.html"]
+# Audit 2026-11-01 (loop-memory 0.4.19): the package data used to be
+# ``loop_memory = ["py.typed", "serve/static/*.html"]``, which shipped
+# *only* ``index.html`` -- every CSS/JS/i18n/image asset and the
+# benchmark fixture were missing from the wheel, so ``loop-memory
+# serve`` served a blank dashboard and ``loop-memory bench`` crashed on
+# a PyPI install.  The patterns below are matched per package with a
+# recursive glob, so a new asset is picked up without touching this
+# file.
+loop_memory = ["py.typed"]
+"loop_memory.serve.static" = [
+    "**/*.html",
+    "**/*.css",
+    "**/*.js",
+    "**/*.json",
+    "**/*.svg",
+]
+"loop_memory.bench" = ["fixtures/*.json"]
 
 [tool.ruff]
 line-length = 100
