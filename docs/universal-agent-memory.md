@@ -175,7 +175,12 @@ loop-memory fork [--branch-tag v1.0]
 loop-memory graph-edge <src> <dst> [--kind lives_in] [--weight 0.9]
 loop-memory subgraph <query> [--max-nodes 32]
 loop-memory graph-rebuild
+loop-memory bench [--fixture PATH] [--top-k N] [--json] [--out PATH] [--compare PATH]
 ```
+
+> `bench` 用固定版本语料给词法召回通道打分（recall@1/3/5、MRR@10、nDCG@10），
+> 报告里带语料修订号与 SHA-256；完全离线，不调用任何厂商 API，单次运行成本 $0。
+> 详见 [research/2026-11-01.md](./research/2026-11-01.md)。
 
 ## 路由速查（`/api/v1/*`）
 

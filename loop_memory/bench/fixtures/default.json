@@ -1,0 +1,363 @@
+{
+  "name": "loop-memory-default",
+  "revision": 2,
+  "description": "Deterministic retrieval-quality fixture for Loop Memory. 30 memories + 12 wiki pages, 11 judged queries. The corpus is deliberately knowledge-graph-heavy so the trigram '知识图' occurs in 18/30 memories (60%), which pushes SQLite's bm25() inverse document frequency below zero and onto its 1e-6 floor -- the defect this benchmark exists to measure. Query q10 ('知识图谱') has no rare term at all, so every one of its terms is clamped and the whole channel score collapses; the report shows the raw FTS5 score alongside the repaired one. Most other queries pair one document that contains the query verbatim with a shorter near miss, so the exact-match rule is measurable too.",
+  "corpus": [
+    {
+      "id": "kg-01",
+      "kind": "fact",
+      "importance": 0.5,
+      "text": "知识图谱的整体架构由存储层、抽取层和查询层三个部分组成"
+    },
+    {
+      "id": "kg-02",
+      "kind": "fact",
+      "importance": 0.5,
+      "text": "知识图谱的存储层使用图数据库保存实体和关系并支持按租户分区隔离，同时提供冷热分层和定期归档能力以控制存储成本"
+    },
+    {
+      "id": "kg-03",
+      "kind": "fact",
+      "importance": 0.5,
+      "text": "知识图谱的抽取层负责从文档中识别实体和属性并写入草稿库"
+    },
+    {
+      "id": "kg-04",
+      "kind": "fact",
+      "importance": 0.5,
+      "text": "知识图谱的查询层同时提供自然语言接口和图遍历接口两种风格"
+    },
+    {
+      "id": "kg-05",
+      "kind": "fact",
+      "importance": 0.5,
+      "text": "知识图谱的实体消歧依赖上下文窗口并且最终需要人工复核确认"
+    },
+    {
+      "id": "kg-06",
+      "kind": "fact",
+      "importance": 0.5,
+      "text": "知识图谱的关系抽取分为显式关系和隐含关系两大类别来处理"
+    },
+    {
+      "id": "kg-07",
+      "kind": "fact",
+      "importance": 0.5,
+      "text": "知识图谱的增量更新由定时任务和事件触发两种模式共同驱动"
+    },
+    {
+      "id": "kg-08",
+      "kind": "fact",
+      "importance": 0.5,
+      "text": "知识图谱的质量评估覆盖完整性和一致性两个维度来衡量"
+    },
+    {
+      "id": "kg-09",
+      "kind": "fact",
+      "importance": 0.5,
+      "text": "知识图谱的可视化界面支持力导向图和时间轴视图两种呈现方式"
+    },
+    {
+      "id": "kg-10",
+      "kind": "fact",
+      "importance": 0.5,
+      "text": "知识图谱的权限模型区分全局空间和项目空间两套隔离策略"
+    },
+    {
+      "id": "kg-11",
+      "kind": "fact",
+      "importance": 0.5,
+      "text": "知识图谱的版本控制会记录每次抽取的输入快照和输出差异明细"
+    },
+    {
+      "id": "kg-12",
+      "kind": "fact",
+      "importance": 0.5,
+      "text": "知识图谱的导入流程支持 JSONL 和 CSV 两种常见的文件格式"
+    },
+    {
+      "id": "kg-13",
+      "kind": "fact",
+      "importance": 0.5,
+      "text": "知识图谱的导出流程会把实体、关系和来源标识一并写出到磁盘"
+    },
+    {
+      "id": "kg-14",
+      "kind": "fact",
+      "importance": 0.5,
+      "text": "知识图谱的部署方式分为单机模式和容器模式两套基础设施方案"
+    },
+    {
+      "id": "kg-15",
+      "kind": "fact",
+      "importance": 0.6,
+      "text": "知识图谱构建流程的第一步是切分输入文档并保留原始偏移量用于后续的实体对齐工作，同时需要保留切分器的版本号以便回溯"
+    },
+    {
+      "id": "kg-16",
+      "kind": "fact",
+      "importance": 0.5,
+      "text": "构建流程的第一步是切分知识图谱的输入文档"
+    },
+    {
+      "id": "kg-17",
+      "kind": "fact",
+      "importance": 0.5,
+      "text": "知识图谱的构建流程包含切分和抽取两个阶段"
+    },
+    {
+      "id": "kg-18",
+      "kind": "fact",
+      "importance": 0.5,
+      "text": "知识图谱在存储层之上还有一层缓存用于加速热点查询"
+    },
+    {
+      "id": "kg-19",
+      "kind": "fact",
+      "importance": 0.6,
+      "text": "知识图谱术语表把实体、关系、属性和来源这四个概念放在同一份文档里对照说明，知识图谱的每个概念都要有明确定义和清晰的边界"
+    },
+    {
+      "id": "kg-20",
+      "kind": "fact",
+      "importance": 0.5,
+      "text": "知识图谱构建的准备工作包括确认数据源和配置抽取参数"
+    },
+    {
+      "id": "en-01",
+      "kind": "fact",
+      "importance": 0.6,
+      "text": "Kubernetes ingress controller runs in the platform namespace and watches every ingress object that is created inside the cluster so that routing rules stay in sync with the declared service definitions"
+    },
+    {
+      "id": "en-02",
+      "kind": "fact",
+      "importance": 0.5,
+      "text": "The ingress controller for kubernetes was migrated to a new namespace"
+    },
+    {
+      "id": "en-03",
+      "kind": "fact",
+      "importance": 0.6,
+      "text": "The blue green rollout switches production traffic between two clusters and keeps the old one warm so that a rollback stays a single configuration change instead of a rebuild"
+    },
+    {
+      "id": "en-04",
+      "kind": "fact",
+      "importance": 0.5,
+      "text": "Rolling upgrades were replaced by a blue-green style rollout"
+    },
+    {
+      "id": "en-05",
+      "kind": "fact",
+      "importance": 0.5,
+      "text": "The operator rotates the tls certificate manually every ninety days"
+    },
+    {
+      "id": "en-08",
+      "kind": "fact",
+      "importance": 0.6,
+      "text": "Rotate TLS certificate without any downtime by scheduling the sidecar renewal job ahead of expiry so that the new chain is presented before the old one is revoked"
+    },
+    {
+      "id": "en-09",
+      "kind": "fact",
+      "importance": 0.6,
+      "text": "The recall budget caps how many characters a single injected context block may occupy before truncation removes the tail of the payload and the remaining slots are handed to the next ranked memory"
+    },
+    {
+      "id": "en-10",
+      "kind": "fact",
+      "importance": 0.5,
+      "text": "Budget enforcement happens during the merge step, so recall limits apply equally to the fast path and to the slower fallback path"
+    },
+    {
+      "id": "en-11",
+      "kind": "fact",
+      "importance": 0.6,
+      "text": "Knowledge graph ingestion runs as a background job that batches documents and writes entities into the graph store within the configured window and reports how many records were skipped"
+    },
+    {
+      "id": "en-12",
+      "kind": "fact",
+      "importance": 0.5,
+      "text": "Ingestion of the graph pipeline is scheduled nightly and refreshed whenever the source corpus changes"
+    }
+  ],
+  "wiki": [
+    {
+      "slug": "deploy-runbook",
+      "title": "部署流程",
+      "importance": 0.6,
+      "body": "部署流程分为预发验证、灰度发布和全量发布三个阶段，每个阶段都要值班同学确认指标符合预期之后才能继续推进下一步的工作安排，遇到异常时按回滚预案处理"
+    },
+    {
+      "slug": "rollback-guide",
+      "title": "回滚指引",
+      "importance": 0.5,
+      "body": "回滚的操作步骤与正向流程类似但需要先冻结变更窗口并在值班表上记录"
+    },
+    {
+      "slug": "incident-review",
+      "title": "故障复盘",
+      "importance": 0.5,
+      "body": "故障复盘包括时间线重建、根因定位和改进行动项三个部分"
+    },
+    {
+      "slug": "cert-rotation",
+      "title": "证书轮换",
+      "importance": 0.5,
+      "body": "证书轮换由 sidecar 代理每九十天自动执行一次并记录审计日志"
+    },
+    {
+      "slug": "kg-glossary",
+      "title": "知识图谱术语表",
+      "importance": 0.5,
+      "body": "本术语表统一了实体、关系、属性和来源四个核心概念的叫法"
+    },
+    {
+      "slug": "onboarding",
+      "title": "新人上手",
+      "importance": 0.5,
+      "body": "新人上手流程分为环境准备、阅读规范和第一个改动三步"
+    },
+    {
+      "slug": "nda-signing",
+      "title": "合同签署流程",
+      "importance": 0.5,
+      "body": "签署流程需要法务和业务双方在系统中确认后才会正式生效"
+    },
+    {
+      "slug": "deploy-signoff",
+      "title": "上线签署流程",
+      "importance": 0.5,
+      "body": "上线签署流程由发布负责人和值班同学共同完成，之后才进入部署流水线等待执行"
+    },
+    {
+      "slug": "rotation-policy",
+      "title": "轮换策略",
+      "importance": 0.5,
+      "body": "策略规定书轮换窗口每月开放一次，实际执行由平台自动化任务完成"
+    },
+    {
+      "slug": "cert-exceptions",
+      "title": "证书例外",
+      "importance": 0.5,
+      "body": "证书轮换策略的例外情况需要人工审批并记录原因"
+    },
+    {
+      "slug": "release-notes",
+      "title": "发布说明",
+      "importance": 0.6,
+      "body": "发布流程要求每次上线都要附上变更说明和影响范围，回滚流程与部署流程的触发条件不同需要分别评估，缺少变更说明的发布一律不予放行"
+    },
+    {
+      "slug": "release-pipeline",
+      "title": "发布流水线",
+      "importance": 0.5,
+      "body": "布流程的每一步都要有回滚预案，发布流水线在蓝绿切换中会先验证新环境的健康状态再切流量"
+    }
+  ],
+  "queries": [
+    {
+      "id": "q1",
+      "query": "知识图谱构建流程",
+      "channel": "memories",
+      "relevant": [
+        "kg-15"
+      ],
+      "note": "The authoritative step list contains the query verbatim; kg-16 and kg-17 match only the boundary trigrams. All three have the same term frequencies, so the pre-0.4.18 tie-break was document length, which demoted the complete note."
+    },
+    {
+      "id": "q2",
+      "query": "知识图谱的存储层",
+      "channel": "memories",
+      "relevant": [
+        "kg-02"
+      ],
+      "note": "kg-02 holds the query verbatim and is the longest of the three candidates; kg-01 and kg-18 are near misses."
+    },
+    {
+      "id": "q3",
+      "query": "kubernetes ingress controller",
+      "channel": "memories",
+      "relevant": [
+        "en-01"
+      ],
+      "note": "en-01 holds the query verbatim; en-02 mentions the same three terms in a different order."
+    },
+    {
+      "id": "q4",
+      "query": "blue green rollout",
+      "channel": "memories",
+      "relevant": [
+        "en-03"
+      ],
+      "note": "en-03 holds the query verbatim; en-04 uses a hyphenated form."
+    },
+    {
+      "id": "q5",
+      "query": "rotate tls certificate",
+      "channel": "memories",
+      "relevant": [
+        "en-08"
+      ],
+      "note": "en-08 holds the query verbatim; en-05 uses the verb form 'rotates'."
+    },
+    {
+      "id": "q6",
+      "query": "recall budget",
+      "channel": "memories",
+      "relevant": [
+        "en-09"
+      ],
+      "note": "en-09 holds the query verbatim; en-10 mentions both terms separately."
+    },
+    {
+      "id": "q7",
+      "query": "knowledge graph ingestion",
+      "channel": "memories",
+      "relevant": [
+        "en-11"
+      ],
+      "note": "en-11 holds the query verbatim; en-12 mentions both terms separately."
+    },
+    {
+      "id": "q8",
+      "query": "部署流程",
+      "channel": "wiki",
+      "relevant": [
+        "deploy-runbook"
+      ],
+      "note": "deploy-runbook holds the query verbatim; deploy-signoff matches the boundary trigrams '部署流' and '署流程' without the phrase."
+    },
+    {
+      "id": "q9",
+      "query": "发布流程",
+      "channel": "wiki",
+      "relevant": [
+        "release-notes"
+      ],
+      "note": "release-notes holds the query verbatim; release-pipeline matches the boundary trigrams '发布流' and '布流程' without the phrase."
+    },
+    {
+      "id": "q10",
+      "query": "知识图谱",
+      "channel": "memories",
+      "relevant": [
+        "kg-19"
+      ],
+      "note": "Every term of this query is common, so the raw FTS5 score collapses onto its 1e-6 idf floor. The repaired score keeps a usable scale and the verbatim match still ranks first."
+    },
+    {
+      "id": "q11",
+      "query": "知识图谱构建",
+      "channel": "memories",
+      "relevant": [
+        "kg-15",
+        "kg-20"
+      ],
+      "note": "Two documents are genuinely relevant and both are retrievable: the canonical step list and the preparation checklist. recall@1 therefore cannot reach 1.0 for this query, so the metric keeps headroom. kg-16 stays in the corpus as a distractor: it discusses the same first step but the trigram candidate query cannot see it, because it needs CJK word segmentation to match '知识图谱构建'."
+    }
+  ]
+}

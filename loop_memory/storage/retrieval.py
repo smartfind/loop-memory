@@ -161,12 +161,87 @@ def bm25_search(
                                source_filter=source_filter)
     merged: dict[str, dict] = {}
     for r in (rows or []):
-        merged[r["id"]] = {"id": r["id"], "_score": -float(r["s"])}
+        # ``_fts_score`` keeps the raw SQLite score for diagnostics.
+        # Audit 2026-11-01 (0.4.18): that number collapses to ~1e-6
+        # whenever the query term is common, because FTS5 clamps a
+        # non-positive idf to 1e-6 -- so it is no longer published as
+        # the channel score.
+        merged[r["id"]] = {
+            "id": r["id"],
+            "_score": -float(r["s"]),
+            "_fts_score": -float(r["s"]),
+        }
     for r in like_rows:
         imp = r["importance"] if "importance" in r.keys() else 0.5
         if r["id"] not in merged:
-            merged[r["id"]] = {"id": r["id"], "_score": float(imp or 0.5)}
-    return list(merged.values())
+            merged[r["id"]] = {
+                "id": r["id"],
+                "_score": float(imp or 0.5),
+                "_fts_score": None,
+            }
+    return _rescore_lexical(store, query, kind, list(merged.values()))
+
+
+def _rescore_lexical(
+    store: Any,
+    query: str,
+    kind: str,
+    rows: list[dict],
+) -> list[dict]:
+    """Re-rank the lexical channel with a textbook BM25 score.
+
+    Audit 2026-11-01 (loop-memory 0.4.18).
+
+    The candidate set produced by the FTS5 query and the ``LIKE``
+    fallback is unchanged -- this only decides the *order* and the
+    *score*.  Both used to come straight from SQLite's ``bm25()``,
+    which has two problems the weekly audit surfaced:
+
+    1. FTS5 clamps a non-positive inverse document frequency to
+       ``1e-6``, so a query term that occurs in roughly half the
+       corpus annihilates its own weight and the reported score
+       collapses to ~1e-6.  The evidence chain then rounds that to
+       ``0.0`` and tells the user "this hit because bm25 0.0".
+    2. The ``LIKE`` fallback published the memory's ``importance``
+       under the name ``bm25``, so the two branches of the same
+       channel were never on a comparable scale.
+
+    The replacement score is a standard BM25 (k1 = 1.2, b = 0.75)
+    with the Lucene / BM25+ idf, which is strictly positive for every
+    term, so the scale never collapses and the ordering stays
+    meaningful.  Exact substring matches are promoted ahead of
+    bag-of-trigrams matches, the rule ``rohitg00/agentmemory``
+    shipped in v0.9.31 (2026-10-26).
+
+    When the query has no term the trigram tokenizer can represent
+    (fewer than three characters), the scorer has nothing to work
+    with and the legacy ordering is returned untouched.
+    """
+    if not rows:
+        return rows
+    from .lexical import rank_hits, score_documents
+
+    ids = [r["id"] for r in rows]
+    hits = score_documents(store, query, ids, kind=kind)
+    if not hits:
+        # Nothing scorable -- keep the pre-0.4.18 behaviour exactly.
+        return rows
+
+    by_id = {r["id"]: r for r in rows}
+    out: list[dict] = []
+    for doc_id in rank_hits(hits, ids):
+        row = dict(by_id[doc_id])
+        hit = hits[doc_id]
+        row["_score"] = hit.score
+        row["_exact"] = hit.exact
+        out.append(row)
+    # Candidates the scorer could not score (their only match was a
+    # token shorter than one trigram) keep the legacy score and follow
+    # the scored ones in their original relative order.
+    for r in rows:
+        if r["id"] not in hits:
+            out.append(dict(r))
+    return out
 
 
 def _like_fallback(

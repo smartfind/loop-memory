@@ -215,6 +215,63 @@ returned both versions of a superseded fact, contradicting the contract
 rows — which is also what makes `latest_only` correct on the path the
 CLI, the MCP server and the dashboard actually use.
 
+## Lexical ranking + the retrieval-quality benchmark (audit 2026-11-01, loop-memory 0.4.18)
+
+### Why the lexical channel was re-written
+
+`memories_fts` / `wiki_fts` are FTS5 mirrors with the `trigram`
+tokenizer, and the FTS5 mirror is what SQLite's `bm25()` scores.
+`bm25()` computes the classic inverse document frequency
+
+```
+idf = log( (N - n + 0.5) / (n + 0.5) )
+```
+
+and **clamps every non-positive idf to `1e-6`**. The clamp exists so
+a score can never go positive, but it puts a cliff in the middle of
+the ranking: a term in 49 % of the corpus keeps a real idf, a term in
+51 % of the corpus loses ~40 000× of weight. With trigram
+tokenisation this is the *normal* case for CJK, and the symptom was
+the 0.4.15 evidence chain reporting `bm25: 0.0`.
+
+The channel is therefore split in two, and the split is the point:
+
+| Stage | Module | Job |
+| --- | --- | --- |
+| **Recall** | `retrieval.bm25_search` (FTS5 `MATCH` + `_like_fallback`) | decides *which* documents are retrievable — unchanged by 0.4.18 |
+| **Ranking** | `lexical.score_documents` | decides *in which order* they come back and *what score* is published |
+
+`lexical.py` computes a textbook BM25 (`k1 = 1.2`, `b = 0.75`) with
+the Lucene / BM25+ idf `log(1 + (N - n + 0.5) / (n + 0.5))`, which is
+strictly positive for every term, so the scale cannot collapse. It
+also promotes **exact substring matches** ahead of bag-of-trigrams
+matches (the rule `rohitg00/agentmemory` shipped in v0.9.31).
+
+The corpus statistics come from the FTS mirror that is already
+indexed — `COUNT(*)` and `AVG(LENGTH(...))` over the mirror, and one
+`UNION ALL` statement for the per-term document frequencies — so the
+extra cost is a handful of small queries plus a `str.count` pass over
+the candidate pool, not a scan of the corpus. All three share a
+single SQLite connection (opening one costs ~0.45 ms on a
+2 509-memory store). Measured cost: **+1.7 ms to +3.0 ms** per
+`recall_hybrid()` call.
+
+### The benchmark
+
+`loop-memory bench` scores the lexical channel against a fixed,
+versioned fixture (`loop_memory/bench/fixtures/default.json`,
+revision 2) and reports `recall@1` / `recall@3` / `recall@5`,
+`MRR@10` and `nDCG@10`. Every report carries the fixture's revision
+and the SHA-256 of its bytes, so a number always says which corpus it
+came from.
+
+The run is offline — no provider API is called — and it builds its
+store in a throwaway directory, so it is safe to run as a
+regression test. The report also carries the **raw** FTS5 score next
+to the repaired one, and the fixture deliberately keeps one query
+whose every term is clamped, so the degenerate-scale detector keeps
+firing and the defect stays visible.
+
 ## Bi-temporal validity + content-hash dedup (audit 2026-10-18, loop-memory 0.4.15)
 
 The `memories` table carries three new columns that turn the store
@@ -321,8 +378,14 @@ sequenceDiagram
 
 ## Testing
 
-- **958 tests across 75 files** (958 passed / 4 skipped; all run via
+- **995 tests across 77 files** (995 passed / 4 skipped; all run via
   `pytest -q`), pinned by:
+  - 37 new in 0.4.18 — `tests/test_lexical_ranking_2026_11_01.py` (21),
+    `tests/test_bench_2026_11_01.py` (16): the replacement idf, the
+    exact-match rule, the degenerate-scale detector, the evidence-chain
+    symptom (`bm25` must not round to `0.0` for a CJK query), the
+    unchanged candidate set, and the benchmark's determinism, fixture
+    pinning and CLI modes.
   - 77 new in 0.4.16 — `tests/test_subject_key_2026_10_25.py` (16),
     `tests/test_latest_only_2026_10_25.py` (14),
     `tests/test_dream_2026_10_25.py` (26),

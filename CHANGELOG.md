@@ -1,3 +1,130 @@
+## [0.4.18] - 2026-11-01
+
+### fix
+
+- **The BM25 channel no longer publishes a score that collapses to
+  zero.** SQLite's FTS5 `bm25()` computes the classic inverse document
+  frequency `log((N - n + 0.5) / (n + 0.5))` and **clamps every
+  non-positive idf to `1e-6`** (see `fts5_aux.c` in the SQLite source
+  tree). A query term present in 49 % of the corpus keeps a real idf;
+  one present in 51 % has its weight annihilated — a factor of ~40 000
+  between two terms that are almost equally discriminative.
+
+  This is not a corner case for Loop Memory. The FTS5 mirror uses the
+  `trigram` tokenizer, so every CJK run contributes sliding trigrams,
+  and a trigram like `知识图` occurs in more than half of any
+  knowledge-graph-heavy corpus. The visible symptom was the 0.4.15
+  evidence chain reporting **`bm25: 0.0`** — a headline feature
+  telling the user "this hit because bm25 0.0" for every CJK query
+  whose terms are common. Reproduced on a 13-document store: the raw
+  FTS5 score was `2.07e-06`, which the evidence chain rounds to
+  `0.0`.
+
+  The published channel score is now a textbook BM25 (`k1 = 1.2`,
+  `b = 0.75`) with the **Lucene / BM25+ idf**
+  `log(1 + (N - n + 0.5) / (n + 0.5))`, which is strictly positive for
+  every term. The scale cannot collapse, and the only remaining
+  discriminators are term frequency (with saturation) and document
+  length normalisation, so a corpus in which a query term is common
+  still ranks correctly and still reports a meaningful number.
+
+- **Exact matches now outrank scattered trigram matches.** A document
+  that contains the query **verbatim** is promoted ahead of one that
+  merely contains the same boundary trigrams in a different
+  arrangement. This is the transferable half of the
+  `rohitg00/agentmemory` v0.9.31 fix (2026-10-26): agentmemory
+  stopped letting a prefix expansion re-count an exact match and
+  reported strict recall-all@5 **65.74 % → 84.68 %** (+18.94 pp) on
+  its documented BM25 development evaluation. Before this change the
+  verbatim answer was usually ranked *second*, because FTS5's length
+  normalisation preferred a shorter note that mentioned the same
+  trigrams.
+
+- **The `LIKE` fallback and the FTS5 hits are finally on the same
+  scale.** A `LIKE`-only hit used to publish the memory's
+  `importance` (0.5 by default) under the name `bm25`, so the two
+  branches of the same channel could not be compared and the evidence
+  chain reported an *importance* value as if it were a relevance
+  score. Both branches are now scored by the same lexical scorer, and
+  a document that matches more of the query always scores at least as
+  high as one that matches fewer terms.
+
+- **The candidate set is unchanged.** The fix re-ranks; it does not
+  add or drop documents. The FTS5 query and the `LIKE` fallback still
+  decide *what* is retrievable, exactly as before — only the order and
+  the score change. A query with no term the trigram tokenizer can
+  represent (fewer than three characters) keeps the legacy behaviour
+  untouched.
+
+### feature
+
+- **`loop-memory bench` — a deterministic retrieval-quality
+  benchmark** (audit 2026-11-01, weekly ecosystem sync). Loop Memory
+  shipped hybrid retrieval in 0.3.x and never measured whether the
+  lexical channel ranked anything sensibly. The new command scores
+  the channel against a fixed, versioned fixture (30 memories, 12 wiki
+  pages, 11 judged queries) and reports **recall@1 / recall@3 /
+  recall@5, MRR@10 and nDCG@10**, together with the fixture's
+  revision number and the SHA-256 of its bytes so a report says
+  exactly which corpus it scored.
+
+  The methodology is `rohitg00/agentmemory` v0.9.31's: a fixed corpus
+  with an explicit revision, the fixture's content hash recorded in
+  every report, and an explicit statement of what the numbers do *not*
+  prove. The run is fully offline — **no provider API is called, so it
+  costs $0 and needs no network** — and it builds its store in a
+  throwaway temporary directory, never touching the user's database.
+
+  ```
+  loop-memory bench                       # text report
+  loop-memory bench --json                # machine-readable report
+  loop-memory bench --out report.json     # save it
+  loop-memory bench --compare report.json # per-metric delta vs. a baseline
+  ```
+
+  The report also carries a **diagnostic**: the raw FTS5 score is
+  reported next to the repaired one, and the shipped fixture keeps one
+  query (`知识图谱`) whose every term is clamped onto SQLite's `1e-6`
+  floor. The defect therefore stays visible in the report instead of
+  being quietly fixed and forgotten — and
+  `tests/test_bench_2026_11_01.py` asserts that at least one query
+  still trips the degenerate-scale detector.
+
+  Measured on the shipped fixture (revision 2, SHA-256
+  `417c4b5f…`):
+
+  | Metric | Before | After |
+  | --- | --- | --- |
+  | `mrr@10` | 0.6061 | **1.0000** |
+  | `recall@1` | 0.2273 | **0.9545** |
+  | `recall@3` | 1.0000 | 1.0000 |
+  | `ndcg@10` | 0.7078 | **1.0000** |
+
+  These are *development retrieval results over a synthetic corpus*,
+  not held-out answer accuracy on a real user corpus — the limitation
+  is stated in every report, not just here.
+
+### performance
+
+- The lexical rescoring costs **+1.7 ms to +3.0 ms** per
+  `recall_hybrid()` call on a 2 509-memory corpus (CJK queries:
+  unchanged; multi-term Latin queries: the largest delta). The corpus
+  statistics come from the FTS5 mirror that is already indexed, and
+  the three queries the scorer needs share **one** SQLite connection
+  (opening one costs ~0.45 ms on this workload).
+
+### test
+
+- **37 new regression cases** in `tests/test_lexical_ranking_2026_11_01.py`
+  (21) and `tests/test_bench_2026_11_01.py` (16). They cover the
+  term extraction, the exact-match rule, the replacement idf, the
+  degenerate-scale detector, the evidence-chain symptom
+  (`bm25` must not round to `0.0` for a CJK query), the unchanged
+  candidate set, the legacy path for un-scorable queries, the
+  benchmark's determinism, its fixture pinning, its limitations text,
+  and the CLI's `--json` / `--out` / `--compare` modes.
+- Suite: **995 passed / 4 skipped** (was 958 / 4), ruff clean.
+
 ## [0.4.17] - 2026-10-25
 
 ### fix

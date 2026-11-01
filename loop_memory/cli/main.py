@@ -32,12 +32,14 @@ Usage:
     loop-memory graph-edge <src> <dst> [--kind K] [--weight W]  # push a relation
     loop-memory subgraph <query>  # print a small subgraph
     loop-memory graph-rebuild  # rebuild entities + entity_mentions
+    loop-memory bench          # retrieval-quality benchmark (fixed fixture, offline)
 """
 
 from __future__ import annotations
 
 import sys
 
+from .commands import bench as bench_cmd
 from .commands import cognitive as cognitive_cmd
 from .commands import diag as diag_cmd
 from .commands import graph as graph_cmd
@@ -136,6 +138,9 @@ COMMANDS = {
     # Audit 2026-09-27: OKF v0.2 bundle import (rune + okf-agent-memory #12-#15 + Deja-Vu).
     "import-okf": cognitive_cmd.run_import_okf,
     "rules": rules_cmd.run_rules,
+    # Audit 2026-11-01 (loop-memory 0.4.18) -- deterministic
+    # retrieval-quality benchmark over a fixed, versioned fixture.
+    "bench": bench_cmd.run_bench,
     "version": _run_version,
 }
 
@@ -187,6 +192,7 @@ COMMAND_HELP: dict[str, str] = {
     # Audit 2026-09-13 — per-agent identity bootstrap (Mem0 CLI init --agent pattern).
     "init":                   "loop-memory init --agent <name> [--install-hooks]   # register an agent + (optionally) install hooks.",
     "rules":                 "loop-memory rules [--agent codex|claude|hermes|openclaw] [--write] [--force]\n  Print, or append into the agent's rule file, the three-phase memory discipline (task start / mid-task / wrap-up). Never overwrites user content.",
+    "bench":                 "loop-memory bench [--fixture PATH] [--top-k N] [--json] [--out PATH] [--compare PATH]   # deterministic retrieval-quality benchmark over a fixed, versioned fixture (audit 2026-11-01; agentmemory v0.9.31 methodology). Offline, no provider API called.",
 }
 
 
