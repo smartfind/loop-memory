@@ -1,3 +1,26 @@
+## [0.4.20] - 2026-11-01
+
+### test
+
+- **The packaging test no longer needs `tomllib`, so the Python 3.10 CI
+  job is green again.** The 0.4.19 packaging test parsed
+  `pyproject.toml` with `tomllib`, which is stdlib only from Python
+  **3.11** onwards, while `pyproject.toml` declares
+  `requires-python = ">=3.10"`. The 3.10 job failed with
+  `ModuleNotFoundError: No module named 'tomllib'`; 3.11 and 3.12
+  passed, which is exactly the shape of a bug that only shows up in
+  the oldest supported interpreter.
+
+  The check now reads the `[tool.setuptools.package-data]` table
+  directly — it is a flat mapping of package name to a list of glob
+  strings, small enough that a TOML dependency would cost more than
+  it saves. A new case runs the check in a subprocess with `tomllib`
+  blocked at the import system level, so the 3.10 path is exercised
+  on every version rather than only on the 3.10 runner.
+
+  No behaviour change: the 0.4.19 distribution is unchanged and
+  correct.
+
 ## [0.4.19] - 2026-11-01
 
 ### fix

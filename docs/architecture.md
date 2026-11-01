@@ -315,6 +315,14 @@ non-Python file in the package tree is inside the wheel and the sdist,
 unpacks the wheel, and runs the benchmark out of it — the way a PyPI
 install does. All 8 cases fail against the 0.4.18 declaration.
 
+The test reads `pyproject.toml` **without a TOML library**:
+`tomllib` is stdlib only from Python 3.11 and the project supports
+3.10. The first version of the check used `tomllib`, and the 3.10 CI
+job failed while 3.11 and 3.12 passed — a bug that only the oldest
+supported interpreter can see. The table is now parsed directly, and
+a case runs the check with `tomllib` blocked at the import system
+level so the 3.10 path is exercised everywhere.
+
 ## Bi-temporal validity + content-hash dedup (audit 2026-10-18, loop-memory 0.4.15)
 
 The `memories` table carries three new columns that turn the store
@@ -421,8 +429,14 @@ sequenceDiagram
 
 ## Testing
 
-- **1003 tests across 78 files** (1003 passed / 4 skipped; all run via
+- **1004 tests across 78 files** (1004 passed / 4 skipped; all run via
   `pytest -q`), pinned by:
+  - 1 new in 0.4.20 — the packaging test's own declaration check runs
+    in a subprocess with `tomllib` blocked at the import system level,
+    because `tomllib` is stdlib only from Python 3.11 while the
+    project supports 3.10. The 3.10 CI job is the only runner that
+    would have caught it, so the 3.10 path is now exercised on every
+    version.
   - 8 new in 0.4.19 — `tests/test_packaging_2026_11_01.py`: the wheel
     and the sdist are built for real from a *pristine* source copy
     (setuptools caches its file list in `egg-info/SOURCES.txt` and

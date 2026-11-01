@@ -28,10 +28,12 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tarfile
+import textwrap
 import zipfile
 from pathlib import Path
 
@@ -191,16 +193,104 @@ def test_sdist_ships_the_data_files(built_sdist):
         assert f"{prefix}/{rel}" in names, f"{rel} missing from the sdist"
 
 
+def _parse_package_data(text: str) -> dict[str, list[str]]:
+    """Parse the ``[tool.setuptools.package-data]`` table.
+
+    ``tomllib`` is stdlib only from Python 3.11 and this project
+    supports 3.10, so the table is read directly.  It is a flat
+    mapping of package name to a list of glob strings -- small enough
+    that a TOML dependency would cost more than it saves, and the CI
+    matrix runs 3.10 / 3.11 / 3.12.
+    """
+    out: dict[str, list[str]] = {}
+    in_table = False
+    key: str | None = None
+    buf = ""
+
+    def flush() -> None:
+        nonlocal key, buf
+        if key is not None:
+            out[key] = re.findall(r'"([^"]*)"', buf)
+            key = None
+            buf = ""
+
+    for line in text.splitlines():
+        stripped = line.strip()
+        if key is not None:
+            buf += " " + stripped
+            if buf.count("[") <= buf.count("]"):
+                flush()
+            continue
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("["):
+            in_table = stripped == "[tool.setuptools.package-data]"
+            continue
+        if not in_table:
+            continue
+        name, _, value = stripped.partition("=")
+        key = name.strip().strip('"')
+        buf = value.strip()
+        if buf.count("[") <= buf.count("]"):
+            flush()
+    flush()
+    return out
+
+
 def test_pyproject_declares_the_data_packages():
     """The declaration itself -- so the fix is readable, not implicit."""
-    import tomllib
-
-    with open(REPO_ROOT / "pyproject.toml", "rb") as fh:
-        data = tomllib.load(fh)
-    package_data = data["tool"]["setuptools"]["package-data"]
+    package_data = _parse_package_data(
+        (REPO_ROOT / "pyproject.toml").read_text("utf-8")
+    )
     assert "py.typed" in package_data["loop_memory"]
     assert "loop_memory.bench" in package_data
     assert "loop_memory.serve.static" in package_data
+
+
+def test_the_declaration_check_runs_without_tomllib():
+    """Python 3.10 has no ``tomllib`` -- the check must not need one.
+
+    The 3.10 CI job failed on exactly this: the first version of the
+    test imported ``tomllib``, which only exists from 3.11 onwards,
+    while ``pyproject.toml`` declares ``requires-python = ">=3.10"``.
+    """
+    code = textwrap.dedent(
+        """
+        import importlib.util
+        import pathlib
+        import sys
+
+        class Blocker:
+            def find_spec(self, name, path=None, target=None):
+                if name == "tomllib":
+                    raise ImportError("tomllib is Python 3.11+")
+                return None
+
+        sys.meta_path.insert(0, Blocker())
+        sys.modules.pop("tomllib", None)
+
+        root = pathlib.Path({root!r})
+        spec = importlib.util.spec_from_file_location(
+            "lm_packaging_probe", root / "tests" / "test_packaging_2026_11_01.py"
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        data = module._parse_package_data(
+            (root / "pyproject.toml").read_text("utf-8")
+        )
+        assert "loop_memory.bench" in data, data
+        assert "loop_memory.serve.static" in data, data
+        print("ok")
+        """
+    ).format(root=str(REPO_ROOT))
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "ok" in proc.stdout
 
 
 # --------------------------------------------------------------------------
