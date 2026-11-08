@@ -166,3 +166,30 @@ documented in [`docs/universal-agent-memory.md`](universal-agent-memory.md).
   Claude/Codex.
 - The CLI (`loop-memory`) is a thin wrapper around the same routes — useful
   for cron jobs and shell pipelines.
+
+### Authenticating a remote client (0.4.21)
+
+Every route except the public ones (`/api/healthz`, `/api/readyz`, the
+static assets, `/`, `/docs`) needs `Authorization: Bearer <token>` once a
+token exists. The SDK sends it for you:
+
+```python
+from loop_memory.sdk import MemoryClient
+
+client = MemoryClient.http(
+    "https://memory.example.com",
+    token="lm-…",            # -> Authorization: Bearer lm-…
+)
+client.remember("deploys go out on Tuesdays")
+```
+
+**Transport rules.** The SDK refuses to send memory data — or the token —
+over a plaintext connection to a non-loopback host, and refuses a URL
+that embeds credentials. Plain `http://` to `127.0.0.1` / `localhost` /
+`::1` is still allowed (the traffic never leaves the host). Redirects
+that downgrade `https://` → `http://`, and cross-origin redirects that
+would replay the `Authorization` header, are refused as well.
+
+The full contract, including the `allow_insecure=True` /
+`LOOP_MEMORY_ALLOW_INSECURE=1` opt-in for private tunnels, is in
+[docs/transport-security.md](./transport-security.md).

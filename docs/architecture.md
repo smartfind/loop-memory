@@ -68,8 +68,11 @@ flowchart TD
   `MemoryClient` contract, namespaces, graph operations, cognitive sleep, and
   portable bundle helpers.
 - **`export/`** — white-box `MEMORY.md` bundle export/import and Wiki forks.
-- **`security/`** — local secret storage abstraction backed by
-  `~/.loop_memory/secrets.json` with mode `0600`.
+- **`security/`** — two layers: `secrets.py` is the local secret storage
+  abstraction backed by `~/.loop_memory/secrets.json` with mode `0600`;
+  `transport.py` (0.4.21) is the client-side transport guard that
+  refuses to send memory data over a plaintext connection to a
+  non-loopback host, and refuses unsafe redirects.
 - **`examples/`** — `demo.py` end-to-end smoke test used by CI.
 
 ## The 5-stage evolution pipeline
@@ -395,6 +398,52 @@ the one-line adoption shortcut. The decorator survives both store
 read failures and store write failures — neither can break the
 wrapped call.
 
+## Transport security for remote clients (audit 2026-11-08, loop-memory 0.4.21)
+
+`loop_memory/security/transport.py` is the client-side half of the
+security model; `loop_memory/security/secrets.py` holds the *storage*
+of secrets and `loop_memory/privacy/` holds the redaction that keeps
+secrets out of the rows. Neither of those protects the wire, so a
+third layer exists:
+
+| Layer | Module | Job |
+| --- | --- | --- |
+| Content | `loop_memory/privacy/` | redact secrets before a row is written |
+| Storage | `loop_memory/security/secrets.py` | keep provider API keys out of the DB |
+| **Transport** | **`loop_memory/security/transport.py`** | **keep the payload out of a cleartext socket** |
+
+The rule is about the **destination**, not the scheme:
+
+```
+https://memory.example.com   -> allowed
+http://127.0.0.1:7767        -> allowed   (loopback: never leaves the host)
+http://memory.example.com    -> REFUSED   (plaintext to a remote host)
+http://0.0.0.0:7767          -> REFUSED   (a wildcard bind is not loopback)
+https://u:pw@memory.example  -> REFUSED   (credentials leak into logs)
+```
+
+`assert_secure_transport()` runs at **construction** time, so a
+misconfiguration surfaces before any data moves. The escape hatch
+(`allow_insecure=True`, or `LOOP_MEMORY_ALLOW_INSECURE=1`) exists for
+a private tunnel or a VPN'd LAN and is never silent — it warns.
+
+Two redirect rules ride on the same opener, because `urllib` follows
+redirects by default and **replays the `Authorization` header** onto
+the redirect request:
+
+* no `https://` -> `http://` downgrade (it would undo the TLS
+  guarantee one hop from the server);
+* no cross-origin redirect while a bearer token is attached (it would
+  hand the token to another host).
+
+The server-side half is a *doctor* check rather than a hard refusal,
+because a TLS terminator in front of the box is a legitimate
+deployment: `loop-memory serve` records its bind address in the
+`loop_memory_serve_bind` setting, and `plaintext_exposure` reports a
+non-loopback bind as a warning.
+
+The full contract is in [docs/transport-security.md](./transport-security.md).
+
 ## Request lifecycle
 
 ```mermaid
@@ -429,8 +478,23 @@ sequenceDiagram
 
 ## Testing
 
-- **1004 tests across 78 files** (1004 passed / 4 skipped; all run via
+- **1041 tests across 79 files** (1041 passed / 4 skipped; all run via
   `pytest -q`), pinned by:
+  - 37 new in 0.4.21 — `tests/test_transport_security_2026_11_08.py`
+    pins the whole transport contract: the `classify_url` /
+    `is_loopback_host` matrix (including `0.0.0.0` as a *wildcard
+    bind*, not a loopback address), the refusal of a plaintext remote
+    host, the explicit opt-in and its warning (parameter **and** env
+    var), the embedded-credential refusal, the `Authorization` header
+    on the wire against a real loopback server, the token never
+    leaking into an error message, both redirect refusals plus the
+    same-origin redirect that must still work, the guard on all three
+    shared `http_*_json` helpers, and the three states of the new
+    `plaintext_exposure` doctor check. The HTTP fixture binds a
+    loopback socket *without* the reverse DNS lookup
+    `http.server.HTTPServer.server_bind` performs — that lookup blocks
+    for ~30 s on a host with no reachable resolver, and the suite must
+    not depend on the machine's DNS.
   - 1 new in 0.4.20 — the packaging test's own declaration check runs
     in a subprocess with `tomllib` blocked at the import system level,
     because `tomllib` is stdlib only from Python 3.11 while the

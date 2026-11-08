@@ -38,6 +38,12 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+
+from .security.transport import (
+    InsecureTransportError,
+    assert_secure_transport,
+    install_safe_redirect_handler,
+)
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -194,9 +200,31 @@ class MemoryClient(MemoryClientExt, AbstractContextManager):
     def http(cls, base_url: str = "http://127.0.0.1:7767",
              *, agent_id: str | None = None,
              user_id: str | None = None,
-             timeout: float = 10.0) -> MemoryClient:
-        """Build an SDK that talks to a running ``loop-memory serve``."""
-        c = _HttpClient(base_url=base_url, timeout=timeout)
+             timeout: float = 10.0,
+             token: str | None = None,
+             allow_insecure: bool = False) -> MemoryClient:
+        """Build an SDK that talks to a running ``loop-memory serve``.
+
+        ``token`` is the bearer token from
+        ``POST /api/admin/auth/token`` (or
+        ``loop-memory auth token``).  Before 0.4.21 the HTTP backend
+        had no way to send it, so a remote client could not talk to a
+        token-protected server at all — the only way to make it work
+        was to turn auth off, which is exactly the configuration that
+        leaks memory text to the network.
+
+        ``allow_insecure=True`` permits a plaintext ``http://`` URL
+        that is *not* loopback (private tunnel, VPN'd LAN).  It is
+        never silent: the client warns on every construction.  Plain
+        HTTP to a loopback address is always fine — that is the
+        default deployment and the traffic never leaves the host.
+
+        Raises :class:`loop_memory.security.transport.InsecureTransportError`
+        for a plaintext remote host, an unsupported scheme, or a URL
+        with embedded credentials.
+        """
+        c = _HttpClient(base_url=base_url, timeout=timeout, token=token,
+                        allow_insecure=allow_insecure)
         if agent_id is not None:
             c._default_agent_id = agent_id
         if user_id is not None:
@@ -622,10 +650,37 @@ def _memory_from_stored(row) -> Memory:
 
 
 class _HttpClient(MemoryClient):
-    def __init__(self, base_url: str = "http://127.0.0.1:7767", timeout: float = 10.0):
+    """HTTP backend of the SDK.
+
+    Two hardening rules apply to every request (audit 2026-11-08,
+    loop-memory 0.4.21):
+
+    * **Transport.** A plaintext ``http://`` URL that is not loopback
+      is refused at construction time. Plain HTTP to loopback is the
+      default deployment and stays allowed. See
+      :mod:`loop_memory.security.transport`.
+    * **Redirects.** The opener refuses a ``https://`` → ``http://``
+      downgrade and refuses a cross-origin redirect while the bearer
+      token is attached — ``urllib`` replays the ``Authorization``
+      header onto the redirect request, which would hand the token
+      to another host.
+    """
+
+    def __init__(self, base_url: str = "http://127.0.0.1:7767",
+                 timeout: float = 10.0,
+                 token: str | None = None,
+                 allow_insecure: bool = False):
         super().__init__()
+        # Fail fast: an unsafe base URL is a construction error, not a
+        # surprise in the middle of a write.
+        self._transport = assert_secure_transport(
+            base_url, allow_insecure=allow_insecure, action="send memory data"
+        )
         self._base = base_url.rstrip("/")
         self._timeout = timeout
+        # The token is never interpolated into a URL or an error message.
+        self._token = (token or "").strip() or None
+        self._opener = install_safe_redirect_handler()
 
     def _request(self, method: str, path: str, body: dict | None = None) -> dict:
         url = f"{self._base}{path}"
@@ -634,9 +689,11 @@ class _HttpClient(MemoryClient):
         if body is not None:
             data = json.dumps(body).encode("utf-8")
             headers["Content-Type"] = "application/json"
+        if self._token:
+            headers["Authorization"] = f"Bearer {self._token}"
         req = urllib.request.Request(url, data=data, method=method, headers=headers)
         try:
-            with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+            with self._opener.open(req, timeout=self._timeout) as resp:
                 raw = resp.read().decode("utf-8")
         except urllib.error.HTTPError as e:
             raw = e.read().decode("utf-8", errors="ignore")
@@ -645,6 +702,11 @@ class _HttpClient(MemoryClient):
             ) from e
         except urllib.error.URLError as e:
             raise MemoryClientError(f"cannot reach {self._base}: {e}") from e
+        except InsecureTransportError:
+            # Never swallow the reason: the caller must know the
+            # request was blocked for transport safety, not that the
+            # server was unreachable.
+            raise
         if not raw.strip():
             return {}
         try:

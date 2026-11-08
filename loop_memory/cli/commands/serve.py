@@ -40,6 +40,25 @@ def run_serve(args) -> int:
             "   Press Ctrl-C now unless you know what you are doing.\n",
             file=sys.stderr,
         )
+    # Audit 2026-11-08 (loop-memory 0.4.21): record the bind address
+    # in the store so `loop-memory doctor` can report the network
+    # exposure of a non-loopback bind. The client-side transport
+    # guard (loop_memory.security.transport) refuses a plaintext
+    # remote URL; this setting is the server-side half of the same
+    # story — it tells the operator that the API they just exposed
+    # is reachable in cleartext from the network.
+    try:
+        from ...storage.sqlite_store import MemoryStore
+        import time as _time
+        MemoryStore(DEFAULT_DB).set_setting(
+            "loop_memory_serve_bind",
+            {"host": host, "port": int(port), "scheme": "http",
+             "recorded_at": _time.time()},
+        )
+    except Exception as _exc:  # pragma: no cover - never block startup
+        print(f"[loop-memory] warning: could not record the bind address: {_exc}",
+              file=sys.stderr)
+
     from ...serve.app import serve as _serve
     print(f"[loop-memory] serving UI on http://{host}:{port}")
     print(f"[loop-memory] db = {DEFAULT_DB}")

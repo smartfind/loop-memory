@@ -346,14 +346,37 @@ class MemoryClientExt:
 # ---------------------------------------------------------------------------
 
 
-def http_post_json(url: str, body: dict, *, timeout: float = 10.0) -> dict:
+def _http_open(req, timeout: float):
+    """Open ``req`` through the hardened opener.
+
+    The opener refuses a ``https://`` → ``http://`` downgrade and a
+    cross-origin redirect that would replay the ``Authorization``
+    header (audit 2026-11-08, loop-memory 0.4.21).
+    """
+    from .security.transport import install_safe_redirect_handler
+    return install_safe_redirect_handler().open(req, timeout=timeout)
+
+
+def http_post_json(url: str, body: dict, *, timeout: float = 10.0,
+                   token: str | None = None,
+                   allow_insecure: bool = False) -> dict:
+    """POST JSON to ``url``.
+
+    Plaintext ``http://`` to a non-loopback host is refused
+    (audit 2026-11-08, loop-memory 0.4.21) — see
+    :mod:`loop_memory.security.transport`. ``allow_insecure=True`` is
+    the explicit opt-in for a private tunnel; it warns.
+    """
+    from .security.transport import assert_secure_transport
+    assert_secure_transport(url, allow_insecure=allow_insecure,
+                            action="send memory data")
     data = json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(
-        url, data=data, method="POST",
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
-    )
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, data=data, method="POST", headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with _http_open(req, timeout) as r:
             return json.loads(r.read().decode("utf-8") or "{}")
     except urllib.error.HTTPError as e:
         raw = e.read().decode("utf-8", errors="ignore")
@@ -362,10 +385,20 @@ def http_post_json(url: str, body: dict, *, timeout: float = 10.0) -> dict:
         raise MemoryClientError(f"cannot reach {url}: {e}") from e
 
 
-def http_get_json(url: str, *, timeout: float = 10.0) -> dict:
-    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+def http_get_json(url: str, *, timeout: float = 10.0,
+                  token: str | None = None,
+                  allow_insecure: bool = False) -> dict:
+    """GET JSON from ``url`` under the same transport guard as
+    :func:`http_post_json`."""
+    from .security.transport import assert_secure_transport
+    assert_secure_transport(url, allow_insecure=allow_insecure,
+                            action="send memory data")
+    headers = {"Accept": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with _http_open(req, timeout) as r:
             return json.loads(r.read().decode("utf-8") or "{}")
     except urllib.error.HTTPError as e:
         raw = e.read().decode("utf-8", errors="ignore")
@@ -374,11 +407,20 @@ def http_get_json(url: str, *, timeout: float = 10.0) -> dict:
         raise MemoryClientError(f"cannot reach {url}: {e}") from e
 
 
-def http_delete_json(url: str, *, timeout: float = 10.0) -> dict:
-    req = urllib.request.Request(url, method="DELETE",
-                                headers={"Accept": "application/json"})
+def http_delete_json(url: str, *, timeout: float = 10.0,
+                     token: str | None = None,
+                     allow_insecure: bool = False) -> dict:
+    """DELETE against ``url`` under the same transport guard as
+    :func:`http_post_json`."""
+    from .security.transport import assert_secure_transport
+    assert_secure_transport(url, allow_insecure=allow_insecure,
+                            action="send memory data")
+    headers = {"Accept": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, method="DELETE", headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with _http_open(req, timeout) as r:
             return json.loads(r.read().decode("utf-8") or "{}")
     except urllib.error.HTTPError as e:
         raw = e.read().decode("utf-8", errors="ignore")

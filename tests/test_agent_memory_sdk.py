@@ -123,7 +123,11 @@ class HttpBackendTests(unittest.TestCase):
 
     def setUp(self) -> None:
         from loop_memory.sdk import _HttpClient
-        self.client = _HttpClient(base_url="http://example.invalid")
+        # Audit 2026-11-08 (0.4.21): the base URL must be a transport the
+        # client is allowed to use. A plaintext http:// URL to a
+        # non-loopback host is refused at construction time now, and this
+        # test never opens a socket anyway -- it overrides ``_request``.
+        self.client = _HttpClient(base_url="http://127.0.0.1:7767")
         self.calls: list[tuple[str, str, dict | None]] = []
         # Override the request method to capture (method, path, body)
         def _fake(method, path, body=None):

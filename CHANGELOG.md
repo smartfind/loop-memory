@@ -1,3 +1,83 @@
+## [0.4.21] - 2026-11-08
+
+### feature
+
+- **The remote SDK can finally authenticate, and it refuses to send
+  memory data over a plaintext connection.** The audit for this
+  release (2026-11-08) turned up a real hole rather than a
+  hypothetical one. `MemoryClient.http(base_url=...)` had **no
+  transport guard at all**: point it at `http://mem.example.com` and
+  it opened a plain socket and shipped the user's memory text across
+  the network. Worse, the HTTP backend had **no way to send the
+  bearer token** — `sqlite_store.py` even carried the comment
+  "header when `MemoryClient.http(..., token=...)` is given" for a
+  parameter that did not exist — so the only way for a remote client
+  to talk to a token-protected `loop-memory serve` was to turn auth
+  *off*. That is exactly the configuration in which both the memory
+  text and the token cross the network in cleartext.
+
+  Two upstream projects closed the same hole in the same week:
+  `rohitg00/agentmemory` v0.9.32 (2026-11-04, Apache-2.0) made
+  "hooks send nothing to a remote plain `http://` server; use HTTPS
+  for a remote server" a **breaking change**, and
+  `topoteretes/cognee` v1.6.7 (2026-11-06, Apache-2.0) refuses
+  "server file paths over HTTP" by default. Both are pattern
+  references only — no code was copied.
+
+  What shipped:
+
+  * **New `loop_memory.security.transport`** — a client-side guard
+    that classifies a base URL and refuses the unsafe combinations.
+    Plaintext `http://` to a **non-loopback** host is refused;
+    plaintext to a **loopback** address stays allowed, because that
+    traffic never leaves the host and it is the default deployment
+    (`http://127.0.0.1:7767`). A URL with embedded credentials is
+    refused (it leaks into logs and error messages), and an
+    unsupported scheme is refused. The rule is about the
+    *destination*, not the scheme: a private tunnel or a VPN'd LAN is
+    a legitimate deployment, so `allow_insecure=True` exists — but it
+    is never silent, it warns on every construction.
+  * **Bearer token support.** `MemoryClient.http(base_url, token=...)`
+    and the shared `http_get_json` / `http_post_json` /
+    `http_delete_json` helpers now send `Authorization: Bearer
+    <token>`. The token is never interpolated into a URL and never
+    appears in an error message.
+  * **Redirect hardening.** The new opener refuses a `https://` →
+    `http://` downgrade — urllib's stock handler follows it happily,
+    which would undo the TLS guarantee one hop away from the server —
+    and refuses a cross-origin redirect while a bearer token is
+    attached, because urllib replays the `Authorization` header onto
+    the redirect request.
+  * **The server half of the story.** `loop-memory serve` records its
+    bind address in the store, and a new `loop-memory doctor` check
+    (`plaintext_exposure`) reports a non-loopback bind as a warning:
+    the API is reachable from the network over plaintext `http://`,
+    so every memory payload — and the bearer token that protects
+    them — crosses the wire in cleartext.
+
+  See `docs/transport-security.md` for the full contract.
+
+### test
+
+- **35 new regression cases** pinning every rule above:
+  the `classify_url` / `is_loopback_host` matrix (including
+  `0.0.0.0` as a *wildcard bind*, not a loopback address), the
+  refusal of a plaintext remote host, the opt-in warning, the
+  embedded-credential refusal, the `Authorization` header on the
+  wire against a real loopback server, the token never leaking into
+  an error message, both redirect refusals plus the same-origin
+  redirect that must still work, the guard on all three shared
+  `http_*_json` helpers, and the three states of the new doctor
+  check (ok / warn / info). The two doctor tests that pinned the
+  check count were updated from 10 to 11.
+
+  The HTTP fixture binds a loopback socket **without** the reverse
+  DNS lookup `http.server.HTTPServer.server_bind` performs — that
+  lookup blocks for ~30 s on a host with no reachable resolver, and
+  the suite must not depend on the machine's DNS.
+
+  Suite at **1041 passed / 4 skipped** (was 1004 / 4).
+
 ## [0.4.20] - 2026-11-01
 
 ### test

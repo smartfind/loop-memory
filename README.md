@@ -22,82 +22,39 @@
 
 ---
 
-> **What's new in 0.4.20** — **the packaging test works on the oldest supported Python** (audit 2026-11-01, patch follow-up to 0.4.19). The 0.4.19 packaging test parsed `pyproject.toml` with `tomllib`, which is stdlib only from Python **3.11** onwards, while the project declares `requires-python = ">=3.10"` — so the 3.10 CI job failed with `ModuleNotFoundError: No module named 'tomllib'` while 3.11 and 3.12 passed, the classic shape of a bug that only bites the oldest supported interpreter. The check now reads the `[tool.setuptools.package-data]` table directly (it is a flat mapping of package name to a list of glob strings), and a new case runs it in a subprocess with `tomllib` blocked at the import system level, so the 3.10 path is exercised on every version rather than only on the 3.10 runner. No behaviour change — the 0.4.19 distribution is unchanged and correct. 1 new regression case; suite at **1004 passed / 4 skipped**. [Full CHANGELOG →](./CHANGELOG.md#0420---2026-11-01)
+> **What's new in 0.4.21** — **the remote SDK can finally authenticate, and it refuses to send memory data over a plaintext connection** (audit 2026-11-08, weekly ecosystem sync). The audit for this release (2026-11-08) turned up a real hole rather than a hypothetical one. `MemoryClient.http(base_url=...)` had **no transport guard at all**: point it at `http://mem.example.com` and it opened a plain socket and shipped the user's memory text across the network — and because the HTTP backend had **no way to send the bearer token** (`sqlite_store.py` even carried the comment *"header when `MemoryClient.http(..., token=...)` is given"* for a parameter that did not exist), the only way for a remote client to talk to a token-protected `loop-memory serve` was to turn auth **off** — exactly the configuration in which both the memory text and the token cross the network in cleartext. Two upstream projects closed the same hole in the same week: `rohitg00/agentmemory` v0.9.32 (2026-11-04, Apache-2.0) made *"hooks send nothing to a remote plain `http://` server; use HTTPS for a remote server"* a **breaking change**, and `topoteretes/cognee` v1.6.7 (2026-11-06, Apache-2.0) refuses *"server file paths over HTTP"* by default — both are pattern references only, no code copied. **What shipped:** a new `loop_memory.security.transport` that classifies a base URL and refuses plaintext `http://` to a **non-loopback** host (plaintext to a **loopback** address stays allowed — that traffic never leaves the host, and it is the default deployment), refuses a URL with embedded credentials, and refuses an unsupported scheme; `Authorization: Bearer` support in the SDK and in the shared `http_*_json` helpers, so the documented remote path works against a protected server instead of requiring auth to be turned off; a redirect guard that refuses an `https://` → `http://` downgrade (urllib's stock handler follows it, which would undo the TLS guarantee one hop from the server) and refuses a cross-origin redirect while a token is attached (urllib replays the `Authorization` header onto the redirect request); and the server half — `loop-memory serve` records its bind address and a new `loop-memory doctor` check (`plaintext_exposure`) warns when the API is reachable from the network over plaintext. The rule is about the *destination*, not the scheme: a private tunnel or a VPN'd LAN is a legitimate deployment, so `allow_insecure=True` (or `LOOP_MEMORY_ALLOW_INSECURE=1`) exists — but it is never silent, it warns on every construction. 37 new regression cases; suite at **1041 passed / 4 skipped**. See [`docs/transport-security.md`](./docs/transport-security.md) for the full contract. [Full CHANGELOG →](./CHANGELOG.md#0421---2026-11-08)
 
-> **What's new in 0.4.19** — **the PyPI wheel now ships the whole dashboard and the benchmark fixture** (audit 2026-11-01, packaging follow-up to 0.4.18). The 0.4.18 wheel contained exactly two data files — `loop_memory/py.typed` and `loop_memory/serve/static/index.html` — because the package-data declaration was `loop_memory = ["py.typed", "serve/static/*.html"]`, and that glob is **not recursive**. Every CSS, JavaScript, i18n and image asset and the new benchmark fixture were **missing from the distribution**. Reproduced against the published wheel: `pip install loop-memory` started a server whose `GET /` returned `200` but whose `GET /static/js/main.js` and `GET /static/css/app.css` both returned **404** — a blank dashboard — and `loop-memory bench` crashed with `FileNotFoundError` on the packaged fixture. The declaration is now per package with recursive globs (`"loop_memory.serve.static" = ["**/*.html", "**/*.css", "**/*.js", "**/*.json", "**/*.svg"]`, `"loop_memory.bench" = ["fixtures/*.json"]`), so a new asset is picked up without anyone remembering to extend it, and the wheel contains all 32 non-Python files in the package tree. A new packaging test builds the real wheel and sdist **from a pristine source copy** — setuptools caches its file list in `egg-info/SOURCES.txt` and packages a stale `build/lib`, so building in the working tree would make the test pass for the wrong reason — and asserts every non-Python file actually reaches the distribution, then unpacks the wheel and runs the benchmark out of it. 8 new regression cases; suite at **1003 passed / 4 skipped**. [Full CHANGELOG →](./CHANGELOG.md#0419---2026-11-01)
+<details>
+<summary><b>Older releases</b> — 0.4.20 and earlier, one line each (the CHANGELOG has the full detail)</summary>
 
-> **What's new in 0.4.18** — **the BM25 channel no longer publishes a score that collapses to zero, and there is finally a benchmark that measures it** (audit 2026-11-01, weekly ecosystem sync). SQLite's FTS5 `bm25()` computes the classic idf `log((N - n + 0.5) / (n + 0.5))` and **clamps every non-positive idf to `1e-6`** — so a query term present in 49 % of the corpus keeps a real idf while one present in 51 % has its weight annihilated, a factor of ~40 000 between two almost equally discriminative terms. With the `trigram` tokenizer that is the *normal* case for CJK (`知识图` alone occurs in more than half of any knowledge-graph-heavy corpus), and the visible symptom was the 0.4.15 evidence chain reporting **`bm25: 0.0`** — "this hit because bm25 0.0". The published score is now a textbook BM25 (`k1 = 1.2`, `b = 0.75`) with the Lucene / BM25+ idf `log(1 + (N - n + 0.5) / (n + 0.5))`, which is strictly positive for every term, so the scale cannot collapse. **A document that contains the query verbatim now outranks one that merely contains the same scattered trigrams** — the transferable half of `rohitg00/agentmemory` v0.9.31's prefix-score fix (2026-10-26: strict recall-all@5 **65.74 % → 84.68 %**, +18.94 pp), whose release note is careful to call its numbers "component retrieval results on inspected development data, not held-out answer accuracy". The `LIKE` fallback and the FTS5 hits are finally on the **same scale** (a `LIKE`-only hit used to publish the memory's `importance` under the name `bm25`). The candidate set is unchanged — the fix re-ranks, it does not add or drop documents. New **`loop-memory bench`**: a deterministic retrieval-quality benchmark over a fixed, versioned fixture (30 memories, 12 wiki pages, 11 judged queries) reporting **recall@1/3/5, MRR@10, nDCG@10** with the fixture's revision and the SHA-256 of its bytes; the run is fully offline (**no provider API is called, $0, no network**) and builds its store in a throwaway directory. On the shipped fixture the channel scored **MRR@10 = 0.6061, recall@1 = 0.2273, nDCG@10 = 0.7078** before and **1.0000 / 0.9545 / 1.0000** after — and the report keeps the raw FTS5 score next to the repaired one, so the defect stays visible instead of being quietly fixed and forgotten. Source: *agentmemory* v0.9.31 evaluation methodology + the FTS5 idf clamp in SQLite's `fts5_aux.c` (Apache-2.0 — *pattern only, no code copied*); honcho v3.4.1's "a filter must not silently drop a term" and v3.5.0's "a conclusion must cite its source" were reviewed and need no code (AGPL-3.0 — *pattern only*). 37 new regression cases; suite at **995 passed / 4 skipped**. [Full CHANGELOG →](./CHANGELOG.md#0418---2026-11-01)
-> **What's new in 0.4.17** — **a dry-run dream pass no longer writes to the database** (audit 2026-10-25). `loop-memory dream` and `POST /api/v1/dream` have always documented themselves as *"nothing is written unless `apply=True`"* — but the pass's decay stage called `MemoryStore.rescore_all()` unconditionally, which rewrote the `memories.score` column of **every** row while claiming to only inspect the store. The expiry and merge decisions were correctly left unapplied; the score decay was not. `rescore_all()` now takes a `dry_run` flag: it computes every new score and reports how many rows *would* change but issues no `UPDATE`, and the dream pass runs it with `dry_run=not apply`. A dry run still reports the size of the decay job through `report.rescored` while touching nothing. The contract wording is now exact rather than aspirational — a dry run changes **no memory data** (no expiry, no supersession, no rescore); the single write it still performs is one `cognitive_audit` row per proposed action with `action="suggest"` instead of `"applied"`, because that row *is* the reviewable plan the dashboard shows before you commit to it (`record_audit=False` suppresses even that). Also fixed in this release: `publish.yml` now sends `make_latest` as a JSON **boolean** (`gh api -F`) instead of a JSON **string** — GitHub's release API ignores the string form, so the "mark as latest" step had been returning 200 and reporting success while promoting nothing, leaving `/releases/latest` pointing at v0.4.14 through the 0.4.15 and 0.4.16 ships. The step now also re-reads `/releases/latest` and fails the job when the tag does not match, instead of trusting the exit code. 3 new regression cases (`tests/test_dream_2026_10_25.py`); suite at **958 passed / 4 skipped**. [Full CHANGELOG →](./CHANGELOG.md#0417---2026-10-25)
-> **What's new in 0.4.16** — **subject-key logical fact slots + `latest_only` recall + the "dream" sleep-time consolidation pass** (audit 2026-10-25, weekly ecosystem sync — Mem0 v2.2.1 "Dream", arXiv 2605.27366 "In Defense of Forgotten", Zep/Graphiti temporal edges, Letta memory blocks). New nullable `subject_key` column on `memories` names the *logical slot* a fact occupies (`"editor.preference"`); `upsert_memory(subject_key=...)` makes the new row the live version and soft-supersedes the previous one with a `superseded_by` pointer, so the version history survives and `recall_as_of()` can still answer "what did we believe last week?". The content-hash dedup path is now slot-aware — two different slots holding the same text stay two rows. `SCHEMA_VERSION` bumps 12 → 13 with an idempotent in-place migration. New `latest_only=False` flag on `recall()` / `recall_hybrid()` (Mem0 v2 `SearchMemoryOptions.latest_only` parity) collapses the answer in three layers: rows outside their validity window at *now* are dropped, a subject-key slot resolves to its newest **live** row (looked up in the store, so a stale version never comes back just because it matched the query better), and near-duplicate texts cluster by token Jaccard (default 0.85) with the newest row winning. Wired through `GET /api/recall?latest_only=1`, `GET /api/v1/recall?latest_only=1`, `loop-memory recall --latest-only` and `MemoryClient.recall(latest_only=True)`. New `loop_memory/jobs/dream.py` implements the sleep-time consolidation Mem0 v2 calls the "Dream" — deterministic, zero-dep and **non-destructive**: it decays scores, then judges every row past its deadline on **utility** (`0.45 × importance + 0.30 × usage + 0.25 × recency`) so a frequently-recalled old fact is *protected* while a never-used stale row is **soft-expired** (`invalid_at` stamped, row kept, history kept) instead of deleted, and finally merges near-duplicates into a supersession chain. Run it with `loop-memory dream [--apply] [--json]` or `POST /api/v1/dream` — it is a **dry run by default** and every decision lands in `cognitive_audit` so the dashboard can show and revert it. New store primitives `expire_memory()` / `revive_memory()`, and `memory_stats()` now reports `subject_key`, `ttl`, `valid_at`, `invalid_at` and a derived `ttl_state`. **Also fixed a real defect**: the hybrid recall path (BM25 / LIKE / semantic channels) did not filter `superseded_by`, so `recall_hybrid()` — the production path behind the CLI, MCP server and dashboard — returned both versions of a superseded fact. Source: Mem0 v2.2.1 Dream + ADD-only architecture + arXiv 2605.27366 utility-aware eviction + Zep/Graphiti bi-temporal edges (pattern only, no code copied). 77 new regression cases. [Full CHANGELOG →](./CHANGELOG.md#0416---2026-10-25)
-> **What's new in 0.4.15** — **content-hash dedup + bi-temporal validity window + evidence chain + `@agent_memory` decorator** (audit 2026-10-18, weekly ecosystem sync). Three new columns on `memories`: `content_hash` (SHA-256 of normalised text, indexed), `valid_at` (epoch the memory becomes active), `invalid_at` (epoch it expires — NULL means still open-ended). The schema migration bumps `SCHEMA_VERSION` 11 → 12 with an idempotent backfill so legacy DBs upgrade in-place. New `upsert_memory(valid_at=, invalid_at=, dedup=)` parameters let callers schedule future-dated or expiring memories and opt out of content-hash dedup for episodic event streams. `recall()` and `recall_hybrid()` now accept an optional `as_of_ts` (float epoch or ISO-8601) — when set, both methods drop memories whose `valid_at > as_of` or `invalid_at <= as_of`, complementing the existing `recall_as_of()` supersession-chain walk. Every recall hit now carries an `evidence: [{field, value, weight}]` array — BM25 / semantic / entity / rrf_total / high_importance channels are exposed individually so a UI can render "this hit because ... [bm25 1.0] [entity 0.7]" instead of a black-box score (Cognee 1.0 / Mem0 v2 evidence-citation pattern, zero-dep). New `loop_memory.decorators` exposes `@agent_memory(store, agent_id=, limit=)` — a one-line wrapper that recalls the top-k relevant memories before the body runs and writes a fresh `kind="interaction"` memory after. Strings returned from the wrapped function are stored verbatim; dict/list returns are JSON-serialised; the recall list is injected as a `memory_context` keyword when the function declares it, otherwise attached to dict results under `memories`. Sister `remember(store, text, ...)` helper for seeding. The BM25 `_like_fallback` now falls through to per-token OR-LIKE when the whole-string match returns nothing — natural-language questions like "What is the deploy process?" now hit stored facts even when FTS5 trigram can't match quoted exact phrases. Source: Cognee 1.0 ECL pipeline + Mem0 v2 hybrid fusion + Zep/Graphiti bi-temporal validity fields + Letta block-memory (pattern only, no code copied). 59 new regression cases. [Full CHANGELOG →](./CHANGELOG.md#0415---2026-10-18)
-> **What's new in 0.4.14** — **`loop-memory doctor` deep store-health check** (audit 2026-10-12). Ten diagnostic checks — `db_exists`, `db_integrity`, `schema_version`, `audit_triggers`, `audit_log_writable`, `audit_log_size`, `hooks_installed`, `version_consistent`, `wiki_no_orphans`, `recall_paths_works` — report `ok`/`info`/`warn`/`error` for the live `MemoryStore`. `--fix` auto-repairs the `audit_triggers` check. `--json` emits a stable shape for CI. `--list` prints the check function names without touching the store. `--verbose` shows `info`-level checks. Exit code `1` on any `error` status, `0` otherwise. Source: `cortexkit/magic-context doctor` auto-diagnostic pattern (MIT, 2026-10-12) + `dsh-memento` write-approval-gate pattern (Apache-2.0, 2026-10-12). Stdlib-only — we re-implement from scratch against our own `MemoryStore`. Also fixed a Python 3.14 bug: chained `store._conn().__enter__()` immediately triggers the contextmanager's `finally` and closes the connection mid-query — both call sites in `doctor.py` now use explicit `with` form. 27 new regression cases. [Full CHANGELOG →](./CHANGELOG.md#0414---2026-10-12)
+| Version | Date | What changed | Full notes |
+| --- | --- | --- | --- |
+| [0.4.20](./CHANGELOG.md#0420---2026-11-01) | 2026-11-01 | The packaging test works on the oldest supported Python (no `tomllib` on 3.10) |
+| [0.4.19](./CHANGELOG.md#0419---2026-11-01) | 2026-11-01 | The wheel ships the whole dashboard and the benchmark fixture (recursive package-data globs) |
+| [0.4.18](./CHANGELOG.md#0418---2026-11-01) | 2026-11-01 | The BM25 channel no longer publishes a score that collapses to zero — plus a retrieval benchmark |
+| [0.4.17](./CHANGELOG.md#0417---2026-10-25) | 2026-10-25 | A dry-run dream pass no longer writes to the database |
+| [0.4.16](./CHANGELOG.md#0416---2026-10-25) | 2026-10-25 | Subject-key logical fact slots, `latest_only` recall, and the sleep-time "dream" pass |
+| [0.4.15](./CHANGELOG.md#0415---2026-10-18) | 2026-10-18 | Content-hash dedup, bi-temporal validity window, evidence chain |
+| [0.4.14](./CHANGELOG.md#0414---2026-10-12) | 2026-10-12 | `loop-memory doctor` — a deep store-health check |
+| [0.4.13](./CHANGELOG.md#0413---2026-10-05) | 2026-10-05 | Recall token / char budget cap and a unified `level=0|1|2` tiered-loader knob |
+| [0.4.12](./CHANGELOG.md#0412---2026-09-27) | 2026-09-27 | OKF bundle import and DB-level audit enforcement (12 SQLite triggers) |
+| [0.4.11](./CHANGELOG.md#0411---2026-09-24) | 2026-09-24 | Operational probes (`/api/healthz`, `/api/readyz`) and the SQLite write-contention fix |
+| [0.4.10](./CHANGELOG.md#0410---2026-09-23) | 2026-09-23 | Path-safety guard for the five export / snapshot endpoints, LLM cache cap, `subgraph_for(max_hops=)` |
+| [0.4.9](./CHANGELOG.md#049---2026-09-20) | 2026-09-20 | OKF v0.2 export and bi-temporal `as_of` recall |
+| [0.4.8](./CHANGELOG.md#048---2026-09-13) | 2026-09-13 | L0 outline recall and per-agent identity bootstrap |
+| [0.4.7](./CHANGELOG.md#047---2026-09-06) | 2026-09-06 | Per-memory lifetime stats and a portable SQLite snapshot |
+| [0.4.6](./CHANGELOG.md#046---2026-08-30) | 2026-08-30 | The memory supersession chain (no hard deletes) |
+| [0.4.5](./CHANGELOG.md#045---2026-08-23) | 2026-08-23 | `loop_memory.__version__` was stale at `"0.2.0"` |
+| [0.4.4](./CHANGELOG.md#044---2026-08-23) | 2026-08-23 | `loop-memory rules --agent <name> --write` |
+| [0.4.3](./CHANGELOG.md#043---2026-08-16) | 2026-08-16 | The cognitive sweep N+1 fix |
+| [0.4.2](./CHANGELOG.md#042---2026-08-09) | 2026-08-09 | README refresh |
+| [0.4.1](./CHANGELOG.md#041---2026-08-09) | 2026-08-09 | CLI dispatch hardened against common `--help` crashes |
+| [0.4.0](./CHANGELOG.md#040---2026-08-09) | 2026-08-09 | OpenAI base URL env-var fallback |
+| [0.3.0](./CHANGELOG.md#030--2026-07-11) | 2026-07-11 | The run progress strip is back |
+| [0.2.0](./CHANGELOG.md#020--2026-07-10) | 2026-07-10 | The SQLite-backed `MemoryStore` |
+| [0.1.0](./CHANGELOG.md#010--2026-07-10) | 2026-07-10 | The dashboard tab empty-data regression |
 
-> **What's new in 0.4.13** — **recall token / char budget cap** + **unified `level=0|1|2` tiered-loader knob** (audit 2026-10-05). New `max_chars` parameter on `MemoryStore.recall()` / `recall_paths()` / `recall_hybrid()` / `recall_as_of()` caps the *total* payload across all returned hits — when the budget is exceeded the lowest-ranked hit shrinks first so the top-scoring hits always keep their full body. `recall()` / `recall_paths()` / `recall_as_of()` now also accept `level=0|1|2` so a caller can ask for the L0 abstract ladder rung inline (titles + tags + abstract only, never the full `text` / `body`) without routing through `recall_paths()` separately. Both knobs are wired through the HTTP routes (`GET /api/recall?max_chars=&level=`, `GET /api/recall/outline?max_chars=`), the CLI (`loop-memory recall --max-chars N --level 0|1|2`, `recall-paths --max-chars N`), the SDK (`LoopMemoryClient.recall(max_chars=, level=)`), and the MCP `tool_recall` server. Source: `vectorize-io/hindsight v0.10.2` "concise extraction by default" (Apache-2.0, 2026-09-29) + `aiming-lab/SimpleMem` ICML'26 semantic-lossless-compression (Apache-2.0, 2026-10-04) + `volcengine/OpenViking` tiered-loader (AGPLv3, 2026-10-02 — *pattern only, no code copied*). 26 new regression cases. [Full CHANGELOG →](./CHANGELOG.md#0413---2026-10-05)
-
-> **What's new in 0.4.12** — **OKF bundle import** + **DB-level audit enforcement** (audit 2026-09-27). The new `loop-memory import-okf <in_dir>` (and `POST /api/import/okf`) is the symmetric counterpart to `export-okf` (0.4.9) — bring an OKF v0.2 bundle back into Loop Memory as wiki pages, with idempotent upsert on `(scope, slug)`, optional `--dry-run` and `--skip-conflicts`. Source: `thecolourfoundation/rune` HN launch (MIT, 2026-09-25) + `okf-memory/okf-agent-memory` Issues #12-#15 + `Deja-Vu` (MIT, 2026-09-24) + Google OKF v0.2 spec (Apache-2.0, 2026-09-01). The new `MemoryStore._install_audit_triggers()` installs 12 SQLite triggers on `memories` / `wiki_pages` / `relations` / `consolidation_runs` so the `audit_log` table cannot be skipped — even a raw `sqlite3` writer that bypasses the Python wrapper still appends an audit row with `actor='db_trigger'`. New `MemoryStore.list_audit_log()` reads the log; `GET /api/stats` reports `audit_log` + `audit_triggers` counts. Source: `cogstate-eng/memory-eternal v0.4.3` `enforceAudit()` pattern (MIT, 2026-09-23). 31 new regression cases. [Full CHANGELOG →](./CHANGELOG.md#0412---2026-09-27)
-
-> **What's new in 0.4.11** — **operational probes** +
-**SQLite write-contention fix** (audit 2026-09-24). New
-``GET /api/healthz`` (liveness) + ``GET /api/readyz``
-(readiness) endpoints let Kubernetes / launchd keepalive
-polls probe the serve without provisioning a Bearer token;
-``/api/readyz`` returns 503 when the SQLite store is
-unreachable. Also fixed a real concurrency bug: every
-store connection now sets ``PRAGMA busy_timeout=5000``
-(was 0 ms) so the watcher + serve + scheduler threads no
-longer fail with ``database is locked`` when the
-consolidator writes concurrently. 7 new regression cases.
-[Full CHANGELOG →](./CHANGELOG.md#0411---2026-09-24)
-
-> **What's new in 0.4.10** — **path-safety guard** for the
-five export / snapshot endpoints. ``MemoryStore`` already
-validated query / wiki content; the new
-``_safe_resolve_path`` helper (audit 2026-09-23) closes the
-remaining path-traversal vector by refusing any path that
-points at the live SQLite store, a system directory
-(``/etc`` / ``/usr`` / ``/System``), or a sensitive dotfile
-(``~/.ssh`` / ``~/.aws`` / ``~/.gnupg``). Also in this
-release: a hard cap on the in-process LLM response cache
-(was unbounded; now 256 entries with FIFO eviction) and a
-fix for ``subgraph_for(max_hops=...)`` which used to ignore
-the argument and always walk one hop (now BFS up to N hops,
-hard-capped at 8). 29 new regression cases. [Full
-CHANGELOG →](./CHANGELOG.md#0410---2026-09-23)
-
-> **What's new in 0.4.9** — **OKF v0.2 export** + **bi-temporal `as_of` recall**. `loop-memory export-okf <dir>` writes an [Open Knowledge Format](https://github.com/okf/SPEC) v0.2 bundle — one `.md` file per wiki page with YAML frontmatter + an `index.md` index — so a Loop Memory store can be handed to any OKF-aware tool (Grep, Obsidian, akitaonrails/ai-memory, okf-agent-memory, ...) without re-parsing the body (audit 2026-09-20, Google OKF v0.2 spec + akitaonrails/ai-memory 2.0 + okf-memory/okf-agent-memory, all Apache-2.0/MIT, 2026-09-01 → 2026-09-06). `loop-memory recall <q> --as-of <ISO|epoch>` answers the bi-temporal question "what did we know about this query at that moment?" — a memory written after the moment is invisible, and a superseded memory walks its chain to find whether the invalidation had happened by then (audit 2026-09-20, loomcycle v1.33-v1.49 RFCs BL/BS/BU/BV/BW, Apache-2.0). Both shapes ship with HTTP routes (`POST /api/export/okf`, `GET /api/recall?as_of=...`). 34 new regression cases pin both shapes. [Full CHANGELOG →](./CHANGELOG.md#049---2026-09-20)
-
-> **What's new in 0.4.8** — **L0 outline recall** +
-> **per-agent identity bootstrap**. `loop-memory recall-paths <q>`
-> (and the new `recall --outline` flag) returns only `id` +
-> `abstract` + `score` + `why` for each hit — never the full
-> body — so an agent can identify the top candidates cheaply
-> before deciding which bodies to fetch (audit 2026-09-13,
-> tigerless-labs/agent-memory v0.3.0 recall-ladder pattern).
-> `loop-memory init --agent <name>` registers an agent in the
-> new `agents` table and (with `--install-hooks`) also wires
-> the MCP + SessionStart hooks for codex/claude/hermes; the
-> index is bumped on every `install-hooks` run so a user can
-> always answer "which CLIs are wired into this store?" with
-> one SQL query (audit 2026-09-13, Mem0 CLI `init --agent`
-> pattern). Both shapes ship with HTTP routes
-> (`/api/recall/outline`, `/api/agents`, `/api/init/agent`).
-> 57 new regression cases pin both shapes. [Full
-> changelog →](CHANGELOG.md)
->
-> **What's new in 0.4.7** — **per-memory lifetime stats** +
-> **portable SQLite snapshot**. `loop-memory memory-stats <id>`
-> returns a flat dict (recall_count, positive, negative, age,
-> etc.) so you can ask "is anyone still using this memory?"
-> without cracking open the SQLite file (audit 2026-09-06,
-> agentmemory v1.3.0 pattern). `loop-memory snapshot <out>` /
-> `loop-memory restore <in>` move a single-file, lossless
-> snapshot of the entire store — including recall-quality
-> signals and the supersession chain — to another machine
-> (audit 2026-09-06, codexa-memory v0.2.0 pattern). Both shapes
-> ship with HTTP routes (`/api/memories/{id}/stats`,
-> `/api/snapshot`, `/api/snapshot/restore`). 33 new regression
-> cases pin both shapes.
-> [Full changelog →](CHANGELOG.md)
+</details>
 
 ---
 
@@ -265,6 +222,7 @@ Hermes, clawx) can read and write, we built this for you.
 | [docs/api.md](docs/api.md) | HTTP API reference — every route, request body, and response shape the UI consumes |
 | [docs/agent-memory-api.md](docs/agent-memory-api.md) | Stable four-verb SDK / HTTP / MCP contract for any Agent |
 | [docs/universal-agent-memory.md](docs/universal-agent-memory.md) | v7 graph memory, cognitive sleep, portable bundles, namespaces, and MCP/CLI extensions |
+| [docs/transport-security.md](docs/transport-security.md) | How a remote client is allowed to talk to `loop-memory serve` — the transport guard, bearer-token auth, redirect hardening, and the `plaintext_exposure` doctor check (0.4.21) |
 | [docs/providers.md](docs/providers.md) | LLM provider reference — built-in providers, defaults, base URLs, and how to add a new one |
 | [docs/auto-capture.md](docs/auto-capture.md) | Hooking Codex / Claude / Hermes / OpenClaw watchers (filesystem, launchd, systemd, cron) |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Local dev loop, pytest, where secrets live, how to add a provider/source |
@@ -618,7 +576,7 @@ loop_memory/
     backends/                  # embedding (hashing / sentence-transformers) + vector store (memory / chroma)
     storage/                   # SQLite-backed MemoryStore + migrations
     privacy/                   # <private> stripping + regex redaction
-    security/                  # Keychain / 0600-file secrets wrapper
+    security/                  # Keychain / 0600-file secrets wrapper + the transport guard
     mcp/                       # stdio JSON-RPC MCP server
     serve/                     # FastAPI app, watcher, web UI (Timeline / Dashboard / Wiki / Graph)
     export/                    # markdown + v7 portable bundle export/import
@@ -628,16 +586,18 @@ loop_memory/
     memory/types.py            # MemoryItem + 4 tiers
     examples/demo.py           # runnable, zero-API-key demo
     py.typed
-  tests/                       # 475 unit tests across memory / SDK / serve / CLI / scripts
+  tests/                       # 1041 unit tests across memory / SDK / serve / CLI / scripts
   docs/
     auto-capture.md            # launchd / systemd / cron recipes
     architecture.md            # layered view + 5-stage evolution pipeline
     api.md                     # HTTP API reference
+    transport-security.md      # how a remote client may talk to `serve` (0.4.21)
     agent-memory-api.md        # four-verb SDK / HTTP / MCP contract
     universal-agent-memory.md  # v7 graph memory + cognitive sleep + bundles
     providers.md               # LLM provider reference
     settings.md                # settings table + secrets file
     weekly-research-automation.md  # how the project auto-evolves from upstream research
+    research/                  # the weekly ecosystem notes each release is based on
 ```
 
 ---
@@ -667,6 +627,34 @@ The web UI stores it in `localStorage` under `loop_auth_token` and attaches
 it automatically; non-browser clients (curl, MCP, SDK) must opt in by
 passing it explicitly.
 
+**Remote clients (SDK):** the HTTP SDK can send the token for you, and it
+refuses to send it — or any memory text — over an unencrypted connection
+to a remote host:
+
+```python
+client = MemoryClient.http(
+    "https://memory.example.com",
+    token=open("token.txt").read().strip(),   # Authorization: Bearer …
+)
+client.remember("deploys go out on Tuesdays")
+```
+
+Plain `http://` is still fine for `127.0.0.1` / `localhost` / `::1` (the
+traffic never leaves the machine — that is the default deployment), but
+plain `http://` to **any other host is refused**: the memory text and the
+bearer token would cross the network in cleartext. A private tunnel or a
+VPN'd LAN is a legitimate deployment, so `allow_insecure=True` (or
+`LOOP_MEMORY_ALLOW_INSECURE=1`) exists — but it is never silent, it
+warns on every construction. Redirects that downgrade `https://` →
+`http://`, and cross-origin redirects that would replay the token, are
+refused too. The full contract is in
+[docs/transport-security.md](docs/transport-security.md).
+
+**Server side:** `loop-memory serve --host <non-loopback>` prints a
+warning and records the bind address, so `loop-memory doctor` reports it
+as a `plaintext_exposure` warning — the API is reachable from the network
+over plaintext.
+
 **When to set a token:**
 
 - ✅ Always, even on loopback. The default of "no token" exists only as a
@@ -683,6 +671,12 @@ passing it explicitly.
 
 - `install-hooks` runs Python that touches `~/.*` — it's gated by the
   bearer token like every other `POST /api/admin/*` route.
+- A remote client cannot leak memory text to the network in cleartext:
+  the SDK refuses a plaintext `http://` base URL that is not loopback,
+  refuses a URL with embedded credentials, and refuses redirects that
+  downgrade the scheme or would replay the `Authorization` header
+  (audit 2026-11-08, 0.4.21 — see
+  [docs/transport-security.md](docs/transport-security.md)).
 - The `<private>...</private>` span stripping in the privacy layer keeps
   user-marked secrets out of long-term storage; the regex redaction layer
   then catches API keys / tokens / private keys / JWTs / generic

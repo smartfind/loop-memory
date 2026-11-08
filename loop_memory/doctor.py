@@ -396,6 +396,80 @@ def _check_hooks_installed(store: Any) -> DoctorCheck:
     )
 
 
+def _check_plaintext_exposure(store: Any) -> DoctorCheck:
+    """A non-loopback bind exposes the API over plaintext HTTP.
+
+    Audit 2026-11-08 (loop-memory 0.4.21).  ``loop-memory serve``
+    records its bind address in the ``loop_memory_serve_bind``
+    setting.  When that bind is not a loopback address, every memory
+    payload — and the bearer token that protects them — crosses the
+    network in cleartext, which is exactly what the new client-side
+    transport guard refuses to *send*.
+
+    A loopback bind is the healthy default and reports ``ok``.  A
+    missing setting means the server was not started through the
+    CLI (or predates 0.4.21) and is reported as ``info``, not a
+    warning — we do not want to cry wolf on a store that was never
+    served at all.
+    """
+    try:
+        bind = store.get_setting("loop_memory_serve_bind")  # type: ignore[attr-defined]
+    except Exception:
+        bind = None
+    if not isinstance(bind, dict) or not bind.get("host"):
+        return DoctorCheck(
+            name="plaintext_exposure",
+            status=STATUS_INFO,
+            message=(
+                "no serve bind address recorded — the server was not "
+                "started through `loop-memory serve` (or predates 0.4.21); "
+                "run it that way to get a network-exposure report"
+            ),
+        )
+    from .security.transport import is_loopback_host
+
+    host = str(bind.get("host") or "")
+    port = bind.get("port")
+    scheme = str(bind.get("scheme") or "http")
+    if is_loopback_host(host):
+        return DoctorCheck(
+            name="plaintext_exposure",
+            status=STATUS_OK,
+            message=(
+                f"the API is bound to {host}:{port} (loopback) — plaintext "
+                "traffic never leaves this host"
+            ),
+            details={"host": host, "port": port, "scheme": scheme},
+        )
+    has_token = False
+    try:
+        has_token = bool(store.get_setting("loop_memory_auth_token"))  # type: ignore[attr-defined]
+    except Exception:
+        has_token = False
+    message = (
+        f"the API is bound to {host}:{port} — it is reachable from the "
+        "network over plaintext http://, so every memory payload crosses "
+        "the wire in cleartext"
+    )
+    if has_token:
+        message += (
+            "; the bearer token that protects those payloads is exposed the "
+            "same way"
+        )
+    return DoctorCheck(
+        name="plaintext_exposure",
+        status=STATUS_WARN,
+        message=message + ".",
+        fix_hint=(
+            "bind 127.0.0.1 and put a TLS terminator (nginx, Caddy, a tunnel) "
+            "in front of it, so clients can use https://; the 0.4.21 client "
+            "guard refuses to send memory data to a plaintext remote host"
+        ),
+        details={"host": host, "port": port, "scheme": scheme,
+                 "auth_token_set": has_token},
+    )
+
+
 def _check_version_consistent(store: Any) -> DoctorCheck:
     """``loop_memory.__version__`` (sourced from the installed
     metadata by the 0.4.5 fix) should match the distribution
@@ -549,6 +623,7 @@ CHECKS: tuple[Callable[[Any], DoctorCheck], ...] = (
     _check_version_consistent,
     _check_wiki_no_orphans,
     _check_recall_paths_works,
+    _check_plaintext_exposure,
 )
 
 

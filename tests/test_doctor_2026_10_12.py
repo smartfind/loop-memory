@@ -1,4 +1,4 @@
-"""Regression tests for ``loop-memory doctor`` -- 10-check store-health
+"""Regression tests for ``loop-memory doctor`` -- 11-check store-health
 diagnostic (audit 2026-10-12).
 
 Pattern adopted from ``cortexkit/magic-context doctor`` (MIT, 2026-10-12)
@@ -9,7 +9,7 @@ on a separate health library.
 Coverage targets:
 - dataclass shape: ``DoctorCheck`` exposes name/status/message/details/fix_hint/auto_fixable
 - status constants: only ``ok/info/warn/error`` accepted
-- each of the 10 checks fires under the expected fixture (positive + negative)
+- each of the 11 checks fires under the expected fixture (positive + negative)
 - ``--fix`` repairs ``audit_triggers`` and reports ok
 - exit code: 0 on clean, 1 on any error
 - JSON output is valid + machine-parseable
@@ -92,17 +92,18 @@ class DoctorDataclassShapeTests(unittest.TestCase):
         self.assertEqual(d["status"], "info")
         self.assertEqual(d["details"], {"k": "v"})
 
-    def test_checks_constant_lists_10_functions(self) -> None:
+    def test_checks_constant_lists_11_functions(self) -> None:
         # The CHECKS list is the canonical "what the doctor does"
-        # surface -- it must have exactly 10 entries (audit 2026-10-12).
-        self.assertEqual(len(doctor.CHECKS), 10)
+        # surface -- it must have exactly 11 entries (audit 2026-10-12;
+        # 11 since 0.4.21 added ``plaintext_exposure``).
+        self.assertEqual(len(doctor.CHECKS), 11)
 
 
 # --------------------------------------------------------------------- per-check
 
 
 class DoctorPerCheckTests(unittest.TestCase):
-    """Each of the 10 checks must run against a real MemoryStore and return a DoctorCheck."""
+    """Each of the 11 checks must run against a real MemoryStore and return a DoctorCheck."""
 
     def setUp(self) -> None:
         self.store, self.tmp = _new_store()
@@ -239,7 +240,7 @@ class DoctorCliTests(unittest.TestCase):
         out = doctor.render_json(checks)
         data = json.loads(out)
         self.assertIsInstance(data, list)
-        self.assertEqual(len(data), 10)
+        self.assertEqual(len(data), 11)
 
     def test_human_output_contains_summary(self) -> None:
         checks = doctor.run_checks(self.store)
