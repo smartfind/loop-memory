@@ -62,10 +62,14 @@ def run_recall(args) -> int:
     caller can ask "what did we know about this query at that
     moment?". The wiki and entity sections are unchanged — only
     the raw-memory block grows the new line.
+
+    ``--agent-id`` / ``--user-id`` (audit 2026-11-15, loop-memory
+    0.4.22) restrict the answer to one namespace. Memories written
+    without an agent or user id are global and stay visible.
     """
     from ...storage.sqlite_store import MemoryStore
     if not args:
-        return die("usage: loop-memory recall <query> [--verbose] [--limit N]")
+        return die("usage: loop-memory recall <query> [--verbose] [--limit N] [--agent-id <id>] [--user-id <id>]")
     # Parse the small flag subset we expose. Keep it dumb-on-purpose:
     # we don't want argparse to swallow a token that happens to start
     # with "--" inside the user's query (e.g. ``recall --foo bar``).
@@ -80,6 +84,11 @@ def run_recall(args) -> int:
     level = 1
     # Audit 2026-10-25 (loop-memory 0.4.16) -- latest-only mode.
     latest_only = False
+    # Audit 2026-11-15 (loop-memory 0.4.22) -- agent / user
+    # namespace. ``None`` means "no restriction", which keeps the
+    # legacy see-everything behaviour.
+    agent_id: str | None = None
+    user_id: str | None = None
     qargs: list[str] = []
     i = 0
     while i < len(args):
@@ -158,6 +167,17 @@ def run_recall(args) -> int:
             except ValueError:
                 return die(f"--level must be 0, 1, or 2, got {args[i + 1]!r}")
             i += 2
+        elif a == "--agent-id" and i + 1 < len(args):
+            # Audit 2026-11-15 (loop-memory 0.4.22) -- restrict the
+            # answer to one agent namespace. Memories with no agent
+            # id are global and stay visible.
+            agent_id = args[i + 1].strip() or None
+            i += 2
+        elif a == "--user-id" and i + 1 < len(args):
+            # Audit 2026-11-15 (loop-memory 0.4.22) -- restrict the
+            # answer to one user namespace.
+            user_id = args[i + 1].strip() or None
+            i += 2
         elif a == "--limit" and i + 1 < len(args):
             try:
                 limit = int(args[i + 1])
@@ -170,13 +190,14 @@ def run_recall(args) -> int:
             qargs.append(a)
             i += 1
     if not qargs:
-        return die("usage: loop-memory recall <query> [--verbose] [--outline] [--as-of <ISO|epoch>] [--latest-only] [--limit N] [--max-chars N] [--level 0|1|2]")
+        return die("usage: loop-memory recall <query> [--verbose] [--outline] [--as-of <ISO|epoch>] [--latest-only] [--agent-id <id>] [--user-id <id>] [--limit N] [--max-chars N] [--level 0|1|2]")
     store = MemoryStore(default_db_path())
     query = " ".join(qargs)
     if as_of is not None:
         try:
             r = store.recall_as_of(query, as_of, limit=limit,
-                                    max_chars=max_chars, level=level)
+                                    max_chars=max_chars, level=level,
+                                    agent_id=agent_id, user_id=user_id)
         except ValueError as e:
             return die(str(e))
     elif outline:
@@ -190,7 +211,11 @@ def run_recall(args) -> int:
                           # "everything" semantics.
                           as_of_ts=validity_at,
                           # Audit 2026-10-25: one answer per fact.
-                          latest_only=latest_only)
+                          latest_only=latest_only,
+                          # Audit 2026-11-15: namespace predicate in
+                          # SQL -- the limit counts only the caller's
+                          # own rows.
+                          agent_id=agent_id, user_id=user_id)
     has = False
     if r["wiki"]:
         has = True

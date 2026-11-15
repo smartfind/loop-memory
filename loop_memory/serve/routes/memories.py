@@ -307,6 +307,24 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None) 
         "global" and visible to every caller (matches the SDK
         semantics).
 
+        Audit 2026-11-15 (loop-memory 0.4.22) -- the namespace
+        predicate is now applied **inside** the store's SQL, not on
+        top of its output. Before this release the filter ran after
+        the store had already applied its ``LIMIT``, which meant:
+
+        * in ``hybrid`` mode a foreign namespace could spend the
+          caller's whole result budget, so an agent could get zero
+          hits while its own matching rows sat further down the
+          ranking; and
+        * in ``legacy`` mode the filter was a **silent no-op** --
+          ``store.recall()`` did not return ``agent_id`` /
+          ``user_id``, so every row looked "global" and *every*
+          namespace saw *every* other namespace's memories.
+
+        The Python filter below is kept as a defence-in-depth net so
+        a future regression in the SQL cannot leak a row; the SQL is
+        what makes the ``limit`` meaningful.
+
         ``latest_only=1`` collapses the answer to one row per logical
         fact: rows outside their validity window are dropped, subject
         key slots collapse to their newest live row, and near-duplicate
@@ -315,6 +333,10 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None) 
         wanted = tuple(s.strip() for s in include.split(",") if s.strip())
         if not wanted:
             wanted = ("memories", "wiki", "entities")
+        # Audit 2026-11-15 (loop-memory 0.4.22): a blank namespace
+        # means "not specified" -- never "match nothing".
+        agent_id = (agent_id or "").strip() or None
+        user_id = (user_id or "").strip() or None
         if mode == "legacy" or not hasattr(store, "recall_hybrid"):
             r = store.recall(
                 q,
@@ -323,12 +345,16 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None) 
                 bump_signals=True,
                 source=source,
                 latest_only=bool(latest_only),
+                agent_id=agent_id,
+                user_id=user_id,
             )
         else:
             r = store.recall_hybrid(
                 q, limit=limit, include=wanted,
                 bump_signals=True, source=source, level=1,
                 latest_only=bool(latest_only),
+                agent_id=agent_id,
+                user_id=user_id,
             )
         if agent_id is not None or user_id is not None:
             def _own(m: dict) -> bool:

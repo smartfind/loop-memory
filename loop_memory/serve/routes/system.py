@@ -403,7 +403,14 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None,
               # their validity window are dropped, subject-key slots
               # collapse to their newest live row, and near-duplicate
               # texts collapse to the newest one.
-              latest_only: int = 0):
+              latest_only: int = 0,
+              # Audit 2026-11-15 (loop-memory 0.4.22): optional
+              # agent / user namespace. The predicate is applied in
+              # the store's SQL, so the ``limit`` counts only the
+              # caller's own rows. Unset (the default) keeps the
+              # dashboard's "see everything" behaviour.
+              agent_id: str | None = None,
+              user_id: str | None = None):
         """Unified recall — wiki + memories + entities in one ranked stream.
 
         ``mode`` is 'hybrid' (default) for BM25+semantic+entity RRF,
@@ -437,7 +444,16 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None,
         vectorize-io/hindsight v0.10.2 "concise extraction by
         default" + aiming-lab/SimpleMem ICML'26 semantic-lossless-
         compression.
+
+        ``agent_id`` / ``user_id`` (audit 2026-11-15, loop-memory
+        0.4.22) restrict the answer to one agent / user namespace.
+        Rows with a NULL ``agent_id`` / ``user_id`` are global and
+        stay visible to everyone.
         """
+        # Audit 2026-11-15 (loop-memory 0.4.22): a blank namespace
+        # means "not specified" -- never "match nothing".
+        agent_id = (agent_id or "").strip() or None
+        user_id = (user_id or "").strip() or None
         wanted = tuple(s.strip() for s in include.split(",") if s.strip())
         if not wanted:
             wanted = ("memories", "wiki", "entities")
@@ -461,6 +477,8 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None,
                     source=source,
                     max_chars=max_chars,
                     level=level,
+                    agent_id=agent_id,
+                    user_id=user_id,
                 )
                 recall_mode = "as_of"
             except ValueError as e:
@@ -481,6 +499,9 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None,
                     as_of_ts=(validity_at if (validity_at and str(validity_at).strip()) else None),
                     # Audit 2026-10-25: one answer per fact.
                     latest_only=bool(latest_only),
+                    # Audit 2026-11-15: namespace predicate in SQL.
+                    agent_id=agent_id,
+                    user_id=user_id,
                 )
             except ValueError as e:
                 # Invalid ``validity_at`` -> 400 (audit 2026-10-18)
@@ -496,6 +517,9 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None,
                     as_of_ts=(validity_at if (validity_at and str(validity_at).strip()) else None),
                     # Audit 2026-10-25: one answer per fact.
                     latest_only=bool(latest_only),
+                    # Audit 2026-11-15: namespace predicate in SQL.
+                    agent_id=agent_id,
+                    user_id=user_id,
                 )
             except ValueError as e:
                 raise HTTPException(400, str(e))

@@ -90,6 +90,11 @@ def bm25_search(
     kind: str = "memories",
     limit: int = 50,
     source_filter: str | None = None,
+    # Audit 2026-11-15 (loop-memory 0.4.22): agent / user namespace.
+    # Applied inside the SQL so a foreign namespace cannot consume
+    # this channel's ``LIMIT`` budget.
+    agent_id: str | None = None,
+    user_id: str | None = None,
 ) -> list[dict]:
     """Run an FTS5 query and return a list of ``{"id": ..., "_score": bm25}``.
 
@@ -105,6 +110,13 @@ def bm25_search(
     AND total length <3, FTS5 returns nothing; we then issue a
     ``LIKE '%<q>%'`` over the source table as a backstop. For our
     scale (<10k memories, <1k wiki) LIKE is well under 5 ms.
+
+    ``agent_id`` / ``user_id`` (audit 2026-11-15, loop-memory
+    0.4.22) restrict the ``memories`` branch to one namespace. The
+    predicate is applied in SQL -- both on the FTS5 query and on the
+    ``LIKE`` backstop -- so the row budget is spent on the caller's
+    own memories. Rows with a NULL ``agent_id`` / ``user_id`` are
+    global and stay visible to everyone.
     """
     import re as _re
     fts_q = _escape_fts(query)
@@ -128,15 +140,19 @@ def bm25_search(
                 # answer. Without this filter the BM25 channel
                 # happily returned both versions of a fact, which
                 # broke the new ``latest_only`` semantics.
+                scope_sql, scope_params = store._scope_clause(
+                    agent_id, user_id, alias="m"
+                )
                 sql = (
                     f"SELECT m.id AS id, {score_col} AS s "
                     f"FROM {table} t "
                     f"JOIN memories m ON m.rowid = t.rowid "
                     f"WHERE {table} MATCH ? "
                     f"  AND m.superseded_by IS NULL "
+                    f"  {scope_sql} "
                     f"ORDER BY s LIMIT ?"
                 )
-                rows = c.execute(sql, (fts_q, limit)).fetchall()
+                rows = c.execute(sql, (fts_q, *scope_params, limit)).fetchall()
             else:
                 # Wiki: also join back to wiki_pages so we can apply the
                 # per-source scope filter at the SQL layer. We negate
@@ -158,7 +174,8 @@ def bm25_search(
     # lists are merged by id; LIKE rows get a synthetic importance
     # score so the RRF caller can rank them alongside BM25.
     like_rows = _like_fallback(store, query, kind=kind, limit=limit,
-                               source_filter=source_filter)
+                               source_filter=source_filter,
+                               agent_id=agent_id, user_id=user_id)
     merged: dict[str, dict] = {}
     for r in (rows or []):
         # ``_fts_score`` keeps the raw SQLite score for diagnostics.
@@ -250,6 +267,8 @@ def _like_fallback(
     kind: str,
     limit: int,
     source_filter: str | None = None,
+    agent_id: str | None = None,
+    user_id: str | None = None,
 ) -> list:
     """Brute-force LIKE fallback used when FTS5 trigram can't index
     a query -- short strings, all-CJK with <3 chars, or the FTS5
@@ -273,13 +292,20 @@ def _like_fallback(
     pat = f"%{q}%"
     with store._conn() as c:
         if kind == "memories":
+            scope_sql, scope_params = store._scope_clause(
+                agent_id, user_id, alias="m"
+            )
             sql = (
                 "SELECT m.id AS id, m.importance AS importance "
                 "FROM memories m WHERE LOWER(text) LIKE LOWER(?) "
                 "  AND m.superseded_by IS NULL "
+                f"  {scope_sql} "
                 "ORDER BY m.importance DESC, m.created_at DESC LIMIT ?"
             )
-            whole = [dict(r) for r in c.execute(sql, (pat, limit)).fetchall()]
+            whole = [
+                dict(r)
+                for r in c.execute(sql, (pat, *scope_params, limit)).fetchall()
+            ]
             if whole:
                 return whole
             # Per-token OR pass -- at least one query word must hit.
@@ -293,9 +319,15 @@ def _like_fallback(
                 "SELECT m.id AS id, m.importance AS importance "
                 f"FROM memories m WHERE ({placeholders}) "
                 "  AND m.superseded_by IS NULL "
+                f"  {scope_sql} "
                 "ORDER BY m.importance DESC, m.created_at DESC LIMIT ?"
             )
-            return [dict(r) for r in c.execute(sql_t, (*params, limit)).fetchall()]
+            return [
+                dict(r)
+                for r in c.execute(
+                    sql_t, (*params, *scope_params, limit)
+                ).fetchall()
+            ]
         sql = (
             "SELECT w.id AS id, w.importance AS importance, w.scope AS scope "
             "FROM wiki_pages w "

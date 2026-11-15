@@ -1,3 +1,116 @@
+## [0.4.22] - 2026-11-15
+
+### feature
+
+- **The agent-namespace filter now works — and it is enforced in the
+  query instead of on top of the answer.** The weekly audit for this
+  release (2026-11-15) turned up a real hole rather than a
+  hypothetical one. `GET /api/v1/recall?agent_id=X` was documented as
+  *"Unified recall filtered to a single Agent namespace"*, but the
+  filter was applied to the store's **output**, and it had two
+  separate failure modes:
+
+  * **On the legacy path it was a silent no-op.** The legacy
+    `MemoryStore.recall()` never returned the `agent_id` / `user_id`
+    columns, so the route's predicate read `None`/`None` for every
+    row, decided every row was "global", and let all of them
+    through. **An agent that explicitly asked for its own namespace
+    was handed every other agent's memories as well.**
+  * **On the hybrid path it ran after the `LIMIT`.** The filter
+    worked, but it ran on the store's already-trimmed result set, so
+    a foreign namespace could spend the caller's *entire* result
+    budget: an agent asking for 5 hits could get **zero**, while its
+    own matching rows sat further down the ranking.
+
+  Both failures have the same root cause: **the predicate was in the
+  caller instead of in the query.** That is exactly what the
+  upstream projects in this window converged on:
+
+  * `plastic-labs/honcho` v3.6.0 (2026-11-10, AGPL-3.0) made
+    `tenant_id` lead every primary key, with Postgres row-level
+    security scoping **every read and write**, and refused to hand a
+    tenant an empty namespace;
+  * `EverMind-AI/EverOS` v1.6.0 (2026-11-11) made deletion
+    owner-scoped, and answered `503 SESSION_BUSY` rather than
+    deleting half of a session;
+  * `thedotmack/claude-mem` (v15.16.x, 2026-11-11) gave each scope
+    its own project by default, and made *"an explicitly empty
+    project selection show nothing instead of observations from every
+    project"* (#5866);
+  * `vectorize-io/hindsight` v1.2.1 stopped a bank clone from taking
+    over another bank's alias (#6280).
+
+  Those are pattern references only — no code was copied, and the two
+  AGPL-3.0 projects contributed nothing but an idea.
+
+  What shipped:
+
+  * **A single predicate builder.**
+    `loop_memory.storage.sqlite_store._scope_clause()` produces the
+    SQL fragment, and every retrieval channel builds its query from
+    it. The semantics are the ones the SDK has always documented: a
+    row with a `NULL` `agent_id` / `user_id` is **global** and stays
+    visible to everyone (the ingest pipeline, the consolidator and
+    the dream job all write global rows), while a row that names a
+    namespace is visible only inside it.
+  * **The predicate is in the SQL of every channel.** `recall()`,
+    `recall_hybrid()` and `recall_as_of()` take `agent_id` /
+    `user_id`. The BM25 channel (`bm25_search`) scopes both the
+    FTS5 query and the `LIKE` backstop; the semantic channel
+    (`search_by_embedding`) and the entity channel
+    (`search_memories_by_entity_names`) scope their own SQL. The
+    fused ranking — and the `limit` that trims it — therefore only
+    ever sees the caller's own rows.
+  * **Every hit now reports its namespace.** `recall()` returns
+    `agent_id` / `user_id` on each row, which is what makes the
+    legacy no-op above impossible to reintroduce silently.
+  * **All four public surfaces expose it.** `GET /api/v1/recall`
+    and `GET /api/recall` accept `agent_id` / `user_id`; the MCP
+    `recall` tool scopes to `LOOP_MEMORY_AGENT_ID` /
+    `LOOP_MEMORY_USER_ID` (the MCP server is started once per
+    client, so the environment already identifies the caller) and
+    accepts explicit overrides; `loop-memory recall` gained
+    `--agent-id` / `--user-id`.
+  * **A client that writes into a namespace now reads from it.**
+    `MemoryClient.memory(store, agent_id="x")` and
+    `MemoryClient.http(url, agent_id="x")` fall back to that identity
+    on `recall()`. Before this release they wrote into `x` and read
+    from everywhere — the asymmetry that hid the leak. Pass
+    `agent_id=""` for the explicit escape hatch.
+
+  See `docs/namespace-isolation.md` for the full contract.
+
+### test
+
+- **43 new regression cases** pinning every rule above: the
+    `_scope_clause()` fragment builder (empty means "not specified",
+    never "match nothing"), the legacy and hybrid recall paths
+    excluding a foreign namespace, global rows staying visible,
+    `user_id` scoping, the `recall_as_of()` path, the budget case
+    that the pre-0.4.22 code got wrong (12 foreign rows that rank
+    above the caller's own row must not push it out of the answer),
+    each retrieval channel scoped on its own (BM25, semantic,
+    entity), the HTTP surface in both `hybrid` and `legacy` modes,
+    the dashboard route, the MCP tool (environment default, explicit
+    override, empty-string escape hatch), the SDK clients, and the
+    CLI flags.
+
+  Suite at **1084 passed / 4 skipped** (was 1041 / 4).
+
+### doc
+
+- New `docs/namespace-isolation.md` — the full contract: the rule,
+    the global-row semantics, what changed on each surface, the
+    behaviour change for bound SDK clients, and the one deliberate
+    loose end (an explicitly empty namespace means "no restriction"
+    here, where `honcho` and `claude-mem` fail closed — Loop Memory's
+    `agent_id` is an optional narrowing filter on a single-user
+    store, not a hard multi-tenant boundary).
+- New `docs/research/2026-11-15.md` — the weekly ecosystem survey
+    (94 releases in the window across 14 of the 36 watched
+    repositories), with an `adopt` / `defer` / `reject` decision for
+    every item.
+
 ## [0.4.21] - 2026-11-08
 
 ### feature

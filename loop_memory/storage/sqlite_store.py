@@ -581,6 +581,8 @@ def _apply_as_of_filters(
     source,
     as_of: float,
     limit: int,
+    agent_id: str | None = None,
+    user_id: str | None = None,
 ) -> dict:
     """Run the recall pipeline with an ``as_of`` filter applied.
 
@@ -620,6 +622,9 @@ def _apply_as_of_filters(
             if token:
                 scope_sql = " AND (m.source=? OR COALESCE(?,'') = '')"
                 scope_params.extend([token, token])
+        # Audit 2026-11-15 (loop-memory 0.4.22): namespace predicate,
+        # in SQL so a foreign namespace cannot eat the LIMIT budget.
+        ns_sql, ns_params = _scope_clause(agent_id, user_id, alias="m")
         sql = (
             "SELECT m.id, m.kind, m.text, m.importance, m.score, m.source, "
             "m.tags, m.created_at, m.updated_at, "
@@ -636,12 +641,14 @@ def _apply_as_of_filters(
             "       )) "
             f"  AND ({clause} OR {tag_clause})"
             f"{scope_sql} "
+            f"  {ns_sql} "
             "ORDER BY m.score DESC, m.importance DESC, m.created_at DESC "
             "LIMIT ?"
         )
         rows = c.execute(
             sql,
-            (as_of, as_of, *params, *tag_params, *scope_params, limit * 3),
+            (as_of, as_of, *params, *tag_params, *scope_params,
+             *ns_params, limit * 3),
         ).fetchall()
         for r in rows:
             try:
@@ -980,6 +987,55 @@ def _parse_okf_scalar(value: str):
 
 
 
+def _scope_clause(agent_id=None, user_id=None, alias="m"):
+    """Return ``(sql_fragment, params)`` restricting ``memories`` rows
+    to one agent / user namespace.
+
+    Audit 2026-11-15 (loop-memory 0.4.22) -- namespace isolation.
+
+    The predicate lives **in the query**, not in the caller. Before
+    this release the agent/user filter was applied *after* the store
+    had already applied ``LIMIT``, so rows belonging to another agent
+    consumed the caller's result budget: a scoped caller could get
+    zero hits while its own matching rows sat further down the
+    ranking. Every upstream project that added tenancy this week put
+    the predicate in the query for the same reason --
+    ``plastic-labs/honcho`` v3.6.0 (2026-11-10) made ``tenant_id``
+    lead every primary key with Postgres row-level security scoping
+    every read and write, and ``EverMind-AI/EverOS`` v1.6.0
+    (2026-11-11) made deletion owner-scoped. Those are pattern
+    references only -- no code was copied.
+
+    Semantics (identical to the pre-0.4.22 in-Python filter, so no
+    caller changes behaviour):
+
+    * ``agent_id=None`` / ``user_id=None`` -> no restriction at all
+      (legacy "see everything" semantics).
+    * A row whose ``agent_id`` is NULL is *global* -- it belongs to no
+      namespace and stays visible to every caller.
+    * A row whose ``agent_id`` is set is visible only to that agent
+      (and to callers that pass no ``agent_id`` filter at all).
+
+    The same shape applies to ``user_id``. An empty string counts as
+    "not specified" so a blank query parameter can never widen the
+    result set by accident.
+    """
+    clauses: list[str] = []
+    params: list[str] = []
+    if agent_id:
+        clauses.append(f"({alias}.agent_id IS NULL OR {alias}.agent_id = ?)")
+        params.append(str(agent_id))
+    if user_id:
+        clauses.append(f"({alias}.user_id IS NULL OR {alias}.user_id = ?)")
+        params.append(str(user_id))
+    if not clauses:
+        return "", []
+    # The fragment carries its own leading " AND " so every call site
+    # can paste it straight into a WHERE clause without having to
+    # know whether a namespace filter was requested.
+    return " AND " + " AND ".join(clauses), params
+
+
 def _validity_clause(as_of_ts):
     """Return (sql_fragment, params) implementing the bi-temporal
     validity guard for the ``memories`` table.
@@ -1129,6 +1185,16 @@ class MemoryStore:
     """
 
     SCHEMA_VERSION = "13"  # audit 2026-10-25: subject_key (logical fact slot) + latest-only recall
+
+    @staticmethod
+    def _scope_clause(agent_id=None, user_id=None, alias="m"):
+        """Namespace predicate for the ``memories`` table.
+
+        Audit 2026-11-15 (loop-memory 0.4.22). Exposed as a method so
+        ``storage/retrieval.py`` can reuse it without importing this
+        module (which would be circular).
+        """
+        return _scope_clause(agent_id, user_id, alias=alias)
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path).expanduser()
@@ -2582,7 +2648,13 @@ class MemoryStore:
                # live row, and near-duplicate texts collapse to the
                # newest one. Off by default so existing callers keep
                # the legacy "everything" payload.
-               latest_only: bool = False) -> dict[str, list[dict]]:
+               latest_only: bool = False,
+               # Audit 2026-11-15 (loop-memory 0.4.22): agent / user
+               # namespace. Applied **inside** the query so the LIMIT
+               # counts only the caller's own rows. ``None`` (the
+               # default) keeps the legacy "see everything" behaviour.
+               agent_id: str | None = None,
+               user_id: str | None = None) -> dict[str, list[dict]]:
         """Unified recall -- returns a dict with three ranked lists.
 
         Each result is tagged with its ``kind`` ("memory" | "wiki" |
@@ -2625,6 +2697,15 @@ class MemoryStore:
         ``SearchMemoryOptions.latest_only`` parity flag: the reply
         contains at most one row per logical fact. See
         ``_filter_latest_only`` for the exact rules.
+
+        ``agent_id`` / ``user_id`` (audit 2026-11-15, loop-memory
+        0.4.22) restrict the answer to one agent / user namespace.
+        The predicate is part of the SQL, so the ``LIMIT`` is applied
+        to the *scoped* row set -- a foreign namespace can no longer
+        eat the caller's result budget. Rows with a NULL
+        ``agent_id`` / ``user_id`` are global and stay visible to
+        everyone. ``None`` (default) means "no restriction", which is
+        the legacy behaviour.
         """
         import time as _time
         tokens = self._tokenize(query)
@@ -2644,10 +2725,15 @@ class MemoryStore:
                 # ``invalid_at`` > ``as_of``). The partial index on
                 # ``(valid_at, invalid_at)`` keeps the predicate cheap.
                 validity_sql, validity_params = _validity_clause(as_of_ts)
+                # Audit 2026-11-15 (loop-memory 0.4.22): the namespace
+                # predicate is part of the query, so the LIMIT below
+                # counts only rows the caller is allowed to see.
+                scope_sql, scope_params = _scope_clause(agent_id, user_id, alias="m")
                 sql = (
                     "SELECT m.id, m.kind, m.text, m.importance, m.score, m.source, "
                     "m.tags, m.created_at, m.updated_at, "
                     "m.valid_at, m.invalid_at, m.subject_key, "
+                    "m.agent_id, m.user_id, "
                     "COALESCE(s.recall_count, 0) AS recall_count, "
                     "m.superseded_by "
                     "FROM memories m "
@@ -2655,11 +2741,12 @@ class MemoryStore:
                     f"WHERE m.superseded_by IS NULL "
                     f"  AND ({clause} OR {tag_clause}) "
                     f"  AND {validity_sql} "
+                    f"  {scope_sql} "
                     "ORDER BY m.score DESC, m.importance DESC, m.created_at DESC "
                     "LIMIT ?"
                 )
                 rows = c.execute(
-                    sql, (*params, *tag_params, *validity_params, limit * 3)
+                    sql, (*params, *tag_params, *validity_params, *scope_params, limit * 3)
                 ).fetchall()
                 # Short-query mode: when a query has only 1-2 tokens the
                 # lexical overlap is too narrow to rank by itself, so we
@@ -2738,6 +2825,15 @@ class MemoryStore:
                         # Audit 2026-10-25: the logical slot this row
                         # occupies (NULL = standalone fact).
                         "subject_key": r["subject_key"],
+                        # Audit 2026-11-15 (loop-memory 0.4.22): the
+                        # namespace this row belongs to. The legacy
+                        # ``recall()`` path used to omit these, which
+                        # made every namespace filter applied on top
+                        # of its output a silent no-op -- an agent
+                        # asking for its own namespace was handed
+                        # every other agent's memories too.
+                        "agent_id": r["agent_id"] if "agent_id" in r.keys() else None,
+                        "user_id": r["user_id"] if "user_id" in r.keys() else None,
                     })
                 out["memories"].sort(key=lambda m: -m["score"])
 
@@ -3618,6 +3714,10 @@ class MemoryStore:
         source: str | None = None,
         max_chars: int | None = None,
         level: int = 1,
+        # Audit 2026-11-15 (loop-memory 0.4.22): agent / user
+        # namespace, applied in SQL like every other recall path.
+        agent_id: str | None = None,
+        user_id: str | None = None,
     ) -> dict[str, list[dict]]:
         """Bi-temporal recall (audit 2026-09-20, loomcycle v1.33+).
 
@@ -3652,6 +3752,7 @@ class MemoryStore:
         with self._conn() as c:
             out = _apply_as_of_filters(
                 c, tokens, include, source, as_of, limit,
+                agent_id=agent_id, user_id=user_id,
             )
         if level <= 0:
             for m in out["memories"]:
@@ -3803,6 +3904,13 @@ class MemoryStore:
         # see ``recall()`` / ``_filter_latest_only``. Collapses the
         # fused result to one answer per logical fact.
         latest_only: bool = False,
+        # Audit 2026-11-15 (loop-memory 0.4.22): agent / user
+        # namespace. Every channel (BM25, semantic, entity) carries
+        # the predicate in its SQL, so the fused ranking -- and the
+        # ``limit`` that trims it -- only ever sees the caller's own
+        # rows.
+        agent_id: str | None = None,
+        user_id: str | None = None,
     ) -> dict[str, list[dict]]:
         """RRF-fused recall with token / char budget cap.
 
@@ -3820,6 +3928,13 @@ class MemoryStore:
 
         ``latest_only`` (audit 2026-10-25) collapses the fused result
         to one answer per logical fact (Mem0 v2 parity).
+
+        ``agent_id`` / ``user_id`` (audit 2026-11-15, loop-memory
+        0.4.22) restrict every retrieval channel to one namespace.
+        The predicate lives in the channel SQL rather than in a
+        post-hoc filter, so a foreign namespace can neither leak a row
+        nor consume the caller's result budget. ``None`` (default)
+        keeps the legacy "see everything" behaviour.
         """
         """RRF-fused recall across BM25 + semantic + entity channels.
 
@@ -3861,7 +3976,8 @@ class MemoryStore:
         bm25_wiki: list[dict] = []
         if "memories" in include:
             bm25_mem = bm25_search(self, query, kind="memories", limit=bm25_pool,
-                                   source_filter=source)
+                                   source_filter=source,
+                                   agent_id=agent_id, user_id=user_id)
         if "wiki" in include:
             bm25_wiki = bm25_search(self, query, kind="wiki", limit=bm25_pool,
                                     source_filter=source)
@@ -3876,7 +3992,10 @@ class MemoryStore:
         try:
             q_emb = self._embed_query(query)
             if q_emb:
-                sem_mem_rows = self.search_by_embedding(q_emb, top_k=embed_pool)
+                sem_mem_rows = self.search_by_embedding(
+                    q_emb, top_k=embed_pool,
+                    agent_id=agent_id, user_id=user_id,
+                )
                 sem_mem = [{"id": r.id, "_score": float(r.score or 0)} for r in sem_mem_rows]
                 sem_wiki = self.search_wiki_by_embedding(q_emb, top_k=embed_pool)
                 sem_wiki = [{"id": r["id"], "_score": float(r.get("importance", 0))} for r in sem_wiki]
@@ -3895,7 +4014,8 @@ class MemoryStore:
                     ent_rows = self.search_entities_by_names(names, limit=bm25_pool)
                     ent_entities = [{"id": r["id"], "_score": float(r.get("weight", 0))} for r in ent_rows]
                     ent_mem = self.search_memories_by_entity_names(
-                        names, limit=bm25_pool, source_filter=source
+                        names, limit=bm25_pool, source_filter=source,
+                        agent_id=agent_id, user_id=user_id,
                     )
             except Exception:
                 pass
@@ -4526,7 +4646,12 @@ class MemoryStore:
         return [dict(r) for r in rows]
 
     def search_memories_by_entity_names(
-        self, names: list[str], limit: int = 50, source_filter: str | None = None
+        self, names: list[str], limit: int = 50, source_filter: str | None = None,
+        # Audit 2026-11-15 (loop-memory 0.4.22): namespace predicate,
+        # applied in SQL so a foreign namespace cannot eat the
+        # channel's LIMIT budget.
+        agent_id: str | None = None,
+        user_id: str | None = None,
     ) -> list[dict]:
         if not names:
             return []
@@ -4544,17 +4669,21 @@ class MemoryStore:
             return []
         with self._conn() as c:
             qmarks = ",".join("?" * len(candidates))
+            scope_sql, scope_params = _scope_clause(agent_id, user_id, alias="m")
             sql = (
                 f"""SELECT m.id, MAX(m.score) AS mem_score
                     FROM memories m
                     JOIN entity_mentions em ON em.memory_id = m.id
                     JOIN entities e ON e.id = em.entity_id
-                    WHERE LOWER(e.name) IN ({qmarks})
+                    WHERE (LOWER(e.name) IN ({qmarks})
                        OR LOWER(e.name) LIKE '%:' || ?
-                       OR LOWER(e.name) = ?
+                       OR LOWER(e.name) = ?)
                  """
             )
             params: list = list(candidates) + [candidates[0], candidates[0]]
+            if scope_sql:
+                sql += f"{scope_sql} "
+                params.extend(scope_params)
             if source_filter:
                 sql += " AND (m.source LIKE ? OR m.source LIKE ?) "
                 tok = self._source_token(source_filter)
@@ -4565,7 +4694,12 @@ class MemoryStore:
         return [{"id": r["id"], "_score": float(r["mem_score"] or 0)} for r in rows]
 
     def search_by_embedding(
-        self, query_embedding: list[float], top_k: int = 20
+        self, query_embedding: list[float], top_k: int = 20,
+        # Audit 2026-11-15 (loop-memory 0.4.22): namespace predicate,
+        # applied in SQL so the semantic channel only ever sees the
+        # caller's own rows.
+        agent_id: str | None = None,
+        user_id: str | None = None,
     ) -> list[StoredMemory]:
         """Brute-force cosine over every row. Fine up to ~10k items."""
         if not query_embedding:
@@ -4574,9 +4708,12 @@ class MemoryStore:
             # Audit 2026-10-25 (loop-memory 0.4.16): skip superseded
             # rows so the semantic channel agrees with the BM25
             # channel and with ``recall()``.
+            scope_sql, scope_params = _scope_clause(agent_id, user_id, alias="m")
             rows = c.execute(
-                "SELECT * FROM memories "
-                "WHERE embedding IS NOT NULL AND superseded_by IS NULL"
+                "SELECT m.* FROM memories m "
+                "WHERE m.embedding IS NOT NULL AND m.superseded_by IS NULL "
+                f"  {scope_sql}",
+                scope_params,
             ).fetchall()
         scored: list[tuple[float, StoredMemory]] = []
         for r in rows:

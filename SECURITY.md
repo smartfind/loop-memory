@@ -21,11 +21,19 @@ you report anything:
 | Audit | `loop_memory/storage/sqlite_store.py` | 12 SQLite triggers make the audit log impossible to skip, even for a raw `sqlite3` writer |
 | **Transport** | **`loop_memory/security/transport.py`** | **since 0.4.21: the SDK refuses to send memory data — or the bearer token — over plaintext `http://` to a non-loopback host, refuses URLs with embedded credentials, and refuses redirects that downgrade the scheme or would replay the `Authorization` header** |
 | Server exposure | `loop-memory doctor` | `plaintext_exposure` warns when the API is bound to a non-loopback interface and therefore reachable from the network over cleartext |
+| **Namespace isolation** | **`loop_memory/storage/sqlite_store.py`** | **since 0.4.22: the agent / user namespace predicate is applied inside the SQL of every retrieval channel, so a scoped caller cannot read another namespace's rows and a foreign namespace cannot consume the caller's result budget** |
 
 The transport layer is documented in
 [`docs/transport-security.md`](docs/transport-security.md); the
 `allow_insecure=True` escape hatch (for a private tunnel or a VPN'd
 LAN) is explicit and warns on every use.
+
+The namespace layer is documented in
+[`docs/namespace-isolation.md`](docs/namespace-isolation.md). A memory
+written without an `agent_id` / `user_id` is **global** and visible to
+every caller by design — the ingest pipeline, the consolidator and the
+dream job all write global rows. A memory that *names* a namespace is
+visible only inside it.
 
 ## Reporting a vulnerability
 

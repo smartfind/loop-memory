@@ -218,6 +218,50 @@ returned both versions of a superseded fact, contradicting the contract
 rows — which is also what makes `latest_only` correct on the path the
 CLI, the MCP server and the dashboard actually use.
 
+## Namespace isolation in the retrieval pipeline (audit 2026-11-15, loop-memory 0.4.22)
+
+Every memory row carries an optional `(agent_id, user_id)` pair — the
+*namespace*. A row with both `NULL` is **global** (the ingest
+pipeline, the consolidator and the dream job all write global rows);
+a row that names a namespace belongs to it.
+
+The namespace predicate is applied **inside the SQL of every retrieval
+channel**, not on top of the fused answer:
+
+| Channel | Entry point | Where the predicate lands |
+| --- | --- | --- |
+| BM25 (FTS5) | `storage/retrieval.py::bm25_search` | the `MATCH` query **and** the `LIKE` backstop |
+| Semantic | `storage/sqlite_store.py::search_by_embedding` | the `SELECT ... WHERE` |
+| Entity | `storage/sqlite_store.py::search_memories_by_entity_names` | the `WHERE` on the joined query |
+| Legacy | `storage/sqlite_store.py::recall` | the `WHERE` on the memories query |
+| Bi-temporal | `storage/sqlite_store.py::recall_as_of` | the `WHERE` on the memories query |
+
+All of them build the predicate from one helper,
+`storage/sqlite_store.py::_scope_clause`, so the rule cannot drift
+between channels:
+
+```sql
+(agent_id IS NULL OR agent_id = :agent_id)
+AND (user_id  IS NULL OR user_id  = :user_id)
+```
+
+Because the predicate is in the query, the `LIMIT` counts only the
+caller's own rows — before 0.4.22 the filter ran after the `LIMIT`,
+so a foreign namespace could spend the whole result budget and a
+scoped caller could get zero hits.
+
+`recall_hybrid()` fuses the three channels with RRF and trims the
+result to `limit`. Because every channel is scoped, the fused
+ranking only ever contains rows the caller may see.
+
+The surfaces that expose it: `GET /api/v1/recall`,
+`GET /api/recall`, the MCP `recall` tool (scoped to
+`LOOP_MEMORY_AGENT_ID` / `LOOP_MEMORY_USER_ID`), the SDK clients
+(a client bound to a namespace reads from it), and
+`loop-memory recall --agent-id … --user-id …`.
+
+Full contract: `docs/namespace-isolation.md`.
+
 ## Lexical ranking + the retrieval-quality benchmark (audit 2026-11-01, loop-memory 0.4.18)
 
 ### Why the lexical channel was re-written

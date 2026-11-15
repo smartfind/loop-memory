@@ -49,6 +49,15 @@ Every memory carries three optional identity columns:
 A memory with `agent_id IS NULL` and `user_id IS NULL` is **global**
 and visible to every caller. Set them when you want isolation.
 
+**Since 0.4.22 the namespace is enforced in the query.** `recall()`
+applies the namespace predicate inside the SQL of every retrieval
+channel, so the `limit` counts only the caller's own rows and a
+foreign namespace can neither leak a row nor eat the result budget.
+A client built with `MemoryClient.memory(store, agent_id="x")` now
+**reads** from `x` as well as writes into it; pass `agent_id=""`
+for the explicit escape hatch. See
+[`docs/namespace-isolation.md`](namespace-isolation.md).
+
 ## Python SDK (in-process)
 
 ```python

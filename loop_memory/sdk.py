@@ -298,6 +298,14 @@ class MemoryClient(MemoryClientExt, AbstractContextManager):
         validity window are dropped, subject-key slots collapse to
         their newest live row, and near-duplicate texts collapse to
         the newest one.
+
+        ``agent_id`` / ``user_id`` (audit 2026-11-15, loop-memory
+        0.4.22) restrict the answer to one namespace. A client built
+        with ``MemoryClient.memory(..., agent_id=...)`` /
+        ``MemoryClient.http(..., agent_id=...)`` falls back to that
+        identity, so a client that *writes* into a namespace also
+        *reads* from it. Memories written without an agent / user id
+        are global and stay visible to everyone.
         """
         raise NotImplementedError
 
@@ -416,12 +424,28 @@ class _InProcessClient(MemoryClient):
         # the legacy LIKE-based ``recall`` if a stale DB doesn't have
         # it (older installs, tests).
         wanted = tuple(s.strip() for s in include.split(",") if s.strip())
+        # Audit 2026-11-15 (loop-memory 0.4.22): the namespace the
+        # client was built with is the namespace it reads from. The
+        # predicate is applied inside the store's SQL so the limit
+        # counts only the caller's own rows.
+        # An explicit empty string means "no restriction"; ``None``
+        # falls back to the identity the client was built with.
+        if agent_id is None:
+            scope_agent = self._default_agent_id
+        else:
+            scope_agent = (str(agent_id).strip() or None)
+        if user_id is None:
+            scope_user = self._default_user_id
+        else:
+            scope_user = (str(user_id).strip() or None)
         if hasattr(self._store, "recall_hybrid"):
             r = self._store.recall_hybrid(
                 query, limit=limit, include=wanted,
                 bump_signals=True, source=source, level=level,
                 max_chars=max_chars,
                 latest_only=latest_only,
+                agent_id=scope_agent,
+                user_id=scope_user,
             )
         else:
             r = self._store.recall(
@@ -432,9 +456,13 @@ class _InProcessClient(MemoryClient):
                 max_chars=max_chars,
                 level=level,
                 latest_only=latest_only,
+                agent_id=scope_agent,
+                user_id=scope_user,
             )
-        # Optional post-filter: even if the store returned hits, the
-        # caller may want only their agent's namespace.
+        # Defence in depth: the store already applied the namespace
+        # predicate inside its SQL, so this can only ever remove a
+        # row the SQL should not have returned anyway. It is kept so
+        # a future regression in the SQL cannot leak a row.
         def _own(h: dict[str, Any]) -> bool:
             ag = h.get("agent_id")
             ur = h.get("user_id")
@@ -443,9 +471,9 @@ class _InProcessClient(MemoryClient):
             # match the caller's filter or be unset on the memory.
             if ag is None and ur is None:
                 return True
-            if agent_id is not None and ag not in (None, agent_id):
+            if scope_agent is not None and ag not in (None, scope_agent):
                 return False
-            if user_id is not None and ur not in (None, user_id):
+            if scope_user is not None and ur not in (None, scope_user):
                 return False
             return True
         return RecallResult(
@@ -780,10 +808,24 @@ class _HttpClient(MemoryClient):
             params["latest_only"] = "1"
         if max_chars is not None:
             params["max_chars"] = int(max_chars)
-        if agent_id is not None:
-            params["agent_id"] = agent_id
-        if user_id is not None:
-            params["user_id"] = user_id
+        # Audit 2026-11-15 (loop-memory 0.4.22): a client built with
+        # ``MemoryClient.http(..., agent_id=...)`` writes into that
+        # namespace, so it reads from it too. The server applies the
+        # namespace predicate inside its SQL.
+        # An explicit empty string means "no restriction"; ``None``
+        # falls back to the identity the client was built with.
+        if agent_id is None:
+            scope_agent = self._default_agent_id
+        else:
+            scope_agent = (str(agent_id).strip() or None)
+        if user_id is None:
+            scope_user = self._default_user_id
+        else:
+            scope_user = (str(user_id).strip() or None)
+        if scope_agent is not None:
+            params["agent_id"] = scope_agent
+        if scope_user is not None:
+            params["user_id"] = scope_user
         qs = urllib.parse.urlencode({k: v for k, v in params.items() if v != ""})
         resp = self._request("GET", f"/api/v1/recall?{qs}")
         return RecallResult(

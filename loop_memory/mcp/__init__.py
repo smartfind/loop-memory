@@ -77,7 +77,27 @@ def tool_recall(arguments: dict[str, Any]) -> list[dict[str, Any]]:
     if not query:
         return [_err("missing 'query' argument")]
     store = _store()
-    source = arguments.get("source") or _agent_context()[0]
+    ctx_agent, ctx_user = _agent_context()
+    source = arguments.get("source") or ctx_agent
+    # Audit 2026-11-15 (loop-memory 0.4.22): namespace isolation.
+    # The MCP server is started once per client (Codex, Claude Code,
+    # Hermes, ...), so ``LOOP_MEMORY_AGENT_ID`` / ``LOOP_MEMORY_USER_ID``
+    # already identify the caller. The recall tool now scopes the
+    # answer to that namespace -- inside the store's SQL, so a foreign
+    # namespace can neither leak a row nor eat the result budget.
+    # An explicit ``agent_id`` / ``user_id`` argument overrides the
+    # environment; passing an empty string means "no restriction",
+    # which keeps the legacy see-everything behaviour reachable.
+    agent_id = arguments.get("agent_id")
+    if agent_id is None:
+        agent_id = ctx_agent
+    elif not str(agent_id).strip():
+        agent_id = None
+    user_id = arguments.get("user_id")
+    if user_id is None:
+        user_id = ctx_user
+    elif not str(user_id).strip():
+        user_id = None
     # Audit 2026-10-05: thread ``max_chars`` (token / char budget cap)
     # + ``level`` (tiered-loader) through the MCP tool so an MCP-aware
     # agent loop can ask for a bounded retrieval inline. ``None`` and
@@ -98,7 +118,8 @@ def tool_recall(arguments: dict[str, Any]) -> list[dict[str, Any]]:
     except (TypeError, ValueError):
         level = 1
     r = store.recall(query, limit=limit, source=source,
-                     max_chars=max_chars, level=level)
+                     max_chars=max_chars, level=level,
+                     agent_id=agent_id, user_id=user_id)
     n_mem = len(r["memories"])
     n_wiki = len(r["wiki"])
     n_ent = len(r["entities"])
@@ -528,6 +549,22 @@ TOOLS = [
             "properties": {
                 "query": {"type": "string", "description": "Free-text query"},
                 "limit": {"type": "integer", "description": "Max results (default 8, max 50)"},
+                "agent_id": {
+                    "type": "string",
+                    "description": (
+                        "Agent namespace to scope the answer to "
+                        "(overrides LOOP_MEMORY_AGENT_ID). Empty string "
+                        "means no restriction."
+                    ),
+                },
+                "user_id": {
+                    "type": "string",
+                    "description": (
+                        "User namespace to scope the answer to "
+                        "(overrides LOOP_MEMORY_USER_ID). Empty string "
+                        "means no restriction."
+                    ),
+                },
             },
             "required": ["query"],
         },
