@@ -22,6 +22,7 @@ you report anything:
 | **Transport** | **`loop_memory/security/transport.py`** | **since 0.4.21: the SDK refuses to send memory data — or the bearer token — over plaintext `http://` to a non-loopback host, refuses URLs with embedded credentials, and refuses redirects that downgrade the scheme or would replay the `Authorization` header** |
 | Server exposure | `loop-memory doctor` | `plaintext_exposure` warns when the API is bound to a non-loopback interface and therefore reachable from the network over cleartext |
 | **Namespace isolation** | **`loop_memory/storage/sqlite_store.py`** | **since 0.4.22: the agent / user namespace predicate is applied inside the SQL of every retrieval channel, so a scoped caller cannot read another namespace's rows and a foreign namespace cannot consume the caller's result budget** |
+| **Namespace isolation on writes** | **`loop_memory/storage/sqlite_store.py`** | **since 0.4.23: a write may only touch rows of its own namespace. The `external_id` re-route, the content-hash dedup and the subject-key supersession all match `(agent_id, user_id)` exactly (null-safe `IS`), so an agent-scoped write can no longer supersede a global row of the same slot, nor collapse onto a global row with the same text and overwrite it. The global namespace `(NULL, NULL)` is a namespace like any other** |
 
 The transport layer is documented in
 [`docs/transport-security.md`](docs/transport-security.md); the
@@ -34,6 +35,14 @@ written without an `agent_id` / `user_id` is **global** and visible to
 every caller by design — the ingest pipeline, the consolidator and the
 dream job all write global rows. A memory that *names* a namespace is
 visible only inside it.
+
+Since 0.4.23 the same rule governs **writes**: a write may only touch
+rows of its own namespace, so an agent can no longer overwrite shared
+global knowledge by writing a row that happens to carry the same
+text, nor take over a global logical slot by pushing a new value into
+it. Before that release the namespace predicate on the write path had
+a second branch that also matched the global rows for every caller
+that had an agent but no user.
 
 ## Reporting a vulnerability
 

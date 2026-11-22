@@ -1,3 +1,125 @@
+## [0.4.23] - 2026-11-22
+
+### fix
+
+- **A write can no longer leave its namespace.** The weekly audit for
+  this release (2026-11-22) read the same upstream theme the
+  ecosystem converged on — *a slot has an identity, and it has a
+  clock* — against Loop Memory's own **write** path, and found that
+  the namespace guarantee of 0.4.22 stopped at the store's read
+  side. `MemoryStore.upsert_memory()` matched the namespace with
+
+  ```sql
+  ((agent_id IS :agent AND user_id IS :user)
+   OR (agent_id IS NULL AND user_id IS NULL AND :user IS NULL))
+  ```
+
+  The second branch was gated on the **user_id** parameter, so it
+  fired for every caller that had an agent but no user — the common
+  case. Two consequences, both reproduced before the fix:
+
+  * **An agent-scoped write superseded a *global* row of the same
+    logical slot.** The shared fact silently disappeared from every
+    other caller's recall and was replaced by one agent's private
+    value.
+  * **An agent-scoped write collapsed onto a *global* row with the
+    same text and overwrote it**, re-labelling the shared row with
+    the agent's own `agent_id` — so every other caller lost the
+    memory entirely.
+
+  The namespace is now matched **exactly**, one `(agent_id, user_id)`
+  pair, with SQLite's null-safe `IS` operator. The global namespace
+  `(NULL, NULL)` is a namespace like any other: it matches itself
+  and nothing else. The predicate now covers all three write paths —
+  the `external_id` re-route, the content-hash dedup and the
+  subject-key supersession. See `docs/namespace-isolation.md`.
+
+- **A logical fact slot is ordered by *fact time*, not by arrival
+  time.** Supersession used to be "whatever was written last wins",
+  so a fact that arrived late but happened *earlier* — replaying an
+  old transcript, a backfill, a re-run of the consolidator — took the
+  slot away from the current conclusion and the store answered with
+  the stale value. The slot now keeps the version with the greatest
+
+  ```
+  fact_time = COALESCE(valid_at, created_at)
+  ```
+
+  A write whose fact time is **older** than the slot's live version
+  no longer takes the slot: it is recorded as the historical version
+  (the pointer still reads forward, old → new, and no row is ever
+  deleted), and the newer conclusion keeps answering the query.
+  `_filter_latest_only()` picks the winner of a slot by the same key,
+  so the read side and the write side cannot disagree about which
+  version of a fact is current.
+
+  Upstream pattern reference (no code copied):
+  `TencentCloud/TencentDB-Agent-Memory` v2.0.4 (2026-11-19) —
+  "整理按对话发生的时间排序，后到的更早事实不再覆盖较新的结论"
+  (organise by when the conversation happened; a later-arriving
+  earlier fact no longer overwrites a newer conclusion).
+
+- **`POST /api/v1/memories` stores the `created_at` it already
+  validated.** The route parsed `created_at`, rejected a non-numeric
+  value with a `400`, and then **dropped it** — the row was stamped
+  with "now". That is what made a fact's *fact time*
+  indistinguishable from its *arrival time*, and it is what let a
+  stale replay win a logical slot. The batch route and the SDK
+  already honoured it, so the two surfaces of the same operation
+  disagreed; they agree now. Upstream pattern reference (no code
+  copied): `thedotmack/claude-mem` v15.19.0 (#6105) — the MCP
+  `save_memory` tool honours the same exclusion rule the HTTP route
+  already honoured, because *one operation must enforce one rule on
+  every surface*.
+
+- **A global `external_id` re-push updates the row in place.** The
+  re-route was guarded by `agent_id is not None`, so a caller with no
+  agent never re-routed and every re-push of the same `external_id`
+  created another row. The unique index `(agent_id, user_id,
+  external_id)` cannot catch it either: SQLite treats NULLs as
+  distinct inside a unique index, so two global rows carrying the
+  same `external_id` are perfectly legal. The re-route now runs for
+  every namespace, matched exactly.
+
+### feature
+
+- **`POST /api/v1/memories:batch` accepts `subject_key`.** A logical
+  fact slot could only be written one row at a time, which made it
+  unusable for exactly the "many facts, one answer each" workloads
+  it exists for. Each batch item now takes the same body as the
+  single-item route.
+
+### test
+
+- 22 new regression cases in
+  `tests/test_fact_slots_2026_11_22.py`; **9 of them fail against
+  0.4.22**, so they pin the defects rather than the implementation.
+  They cover: the namespace of a write (global vs agent vs user, and
+  the same-namespace regression), `external_id` idempotency in every
+  namespace, fact-time ordering (a late-arriving older fact, a newer
+  fact arriving later, `valid_at` winning over `created_at`, the
+  supersession chain still answering `recall_as_of`), and the fact
+  time surviving the single-item route, the batch route and both SDK
+  backends. Suite at **1106 passed / 4 skipped**.
+
+### doc
+
+- `docs/namespace-isolation.md` — a new *write side* section: the
+  namespace rule, what the old predicate did, the fact-time rule,
+  the per-surface support matrix for `created_at` / `subject_key`,
+  and the `external_id` guarantee.
+- `docs/architecture.md` — the subject-key write path now shows the
+  fact-time ordered, namespace-exact SQL, plus a new section on
+  namespace isolation in the write path.
+- `docs/api.md` — `POST /api/v1/memories` documents `created_at` and
+  the write-side guarantees; the batch route documents `subject_key`.
+- `SECURITY.md` — a new *namespace isolation on writes* row and the
+  matching prose.
+- `docs/research/2026-11-22.md` — the weekly audit this release came
+  from: 113 releases across 16 of the 32 watched repositories, the
+  release bodies read in full, and the adopt / defer / reject
+  decisions.
+
 ## [0.4.22] - 2026-11-15
 
 ### feature

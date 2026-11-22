@@ -135,20 +135,41 @@ idx_mem_subject_key               -- partial index, only keyed rows
 
 Two rows sharing `(subject_key, agent_id, user_id)` are two *versions*
 of one fact. The write path makes the new row live and supersedes the
-previous one:
+previous one — **inside the same namespace**, and **in fact-time
+order** (audit 2026-11-22, loop-memory 0.4.23):
 
 ```sql
-UPDATE memories SET superseded_by = :new_id
-WHERE id != :new_id AND superseded_by IS NULL
-  AND subject_key = :key
-  AND ((agent_id IS :agent AND user_id IS :user)
-       OR (agent_id IS NULL AND user_id IS NULL AND :user IS NULL))
+-- the live rows of this slot, in this namespace only
+SELECT id, COALESCE(valid_at, created_at) AS fact_time
+FROM memories
+WHERE superseded_by IS NULL AND subject_key = :key
+  AND agent_id IS :agent AND user_id IS :user;
+
+-- the newcomer wins the slot when its fact time is not older
+UPDATE memories SET superseded_by = :new_id WHERE id = :older_id;
+-- and loses it when it is: the live row keeps the slot
+UPDATE memories SET superseded_by = :live_id WHERE id = :new_id;
 ```
+
+Two rules changed here, both about *which* row owns the slot:
+
+* **The namespace is matched exactly.** The old predicate carried a
+  second branch — "or the row is global and the caller has no
+  `user_id`" — so an agent-scoped write superseded a *global* row of
+  the same slot, and an agent write with the same text as a global
+  row collapsed onto it and overwrote it. The global namespace
+  `(NULL, NULL)` is now a namespace like any other.
+* **The slot is ordered by fact time**, `COALESCE(valid_at,
+  created_at)`, not by arrival. A fact that arrived late but happened
+  earlier is recorded as the historical version instead of replacing
+  the newer conclusion. `_filter_latest_only()` picks the winner by
+  the same key, so the read side and the write side agree.
 
 No row is deleted, so `recall_as_of()` still answers "what did we
 believe last week?". The content-hash dedup path is slot-aware too —
 two *different* slots holding the same text stay two rows, otherwise a
-slot would silently swallow another one.
+slot would silently swallow another one — and namespace-aware too, for
+the same reason the supersession is.
 
 ### Latest-only recall
 
@@ -259,6 +280,49 @@ The surfaces that expose it: `GET /api/v1/recall`,
 `LOOP_MEMORY_AGENT_ID` / `LOOP_MEMORY_USER_ID`), the SDK clients
 (a client bound to a namespace reads from it), and
 `loop-memory recall --agent-id … --user-id …`.
+
+Full contract: `docs/namespace-isolation.md`.
+
+## Namespace isolation in the write path (audit 2026-11-22, loop-memory 0.4.23)
+
+The retrieval predicate above is the *read* half of the namespace
+model. The *write* half lives in `MemoryStore.upsert_memory()`, and
+it is where two of the four defects fixed in 0.4.23 sat.
+
+**A write may only touch its own namespace.** The namespace is the
+pair `(agent_id, user_id)`, compared with SQLite's null-safe `IS`:
+
+| Path | Namespace predicate (0.4.23) |
+| --- | --- |
+| `external_id` re-route | `agent_id IS :agent AND user_id IS :user` |
+| content-hash dedup | `agent_id IS :agent AND user_id IS :user` |
+| subject-key supersession | `agent_id IS :agent AND user_id IS :user` |
+
+Before 0.4.23 all three carried a second branch — `OR (agent_id IS
+NULL AND user_id IS NULL AND :user IS NULL)` — which matched the
+**global** rows for every caller that had an agent but no user. An
+agent write could therefore supersede a global row of the same slot,
+or collapse onto a global row with the same text and overwrite it.
+The global namespace `(NULL, NULL)` is now matched by the same rule
+as every other namespace.
+
+**A slot is ordered by fact time.** The live version of a
+`(subject_key, agent_id, user_id)` slot is the one with the greatest
+
+```
+fact_time = COALESCE(valid_at, created_at)
+```
+
+not the one that was written last. A write whose fact time is older
+becomes the historical version and the live row keeps the slot.
+`_filter_latest_only()` picks the winner by the same key, so the read
+side and the write side cannot disagree.
+
+For the fact time to be meaningful it has to survive the surface, so
+`POST /api/v1/memories` now stores the `created_at` it already
+validated (the batch route and the SDK always did), and
+`POST /api/v1/memories:batch` gained `subject_key` so a slot can be
+written in bulk.
 
 Full contract: `docs/namespace-isolation.md`.
 

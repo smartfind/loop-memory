@@ -1,4 +1,4 @@
-# Namespace isolation — who may read which memory
+# Namespace isolation — who may read which memory, and who may write it
 
 > **Status:** shipped in **0.4.22** (2026-11-15).
 > Audit: `docs/research/2026-11-15.md`.
@@ -186,6 +186,106 @@ the ones the ingest pipeline writes.
 
 ---
 
+## The write side (audit 2026-11-22, loop-memory 0.4.23)
+
+0.4.22 made the namespace a **read** guarantee. 0.4.23 closes the
+other half: a namespace is a **write** guarantee too.
+
+### The rule
+
+> A write touches **only** the rows of its own namespace.
+
+The namespace of a memory is the pair `(agent_id, user_id)`, compared
+with SQLite's null-safe `IS` operator:
+
+| `agent_id` | `user_id` | namespace |
+| --- | --- | --- |
+| `NULL` | `NULL` | **global** — shared by every caller |
+| `"codex"` | `NULL` | the `codex` agent, no user |
+| `"codex"` | `"alice"` | the `codex` agent acting for `alice` |
+
+The global namespace is a namespace like any other. An agent-scoped
+write does **not** reach into it.
+
+### What was broken
+
+`MemoryStore.upsert_memory()` matched the namespace with
+
+```sql
+((agent_id IS ? AND user_id IS ?)              -- the caller's own rows
+ OR (agent_id IS NULL AND user_id IS NULL AND ? IS NULL))  -- the global rows
+```
+
+The second branch was gated on the **user_id** parameter, so it
+fired for every caller that had an agent but no user — the common
+case. Two consequences, both reproduced before the fix:
+
+1. **An agent write superseded a global row of the same slot.** The
+   shared fact disappeared from every other caller's recall and was
+   replaced by one agent's private value.
+2. **An agent write collapsed onto a global row with the same text
+   and overwrote it**, re-labelling the shared row with the agent's
+   own `agent_id`. Every other caller lost the memory.
+
+Both are now impossible: the namespace is matched *exactly*, one
+`(agent_id, user_id)` pair.
+
+### A slot has a clock (fact time, not arrival time)
+
+A logical fact slot (`subject_key`) keeps **one** live version. The
+live version used to be "whatever was written last", which meant a
+fact that arrived late but happened *earlier* could take the slot
+away from the current conclusion — replaying an old transcript made
+the store answer with the stale value.
+
+The slot is now ordered by **fact time**:
+
+```
+fact_time = COALESCE(valid_at, created_at)
+```
+
+* `created_at` is when the fact became true (or, when the caller did
+  not say, when it was written);
+* `valid_at` is when the fact starts being true, and wins over
+  `created_at` when both are present.
+
+A write whose fact time is **older** than the slot's live version
+does not take the slot. It is recorded as the historical version
+instead: the pointer still reads forward (old → new), the row is
+never deleted, and the newer conclusion keeps answering the query.
+
+The read side agrees: `_filter_latest_only()` picks the winner of a
+slot by the same fact time, so the write path and the read path
+cannot disagree about which version of a fact is current.
+
+### The fact time has to survive the surface
+
+`POST /api/v1/memories` used to parse `created_at`, validate it, and
+then **drop it** — the row was stamped with "now". The batch route
+and the SDK already honoured it, so the two surfaces of the same
+operation disagreed.
+
+| Surface | `created_at` | `subject_key` |
+| --- | --- | --- |
+| `POST /api/v1/memories` | honoured since 0.4.23 | since 0.4.16 |
+| `POST /api/v1/memories:batch` | since 0.4.15 | since 0.4.23 |
+| `MemoryClient.remember(...)` (in-process) | since 0.4.16 | since 0.4.16 |
+| `MemoryClient.remember(...)` (HTTP) | since 0.4.23 | since 0.4.16 |
+
+### `external_id` is idempotent everywhere
+
+The unique index is `(agent_id, user_id, external_id)`, but SQLite
+treats NULLs as distinct inside a unique index — so two global rows
+with the same `external_id` are perfectly legal. The re-route was
+also guarded by `agent_id is not None`, so a global caller never
+re-routed at all and every re-push created another row.
+
+The re-route now runs for **every** namespace, matched exactly, so
+re-pushing the same `(agent_id, user_id, external_id)` updates the row
+in place — in the global namespace too.
+
+---
+
 ## Upstream pattern references
 
 Patterns only — no code was copied.
@@ -197,6 +297,8 @@ Patterns only — no code was copied.
 | `thedotmack/claude-mem` | v15.16.x → v15.18.4 (2026-11-11 → 11-15) | "each eve scope gets its own claude-mem project by default"; per-host hook identity; bounded listing offsets |
 | `vectorize-io/hindsight` | v1.2.1 (2026-11-10) | #6280 — a bank clone can no longer take over another bank's alias |
 | `rohitg00/agentmemory` | v0.9.33 (2026-11-09) | "enrichment scoped to the current project" (#1220); "scoped reflection stays in its project" (#1544) |
+| `TencentCloud/TencentDB-Agent-Memory` | v2.0.4 (2026-11-19) | "整理按对话发生的时间排序，后到的更早事实不再覆盖较新的结论" — order the consolidation by when the conversation happened, so a later-arriving earlier fact no longer overwrites a newer conclusion |
+| `thedotmack/claude-mem` | v15.19.0 (2026-11-16) | #6105 — the MCP `save_memory` tool honours the same exclusion rule the HTTP route already honoured: one operation must enforce one rule on every surface |
 
 ---
 
@@ -204,4 +306,5 @@ Patterns only — no code was copied.
 
 - `docs/api.md` — the HTTP surface
 - `docs/architecture.md` — where the predicate sits in the retrieval pipeline
-- `docs/research/2026-11-15.md` — the weekly audit this release came from
+- `docs/research/2026-11-15.md` — the weekly audit the read-side release came from
+- `docs/research/2026-11-22.md` — the weekly audit the write-side release came from

@@ -1930,7 +1930,18 @@ class MemoryStore:
         score = self.compute_score(importance, ts, now)
         with self._conn() as c:
             # Re-route by external_id when the caller did not pin an id.
-            if id is None and ext and agent_id is not None:
+            #
+            # Audit 2026-11-22 (loop-memory 0.4.23): the guard used to
+            # be ``agent_id is not None``, so a *global* caller (no
+            # agent, no user) never re-routed and every re-push of the
+            # same external_id created a second row. The unique index
+            # ``(agent_id, user_id, external_id)`` cannot catch it
+            # either: SQLite treats NULLs as distinct inside a unique
+            # index, so two rows with ``(NULL, NULL, 'ext-1')`` are
+            # perfectly legal. The namespace is matched with the
+            # null-safe ``IS`` operator, so the global namespace
+            # re-routes to its own row just like every other one.
+            if id is None and ext:
                 row = c.execute(
                     "SELECT id FROM memories "
                     "WHERE agent_id IS ? AND user_id IS ? AND external_id = ?",
@@ -1959,9 +1970,24 @@ class MemoryStore:
             if dedup and id is None and content_hash:
                 row = c.execute(
                     "SELECT id FROM memories "
-                    "WHERE content_hash = ? AND "
-                    "      ((agent_id IS ? AND user_id IS ?) "
-                    "       OR (agent_id IS NULL AND user_id IS NULL AND ? IS NULL)) "
+                    "WHERE content_hash = ? "
+                    # Audit 2026-11-22 (loop-memory 0.4.23): the
+                    # namespace is matched *exactly* -- one
+                    # (agent_id, user_id) pair, compared with the
+                    # null-safe ``IS`` operator so the global
+                    # namespace (NULL, NULL) matches itself and
+                    # nothing else.
+                    #
+                    # The old predicate carried a second branch
+                    # ("OR the row is global AND the caller has no
+                    # user_id"), which let an agent-scoped write
+                    # collapse onto -- and then *overwrite* -- a
+                    # global row with the same text. The agent
+                    # silently hijacked shared knowledge and
+                    # re-labelled it with its own agent_id, so every
+                    # other caller lost the memory. A namespace may
+                    # only ever touch its own rows.
+                    "  AND agent_id IS ? AND user_id IS ? "
                     # Audit 2026-10-25: when the caller pins a
                     # subject key, only a row already sitting in the
                     # *same* logical slot may be collapsed. Two
@@ -1969,7 +1995,7 @@ class MemoryStore:
                     # same text ("the answer is 42" as q1.answer and
                     # as q2.answer) and must stay separate rows.
                     "  AND (subject_key = ? OR ? IS NULL) ",
-                    (content_hash, agent_id, user_id, user_id, subj, subj),
+                    (content_hash, agent_id, user_id, subj, subj),
                 ).fetchone()
                 if row is not None:
                     id = row["id"]
@@ -2053,22 +2079,90 @@ class MemoryStore:
             # supersession pointer already hides it from recall, and
             # keeping the validity window intact means a historical
             # query still sees the row as it was.
+            #
+            # Audit 2026-11-22 (loop-memory 0.4.23) -- two rules
+            # changed here, both about *which* row owns the slot:
+            #
+            # 1. **The slot belongs to one namespace.** The old
+            #    predicate carried a second branch ("OR the row is
+            #    global AND the caller has no user_id"), so an
+            #    agent-scoped write superseded a *global* row of
+            #    the same slot. The shared fact silently vanished
+            #    from every other caller's recall and was replaced
+            #    by one agent's private value. A namespace may only
+            #    ever supersede its own rows; the global namespace
+            #    (NULL, NULL) is matched by the same null-safe
+            #    ``IS`` comparison and matches nothing else.
+            #
+            # 2. **The slot is ordered by fact time, not by arrival
+            #    time.** Supersession used to be "whatever was
+            #    written last wins", so a fact that arrived late
+            #    but happened *earlier* took the slot away from the
+            #    newer conclusion -- the store answered with the
+            #    stale value. The slot now keeps the version with
+            #    the greatest fact time (``COALESCE(valid_at,
+            #    created_at)``): a late-arriving older fact is
+            #    recorded as the historical version instead of
+            #    replacing what we already know.
+            #
+            #    Upstream pattern reference (no code copied):
+            #    TencentCloud/TencentDB-Agent-Memory v2.0.4
+            #    (2026-11-19) -- "整理按对话发生的时间排序，后到的
+            #    更早事实不再覆盖较新的结论" (organise by when
+            #    the conversation happened; a later-arriving
+            #    earlier fact no longer overwrites a newer
+            #    conclusion).
             if subj:
-                c.execute(
-                    "UPDATE memories SET superseded_by=? "
-                    "WHERE id != ? AND superseded_by IS NULL "
-                    "  AND subject_key = ? "
-                    "  AND ((agent_id IS ? AND user_id IS ?) "
-                    "       OR (agent_id IS NULL AND user_id IS NULL AND ? IS NULL))",
-                    (mid, mid, subj, agent_id, user_id, user_id),
-                )
+                # The fact time of the row we just wrote. Read it
+                # back from the row so an UPDATE (which preserves
+                # the stored validity window) is judged on the
+                # window it actually has.
+                new_fact = c.execute(
+                    "SELECT COALESCE(valid_at, created_at) AS ft "
+                    "FROM memories WHERE id=?",
+                    (mid,),
+                ).fetchone()
+                new_ft = float(new_fact["ft"] or 0.0) if new_fact else float(ts)
+                live_rows = c.execute(
+                    "SELECT id, COALESCE(valid_at, created_at) AS ft "
+                    "FROM memories "
+                    "WHERE superseded_by IS NULL AND subject_key = ? "
+                    "  AND agent_id IS ? AND user_id IS ?",
+                    (subj, agent_id, user_id),
+                ).fetchall()
+                won = True
+                for r in live_rows:
+                    if r["id"] == mid:
+                        continue
+                    old_ft = float(r["ft"] or 0.0)
+                    if old_ft <= new_ft:
+                        # The newcomer is at least as new as what we
+                        # have: it takes the slot (the normal case).
+                        c.execute(
+                            "UPDATE memories SET superseded_by=? WHERE id=?",
+                            (mid, r["id"]),
+                        )
+                    else:
+                        # The newcomer happened *earlier* than the
+                        # row that already holds the slot. It is a
+                        # stale arrival, so it becomes the
+                        # historical version and the live row keeps
+                        # the slot. The pointer still points
+                        # forward (old -> new) so the chain reads
+                        # the same way for ``recall_as_of()``.
+                        c.execute(
+                            "UPDATE memories SET superseded_by=? WHERE id=?",
+                            (r["id"], mid),
+                        )
+                        won = False
                 # The winner is live again even if a previous write
                 # had expired it -- a fresh statement of the fact
                 # re-opens its validity window. Only when the caller
                 # did NOT pass an explicit ``invalid_at``: an explicit
                 # expiry (e.g. "this is true until March") must be
-                # honoured as written.
-                if invalid_at is None:
+                # honoured as written. A stale arrival that lost the
+                # slot must not resurrect anything.
+                if invalid_at is None and won:
                     c.execute(
                         "UPDATE memories SET invalid_at=NULL "
                         "WHERE id=? AND invalid_at IS NOT NULL",
@@ -2549,7 +2643,8 @@ class MemoryStore:
             if subject_keys:
                 qmarks = ",".join("?" * len(subject_keys))
                 live_rows = c.execute(
-                    f"SELECT id, subject_key, agent_id, user_id, created_at, updated_at "
+                    f"SELECT id, subject_key, agent_id, user_id, created_at, updated_at, "
+                    f"       COALESCE(valid_at, created_at) AS fact_time "
                     f"FROM memories "
                     f"WHERE subject_key IN ({qmarks}) "
                     f"  AND superseded_by IS NULL "
@@ -2559,7 +2654,15 @@ class MemoryStore:
                 ).fetchall()
                 for r in live_rows:
                     key = (r["subject_key"], r["agent_id"], r["user_id"])
+                    # Audit 2026-11-22 (loop-memory 0.4.23): the
+                    # winner of a slot is the version with the
+                    # greatest *fact time*, not the one written
+                    # last. The write path (upsert_memory) orders
+                    # the slot the same way, so the read side and
+                    # the write side cannot disagree about which
+                    # version of a fact is current.
                     stamp = (
+                        float(r["fact_time"] or 0),
                         float(r["updated_at"] or 0),
                         float(r["created_at"] or 0),
                         str(r["id"]),

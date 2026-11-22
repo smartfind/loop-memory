@@ -155,15 +155,23 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None) 
     def v1_create_memory(body: dict):
         """Idempotent remember(). Body: {text, kind?, importance?,
         tags?, source?, session_id?, external_id?, agent_id?, user_id?,
-        ttl?, subject_key?}. When ``external_id`` is set, the
-        (agent_id, user_id, external_id) tuple must be unique;
+        ttl?, subject_key?, created_at?}. When ``external_id`` is set,
+        the (agent_id, user_id, external_id) tuple must be unique;
         re-pushing updates the row in place.
 
         ``subject_key`` (audit 2026-10-25, loop-memory 0.4.16) names
         the logical slot the fact occupies. Re-pushing the same slot
         with new text supersedes the previous version instead of
         creating a second, parallel row -- so ``recall?latest_only=1``
-        returns exactly one answer per slot.
+        returns exactly one answer per slot. Since 0.4.23 the slot is
+        ordered by *fact time*: a version that arrives late but
+        happened earlier does not take the slot away from the newer
+        conclusion.
+
+        ``created_at`` (audit 2026-11-22, loop-memory 0.4.23) is the
+        epoch at which the fact became true, not the epoch at which
+        it was written. It is what the slot ordering is judged on, so
+        replaying an old transcript keeps its place in the history.
         """
         text = (body.get("text") or "").strip()
         if not text:
@@ -199,6 +207,16 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None) 
             user_id=body.get("user_id"),
             external_id=ext,
             ttl=ttl_f,
+            # Audit 2026-11-22 (loop-memory 0.4.23): the ``created_at``
+            # that was parsed above is now actually stored. It used
+            # to be validated and then dropped, so the row was
+            # stamped with "now" -- which made a fact's *fact time*
+            # indistinguishable from its *arrival time* and let a
+            # late-arriving older fact win the logical slot. The
+            # batch route below already honoured it; the single-item
+            # route now matches it and the SDK's
+            # ``remember(created_at=...)`` finally lands.
+            created_at=_ca_f,
             # Audit 2026-10-25: logical fact slot.
             subject_key=(body.get("subject_key") or "").strip() or None,
         )
@@ -252,6 +270,14 @@ def register(app: FastAPI, store: MemoryStore, scheduler: Optional[Any] = None) 
                     user_id=raw.get("user_id"),
                     external_id=ext,
                     created_at=_ca_f,
+                    # Audit 2026-11-22 (loop-memory 0.4.23): the batch
+                    # route now accepts ``subject_key`` like the
+                    # single-item route does. Without it a caller
+                    # could not write a logical fact slot in bulk,
+                    # which made the slot unusable for exactly the
+                    # "many facts, one answer each" workloads it
+                    # exists for.
+                    subject_key=(raw.get("subject_key") or "").strip() or None,
                 )
                 out.append(_memory_to_dict(stored))
             except Exception as e:
